@@ -26,6 +26,12 @@ def mock_image_analysis(monkeypatch):
     monkeypatch.setattr(main, "analyze_image_intent", analyze)
 
 
+@pytest.fixture
+def isolate_title_generation(monkeypatch):
+    # These tests inspect chat/image requests, not the separate title task.
+    monkeypatch.setattr(main, "start_title_task", lambda *_args: None)
+
+
 def make_client(monkeypatch):
     directory = tempfile.TemporaryDirectory()
     monkeypatch.setattr(main.settings, "database_path", f"{directory.name}/test.db")
@@ -812,7 +818,7 @@ def test_summary_job_only_covers_completed_history(monkeypatch, mode):
         directory.cleanup()
 
 
-def test_failed_request_retries_without_duplicate_user_message(monkeypatch):
+def test_failed_request_retries_without_duplicate_user_message(isolate_title_generation, monkeypatch):
     client, directory = make_client(monkeypatch)
     calls = {"count": 0}
 
@@ -976,7 +982,7 @@ def test_context_history_never_starts_with_an_orphaned_assistant(monkeypatch):
         directory.cleanup()
 
 
-def test_generation_reports_length_finish_reason_usage_and_selected_output_limit(monkeypatch):
+def test_generation_reports_length_finish_reason_usage_and_selected_output_limit(isolate_title_generation, monkeypatch):
     client, directory = make_client(monkeypatch)
     captured = {}
 
@@ -1050,7 +1056,7 @@ def test_empty_length_limited_response_has_specific_error_and_failed_generation(
 
 
 @pytest.mark.usefixtures('mock_image_analysis')
-def test_image_prompt_uses_non_streaming_strict_json_payload_and_saves_normalized_result(monkeypatch):
+def test_image_prompt_uses_non_streaming_strict_json_payload_and_saves_normalized_result(isolate_title_generation, monkeypatch):
     client, directory = make_client(monkeypatch)
     captured = {}
 
@@ -1382,7 +1388,7 @@ def test_image_intent_api_retries_invalid_response_once(monkeypatch, valid_secon
 
 
 @pytest.mark.parametrize('prompt', ['A red umbrella beside an OPEN sign', 'A red umbrella'])
-def test_optimized_prompt_uses_intent_and_preserves_exact_text(monkeypatch, prompt):
+def test_optimized_prompt_uses_intent_and_preserves_exact_text(isolate_title_generation, monkeypatch, prompt):
     client, directory = make_client(monkeypatch)
     calls = []
     intent = {'intent': 'image_generation', 'subject': 'red umbrella', 'environment': None, 'style': None,
@@ -1524,7 +1530,7 @@ def test_image_prompt_rejects_streaming_before_creating_generation(monkeypatch):
 
 
 @pytest.mark.usefixtures('mock_image_analysis')
-def test_image_prompt_invalid_or_length_limited_output_fails_then_retries_without_duplicate_user_message(monkeypatch):
+def test_image_prompt_invalid_or_length_limited_output_fails_then_retries_without_duplicate_user_message(isolate_title_generation, monkeypatch):
     client, directory = make_client(monkeypatch)
     calls = {"count": 0}
 
@@ -1579,7 +1585,7 @@ def test_image_prompt_invalid_or_length_limited_output_fails_then_retries_withou
 
 @pytest.mark.usefixtures('mock_image_analysis')
 @pytest.mark.parametrize('first', ['invalid', 'missing_choice', 'empty', 'truncated'])
-def test_image_prompt_recovers_on_second_response_without_duplicate_messages(monkeypatch, first):
+def test_image_prompt_recovers_on_second_response_without_duplicate_messages(isolate_title_generation, monkeypatch, first):
     client, directory = make_client(monkeypatch)
     calls = []
 
@@ -1763,7 +1769,7 @@ def test_image_prompt_requests_are_stateless(monkeypatch):
 
 
 @pytest.mark.usefixtures('mock_image_analysis')
-def test_image_prompt_history_excludes_failed_and_cancelled_requests_and_never_queues_summary(monkeypatch):
+def test_image_prompt_history_excludes_failed_and_cancelled_requests_and_never_queues_summary(isolate_title_generation, monkeypatch):
     client, directory = make_client(monkeypatch)
     captured = {}
 
