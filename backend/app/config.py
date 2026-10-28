@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,7 +9,9 @@ from .imagegen import validate_imagegen_url
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     database_path: str = "./data/bc250-llm-client.db"
-    app_api_key: str
+    app_api_key: str = ""
+    app_auth_mode: Literal["key", "local"] = "key"
+    app_allowed_hosts: str = "localhost,127.0.0.1"
     cors_origins: str = ""
     llm_gate_url: str = "http://127.0.0.1:8081"
     llm_gate_api_key: str
@@ -41,6 +44,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_token_settings(self) -> "Settings":
+        if self.app_auth_mode == "key" and not self.app_api_key:
+            raise ValueError("APP_API_KEY is required in key mode")
+        if self.app_auth_mode == "local" and self.cors_origins.strip():
+            raise ValueError("CORS_ORIGINS must be empty in local mode")
         if self.image_prompt_max_tokens < 1:
             raise ValueError("IMAGE_PROMPT_MAX_TOKENS must be at least 1")
         if self.image_prompt_max_tokens > self.max_completion_tokens:

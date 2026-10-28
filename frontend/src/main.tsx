@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { newRequestId, request, setToken, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength } from './api';
+import { newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength } from './api';
 import { MessageList } from './components/MessageList';
 import './image-prompt.css';
 import './style.css';
@@ -85,8 +85,6 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
 }
 
 function App() {
-  const [key, setKey] = useState('');
-  const [authenticated, setAuthenticated] = useState(Boolean(sessionStorage.getItem('bc250_api_key')));
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [active, setActive] = useState<Detail>();
   const [models, setModels] = useState<string[]>([]);
@@ -210,9 +208,9 @@ function App() {
       hasMore: page.has_more,
     } : current);
   };
-  useEffect(() => { if (authenticated) refresh().catch(error => setNotice(error.message)); }, [authenticated]);
+  useEffect(() => { refresh().catch(error => setNotice(error.message)); }, []);
   useEffect(() => {
-    if (!authenticated || !active || !['pending', 'running'].includes(active.summary_status)) return;
+    if (!active || !['pending', 'running'].includes(active.summary_status)) return;
     const conversationId = active.id;
     const timer = window.setTimeout(() => {
       request<Conversation>('/conversations/' + conversationId)
@@ -220,13 +218,13 @@ function App() {
         .catch(() => undefined);
     }, 2000);
     return () => window.clearTimeout(timer);
-  }, [authenticated, active?.id, active?.summary_status]);
+  }, [active?.id, active?.summary_status]);
   useEffect(() => {
-    if (!authenticated || active?.mode !== 'image_prompt') return;
+    if (active?.mode !== 'image_prompt') return;
     void loadImageJobs(active.id).catch(error => setNotice(error instanceof Error ? error.message : '이미지 작업 목록을 가져오지 못했습니다.'));
-  }, [active?.id, active?.mode, authenticated, loadImageJobs]);
+  }, [active?.id, active?.mode, loadImageJobs]);
   useEffect(() => {
-    if (!authenticated || active?.mode !== 'image_prompt') return;
+    if (active?.mode !== 'image_prompt') return;
     const jobs = imageJobs[active.id] || [];
     const pending = jobs.filter(job => ['queued', 'waiting_for_gpu', 'running'].includes(job.status));
     if (!pending.length) return;
@@ -236,7 +234,7 @@ function App() {
         .catch(error => setNotice(error instanceof Error ? error.message : '이미지 작업 상태를 확인하지 못했습니다.'));
     }, 2500);
     return () => window.clearTimeout(timer);
-  }, [active?.id, active?.mode, authenticated, imageJobs, replaceImageJob]);
+  }, [active?.id, active?.mode, imageJobs, replaceImageJob]);
 
   const createConversation = async (data: { title: string; mode: Mode; response_length: ResponseLength; mode_settings: ModeSettings }) => {
     const created = await request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify(data) });
@@ -381,7 +379,6 @@ function App() {
     await refresh();
   };
 
-  if (!authenticated) return <main className="login"><h1>BC-250 LLM Client</h1><p>접속 API 키를 입력하세요. 키는 이 브라우저 세션에만 저장됩니다.</p><input type="password" value={key} onChange={event => setKey(event.target.value)} placeholder="Bearer API key" /><button disabled={!key} onClick={() => { setToken(key); setAuthenticated(true); }}>접속</button>{notice && <p className="error">{notice}</p>}</main>;
 
   return <main className="layout">
     <aside><h1>BC-250</h1><button onClick={() => setNewDialog(true)}>＋ 새 대화</button>

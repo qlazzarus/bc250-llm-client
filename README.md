@@ -26,13 +26,21 @@ For the deployed Qwen3.5 model, normal chat sends `chat_template_kwargs.enable_t
 
 ```bash
 cp .env.example .env
-# .env의 APP_API_KEY와 LLM_GATE_API_KEY를 실제 값으로 변경
+# .env의 LLM_GATE_API_KEY를 실제 값으로 변경
 python3 -m venv .venv && .venv/bin/pip install -r backend/requirements.txt
 PYTHONPATH=. .venv/bin/uvicorn backend.app.main:app --reload --port 8010
 cd frontend && npm install && npm run dev
 ```
 
 Vite 개발 서버에는 proxy를 의도적으로 두지 않았습니다. 외부 노출 없이 테스트하려면 API도 SSH로 터널링하거나 Caddy `/llm/`을 사용합니다.
+
+## 로그인 없는 개인용 설정
+
+서버 환경 파일에서 `APP_AUTH_MODE=local`을 설정하고 `APP_ALLOWED_HOSTS`에 브라우저가 사용하는 서버의 LAN IP 또는 신뢰할 수 있는 호스트 이름을 쉼표로 추가합니다. SSH 터널의 `localhost`와 `127.0.0.1`도 유지합니다. `CORS_ORIGINS`는 비워 둡니다. 기존 설치는 새 프런트엔드를 배포하기 전에 반드시 이 설정으로 전환해야 합니다. `LLM_GATE_API_KEY`는 계속 필요합니다.
+
+`deploy/Caddyfile.snippet`에는 접속 IP 제한이 없습니다. 공유기에서 웹 포트를 외부에 포워딩하지 않고 서버 방화벽과 IPv6 노출 여부를 확인합니다. 접근 가능한 기기는 모두 앱을 사용할 수 있으며, LAN HTTP는 암호화되지 않습니다.
+
+API는 허용된 Host, 동일 출처 및 전용 요청 헤더를 검사합니다. 이 검사는 브라우저를 통한 외부 사이트의 요청을 막기 위한 것이며 사용자 인증이 아닙니다. 허용된 LAN의 모든 기기는 대화 열람·삭제와 게이트 제어를 할 수 있습니다. 계정별 격리는 제공하지 않습니다.
 
 ## SSH 터널 테스트
 
@@ -43,7 +51,7 @@ ssh -N -L 8443:127.0.0.1:80 user@192.0.2.10
 # 브라우저에서 http://127.0.0.1:8443/llm/
 ```
 
-8080/8081을 포워딩하지 마십시오. 접속 키는 화면의 세션 입력란에 넣으며 localStorage가 아닌 sessionStorage에만 보관됩니다.
+8080/8081을 포워딩하지 마십시오. 로그인 없이 접속합니다. 이 모드에서는 허용된 네트워크의 모든 사용자가 대화와 관리 기능에 접근할 수 있습니다.
 
 ## 목업 SCP 배포 (`/llm/` 우선)
 
@@ -79,7 +87,7 @@ sudo -u deployuser /opt/bc250-llm-client/.venv/bin/pip install -r /opt/bc250-llm
 sudo chown -R deployuser:deployuser /opt/bc250-llm-client /var/lib/bc250-llm-client
 ```
 
-Create the server-only secret file without echoing values to terminal history. `APP_API_KEY` and the gate key must be different random values.
+Create the server-only secret file without echoing values to terminal history. Configure local mode and keep the gate key secret.
 
 ```bash
 sudo install -m 600 -o root -g deployuser /dev/null /etc/bc250-llm-client.env
@@ -92,7 +100,8 @@ Use this content in that file (replace every placeholder):
 APP_HOST=127.0.0.1
 APP_PORT=8010
 DATABASE_PATH=/var/lib/bc250-llm-client/bc250-llm-client.db
-APP_API_KEY=replace-with-user-api-key
+APP_AUTH_MODE=local
+APP_ALLOWED_HOSTS=localhost,127.0.0.1,192.0.2.10
 LLM_GATE_URL=http://127.0.0.1:8081
 LLM_GATE_API_KEY=replace-with-existing-gate-key
 LLM_TIMEOUT_SECONDS=180
@@ -143,7 +152,7 @@ curl -I -H 'Host: 192.0.2.10' http://127.0.0.1/llm/
 
 ### 4. Smoke test
 
-Open `http://192.0.2.10/llm/`, enter `APP_API_KEY`, make a short chat request, and open “시스템 상태” to review the gate and exposed model list. Never forward or expose ports 8080, 8081, 8090, or 8010.
+After checking the router and firewall, open `http://192.0.2.10/llm/`, make a short chat request, and open “시스템 상태” to review the gate and exposed model list. Never forward or expose ports 8080, 8081, 8090, or 8010.
 
 ## 이미지 프롬프트 gate 점검
 
@@ -181,7 +190,7 @@ sudo bash -c '
   set -a
   . /etc/bc250-llm-client.env
   set +a
-  curl -fsS -H "Authorization: Bearer $APP_API_KEY" \
+  curl -fsS -H "X-BC250-Client: 1" \
     http://127.0.0.1:8010/api/v1/image-generation/capabilities
 '
 ```
@@ -199,7 +208,7 @@ sudo bash -c '
   set -a
   . /etc/bc250-llm-client.env
   set +a
-  curl -fsS -H "Authorization: Bearer $APP_API_KEY" \
+  curl -fsS -H "X-BC250-Client: 1" \
     http://127.0.0.1:8010/api/v1/image-generation/capabilities
 '
 ```
@@ -234,7 +243,7 @@ sudo ss -ltnp | rg ':8010|:8080|:8081' # all three must be loopback-only
 
 서비스를 재시작하면 image_prompt 대화의 독립 요청 마이그레이션이 자동 적용된다. 배포 전에 서비스를 중지하고 SQLite를 백업하는 업데이트 절차는 아래 릴리스 업데이트 섹션을 따른다. 기존 이미지 기록·설정은 삭제하지 않지만 이후 LLM 입력에는 사용하지 않는다.
 
-Set `CORS_ORIGINS` only when a separate UI origin is needed (for example `https://llm.example.internal`). Same-origin `/llm/` needs no CORS. Restrict Caddy itself to the corporate network/TLS according to local policy.
+Keep `CORS_ORIGINS` empty in local mode. Control external access with the router and server firewall.
 
 ## Tests and build
 
@@ -288,7 +297,7 @@ sudo systemctl start bc250-llm-client
 
 ## System-status API
 
-`GET /api/v1/admin/gate-status` and `PUT /api/v1/admin/gate-control` use the same `APP_API_KEY` as the chat API. The “시스템 상태” screen presents the gate health data and the model IDs returned by `/v1/models`; gate `/health` and `/control` response fields are passed through, preserving gate-specific queue/pause/image state.
+`GET /api/v1/admin/gate-status` and `PUT /api/v1/admin/gate-control` are available to every client allowed to use the local API. The “시스템 상태” screen presents the gate health data and the model IDs returned by `/v1/models`; gate `/health` and `/control` response fields are passed through, preserving gate-specific queue/pause/image state.
 
 
 ## 다중 이미지 모델과 옵션
@@ -355,3 +364,19 @@ root에서 `umask 077`로 `git apply`를 실행하면 교체된 Python 파일이
 AI 최적화 요청은 먼저 같은 분석을 수행하고 원문과 분석 결과를 함께 사용해 프롬프트를 작성한다. 결과 카드의 `요청 분석 확인`에서 추출값을 볼 수 있다. 추출된 `exact_text`가 최종 프롬프트에 없으면 결과를 거부한다. 분석은 추가 LLM 호출이므로 시간이 더 걸릴 수 있다. 직접 번역은 분석 단계를 거치지 않는다. 추출된 필드의 의미와 조건 보존 여부는 사용자가 원문과 비교해야 한다. 실제 Qwen 및 gate의 두 JSON 스키마 지원은 서버에서 확인해야 한다.
 
 이미지 프롬프트 작성 단계에서 응답 JSON이 유효하지 않거나 비어 있거나 잘렸을 때, 또는 지정 문구가 누락되었을 때 한 번 재시도한다. 두 번 실패하면 요청을 실패로 기록하며 이미지 큐에 제출하지 않는다. 취소가 감지되면 다음 시도를 중단한다. 반환되는 LLM usage는 마지막 프롬프트 작성 호출의 값이며 분석이나 실패한 시도의 토큰을 합산하지 않는다.
+
+## GitHub Actions를 통한 수동 배포
+
+`.github/workflows/deploy.yml`은 `main`에서 수동 실행할 때 GitHub 호스팅 runner에서 백엔드 테스트와 프런트엔드 lint/build를 수행한 후 SSH로 배포한다. `production` environment의 배포 브랜치를 `main`으로 제한한다. 외부 PR에서는 배포하지 않는다. 이 워크플로는 서버의 `/etc/bc250-llm-client.env`, Caddy 설정, SQLite DB를 수정하지 않는다.
+
+최초 배포 전에 서버에서 환경 파일에 `APP_AUTH_MODE=local`, `APP_ALLOWED_HOSTS=localhost,127.0.0.1,192.168.0.57`, 빈 `CORS_ORIGINS`를 설정한다. 공유기와 방화벽이 외부 웹 접근을 차단하는지 확인한다. 서버 주소가 바뀌면 허용 Host도 수정해야 한다. 기존 환경 파일과 Caddyfile을 백업하고 기존 설정을 보존한다.
+
+서버의 sudoers에 `visudo`를 통해 다음 한 줄을 추가한다. 경로는 서버에서 `command -v systemctl`로 확인한다.
+
+```text
+yeppyshiba ALL=(root) NOPASSWD: /usr/bin/systemctl restart bc250-llm-client.service
+```
+
+배포 전용 SSH 키를 별도로 생성하여 공개키만 서버의 `authorized_keys`에 추가한다. GitHub `production` environment secrets에 `BC250_SSH_PRIVATE_KEY`, `BC250_SSH_HOST`, `BC250_SSH_PORT`, `BC250_SSH_USER`, `BC250_SSH_KNOWN_HOSTS`를 등록한다. `BC250_SSH_KNOWN_HOSTS`는 `[hostname]:port` 형식의 실제 서버 공개 호스트 키 한 줄이다. `ssh-keyscan -p 2222 hostname`의 출력은 반드시 서버에서 직접 확인한 ED25519 fingerprint와 비교한 후 등록한다. `ssh-keyscan` 결과를 검증 없이 신뢰하지 않는다.
+
+수동 실행은 GitHub Actions에서 **Deploy BC-250 client → Run workflow → main**을 선택한다. 실패 시 이전 앱 파일을 복원하고 재시작을 시도하지만 pip 의존성 변경과 DB 마이그레이션은 되돌리지 않는다. 운영 DB 백업을 유지하고, 최초 배포는 사용자가 실행 결과와 웹 접근을 확인한다. 서버 Python 및 실행 중인 가상환경에 `pip`와 인터넷 연결이 필요하다.

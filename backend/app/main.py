@@ -104,9 +104,20 @@ def fail(code: str, message: str, http_status: int) -> HTTPException:
 
 
 def require_key(request: Request, settings: Settings = Depends(get_settings)) -> None:
-    expected = settings.app_api_key
+    if settings.app_auth_mode == "local":
+        # A non-simple header prevents other browser origins from issuing API calls.
+        # Restrict Host as well to prevent a hostile DNS name resolving to this server.
+        host = request.url.hostname or ""
+        allowed = {item.strip().lower() for item in settings.app_allowed_hosts.split(",") if item.strip()}
+        origin = request.headers.get("origin")
+        expected_origin = f"{request.url.scheme}://{request.headers.get('host', '')}"
+        if (host.lower() not in allowed or request.headers.get("x-bc250-client") != "1"
+                or (origin is not None and origin.lower() != expected_origin.lower())
+                or request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none")):
+            raise fail("forbidden", "허용되지 않은 요청입니다.", status.HTTP_403_FORBIDDEN)
+        return
     value = request.headers.get("authorization", "")
-    if value != f"Bearer {expected}":
+    if value != f"Bearer {settings.app_api_key}":
         raise fail("unauthorized", "인증이 필요합니다.", status.HTTP_401_UNAUTHORIZED)
 
 

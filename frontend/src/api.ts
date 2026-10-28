@@ -1,5 +1,4 @@
 const API = '/llm/api/v1';
-let token = sessionStorage.getItem('bc250_api_key') || '';
 
 export type Mode = 'quick' | 'roleplay' | 'image_prompt';
 export type PromptMode = 'ai_optimized' | 'direct_translation' | 'original';
@@ -49,7 +48,6 @@ export type ImageJob = {
   created_at: string; updated_at: string;
 };
 
-export const setToken = (value: string) => { token = value; sessionStorage.setItem('bc250_api_key', value); };
 
 export function newRequestId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -63,7 +61,7 @@ export function newRequestId(): string {
 }
 
 export const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-  const response = await fetch(`${API}${path}`, { ...init, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...init.headers } });
+  const response = await fetch(`${API}${path}`, { ...init, headers: { 'Content-Type': 'application/json', 'X-BC250-Client': '1', ...init.headers } });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new Error(body?.error?.message || '요청에 실패했습니다.');
@@ -72,7 +70,7 @@ export const request = async <T>(path: string, init: RequestInit = {}): Promise<
 };
 
 export const requestBlob = async (path: string, init: RequestInit = {}): Promise<Blob> => {
-  const response = await fetch(`${API}${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...init.headers } });
+  const response = await fetch(`${API}${path}`, { ...init, headers: { 'X-BC250-Client': '1', ...init.headers } });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new Error(body?.error?.message || '요청에 실패했습니다.');
@@ -87,7 +85,7 @@ export const streamRequest = async (
   signal?: AbortSignal,
 ): Promise<void> => {
   const response = await fetch(`${API}${path}`, {
-    method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+    method: 'POST', signal, headers: { 'Content-Type': 'application/json', 'X-BC250-Client': '1' }, body: JSON.stringify(body),
   });
   if (!response.ok || !response.body) {
     const error = await response.json().catch(() => null);

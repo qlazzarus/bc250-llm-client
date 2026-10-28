@@ -1972,3 +1972,21 @@ def test_moss_lora_selection_is_saved_and_sent_only_with_capability(monkeypatch,
             assert retry.status_code == 422
     finally:
         directory.cleanup()
+
+
+def test_local_mode_requires_browser_marker_and_allowed_host(monkeypatch):
+    client, directory = make_client(monkeypatch)
+    monkeypatch.setattr(main.settings, "app_auth_mode", "local")
+    monkeypatch.setattr(main.settings, "app_allowed_hosts", "testserver")
+    try:
+        with client:
+            path = "/api/v1/conversations"
+            headers = {"X-BC250-Client": "1"}
+            assert client.get(path, headers=headers).status_code == 200
+            assert client.get(path).status_code == 403
+            assert client.get(path, headers={**headers, "host": "evil.example"}).status_code == 403
+            assert client.post(path, headers={**headers, "origin": "https://evil.example"}, json={}).status_code == 403
+            assert client.get(path, headers={**headers, "sec-fetch-site": "cross-site"}).status_code == 403
+            assert client.get(path, headers={**headers, "origin": "http://testserver"}).status_code == 200
+    finally:
+        directory.cleanup()
