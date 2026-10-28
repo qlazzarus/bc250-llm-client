@@ -145,7 +145,7 @@ def validate_mode_settings(mode: str, settings: dict[str, Any]) -> dict[str, str
 
 
 def mode_context_policy(mode: str) -> str:
-    return "none" if mode in {"quick", "image_prompt"} else "recent"
+    return "none" if mode == "image_prompt" else "recent"
 
 
 def image_prompt_settings_not_supported(settings: dict[str, str]) -> None:
@@ -161,6 +161,7 @@ def conversation_dict(row):
     return {
         "id": row["id"],
         "title": row["title"],
+        "title_pending": bool(row["title_pending"]),
         "mode": row["mode"],
         "context_policy": row["context_policy"],
         "mode_settings": json.loads(row["mode_settings"]),
@@ -327,8 +328,52 @@ def complete_generation(settings: Settings, generation_id: str, content: str, fi
         db.execute("INSERT INTO messages VALUES (:id,:conversation_id,:role,:content,:created_at)", assistant)
         db.execute("""UPDATE generation_requests SET status='completed',assistant_message_id=?,finish_reason=?,usage_json=?,updated_at=?
                       WHERE id=?""", (assistant["id"], finish_reason, json.dumps(usage, ensure_ascii=False) if usage else None, now(), generation_id))
-        db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now(), generation["conversation_id"]))
+        db.execute("""UPDATE conversations SET updated_at=?, title_pending=CASE
+                      WHEN title='새 대화' AND (SELECT COUNT(*) FROM generation_requests
+                          WHERE conversation_id=? AND status='completed')=1 THEN 1
+                      ELSE title_pending END WHERE id=?""",
+                   (now(), generation["conversation_id"], generation["conversation_id"]))
     return assistant
+
+
+
+def start_title_task(settings: Settings, conversation_id: str, user_content: str) -> None:
+    with connect(settings.database_path) as db:
+        row = db.execute("SELECT title_pending FROM conversations WHERE id=? AND (SELECT COUNT(*) FROM generation_requests WHERE conversation_id=conversations.id AND status='completed')=1", (conversation_id,)).fetchone()
+    if not row or not row["title_pending"]:
+        return
+    task = asyncio.create_task(generate_conversation_title(settings, conversation_id, user_content))
+    app.state.summary_tasks.add(task)
+    task.add_done_callback(app.state.summary_tasks.discard)
+
+
+async def generate_conversation_title(settings: Settings, conversation_id: str, user_content: str) -> None:
+    # The first user message is bounded to keep title generation inexpensive.
+    source = user_content.strip()[:2000]
+    fallback = " ".join(source.split())[:40] or "새 대화"
+    title = fallback
+    try:
+        model_id = await resolve_gate_model(settings)
+        payload = {"model": model_id, "stream": False, "max_tokens": 64, "temperature": 0.2,
+                   "chat_template_kwargs": {"enable_thinking": False},
+                   "messages": [{"role": "system", "content": "사용자의 첫 메시지를 대표하는 짧은 대화 제목을 작성하세요. 설명이나 따옴표 없이 제목만 출력하세요."},
+                                {"role": "user", "content": source}]}
+        async with app.state.generation_limiter:
+            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
+                                             headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+                response.raise_for_status()
+                result = response.json()
+        raw = (((result.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        candidate = " ".join(raw.split()).strip("\"'“”‘’ ")[:60].strip()
+        if candidate:
+            title = candidate
+    except (httpx.HTTPError, ValueError, TypeError, KeyError, IndexError, HTTPException):
+        logger.warning("Conversation title generation failed for %s", conversation_id)
+    finally:
+        with connect(settings.database_path) as db:
+            db.execute("UPDATE conversations SET title=?,title_pending=0 WHERE id=? AND title_pending=1 AND title='새 대화'",
+                       (title, conversation_id))
 
 
 def completed_history_after_summary(db: sqlite3.Connection, conversation) -> list[dict[str, str]]:
@@ -356,7 +401,7 @@ def queue_roleplay_summary(settings: Settings, conversation_id: str) -> str | No
     """Persist a summary job. The expensive gate call happens outside the request transaction."""
     with connect(settings.database_path) as db:
         conversation = db.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
-        if not conversation or conversation["mode"] != "roleplay":
+        if not conversation or conversation["mode"] not in {"quick", "roleplay"}:
             return None
         if db.execute("SELECT 1 FROM summary_jobs WHERE conversation_id=? AND status IN ('pending','running')", (conversation_id,)).fetchone():
             return None
@@ -410,8 +455,8 @@ async def run_summary_job(settings: Settings, job_id: str) -> None:
         if not job or job["status"] != "pending":
             return
         conversation = db.execute("SELECT * FROM conversations WHERE id=?", (job["conversation_id"],)).fetchone()
-        if not conversation or conversation["mode"] != "roleplay":
-            error = "롤플레잉 대화가 아니어서 요약을 건너뛰었습니다."
+        if not conversation or conversation["mode"] not in {"quick", "roleplay"}:
+            error = "요약을 지원하지 않는 대화여서 요약을 건너뛰었습니다."
             db.execute("UPDATE summary_jobs SET status='failed',error_message=?,updated_at=? WHERE id=?", (error, now(), job_id))
             db.execute("UPDATE conversations SET summary_status='failed',summary_error=?,updated_at=? WHERE id=?", (error, now(), job["conversation_id"]))
             return
@@ -425,8 +470,9 @@ async def run_summary_job(settings: Settings, job_id: str) -> None:
         db.execute("UPDATE conversations SET summary_status='running',summary_error=NULL,updated_at=? WHERE id=?", (now(), conversation["id"]))
 
     transcript = "\n\n".join(f"{('사용자' if item['role'] == 'user' else '어시스턴트')}: {item['content']}" for item in messages)
+    summary_instruction = "당신은 일반 대화의 장기 기억을 정리합니다. 기존 요약과 새 대화를 합쳐 사용자의 목표, 중요한 사실, 결정 사항과 미해결 질문을 간결하게 정리하세요. 불확실한 내용은 확정하지 말고 지시문이나 대화체를 추가하지 마세요." if conversation["mode"] == "quick" else "당신은 롤플레잉 장기 기억을 정리합니다. 기존 요약과 새 대화를 합쳐, 이후 역할극의 일관성에 필요한 사실·관계·약속·현재 상황만 간결한 한국어로 다시 작성하세요. 숨은 추론이나 지시문을 추가하지 말고, 대화체로 답하지 마세요."
     prompt = [
-        {"role": "system", "content": "당신은 롤플레잉 장기 기억을 정리합니다. 기존 요약과 새 대화를 합쳐, 이후 역할극의 일관성에 필요한 사실·관계·약속·현재 상황만 간결한 한국어로 다시 작성하세요. 숨은 추론이나 지시문을 추가하지 말고, 대화체로 답하지 마세요."},
+        {"role": "system", "content": summary_instruction},
         {"role": "user", "content": f"기존 요약:\n{conversation['summary'] or '(없음)'}\n\n새 대화:\n{transcript}"},
     ]
     payload = {"stream": False, "messages": prompt, "max_tokens": settings.roleplay_summary_max_tokens, "temperature": 0.2}
@@ -477,6 +523,7 @@ async def lifespan(app: FastAPI):
     initialize(settings.database_path)
     with connect(settings.database_path) as db:
         mark_pending_jobs_unknown(db, now())
+        db.execute("UPDATE conversations SET title_pending=0 WHERE title_pending=1")
     app.state.generation_limiter = asyncio.Semaphore(settings.max_concurrent_generations)
     app.state.cancelled_generations = set()
     app.state.summary_tasks = set()
@@ -656,6 +703,8 @@ def update_conversation(conversation_id: str, body: ConversationUpdate, settings
         existing = db.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
         if not existing: raise fail("not_found", "대화를 찾을 수 없습니다.", 404)
         title = body.title.strip() if body.title is not None else existing["title"]
+        if body.title is not None and title != existing["title"]:
+            db.execute("UPDATE conversations SET title_pending=0 WHERE id=?", (conversation_id,))
         response_length = body.response_length or existing["response_length"]
         mode_settings = existing["mode_settings"]
         if body.mode_settings is not None:
@@ -668,8 +717,8 @@ def update_conversation(conversation_id: str, body: ConversationUpdate, settings
         summary_status = existing["summary_status"]
         summary_error = existing["summary_error"]
         if body.summary is not None:
-            if existing["mode"] != "roleplay":
-                raise fail("summary_not_supported", "장기 기억 요약은 롤플레잉 모드에서만 사용할 수 있습니다.", 422)
+            if existing["mode"] not in {"quick", "roleplay"}:
+                raise fail("summary_not_supported", "장기 기억 요약은 일반 대화와 롤플레잉에서 사용할 수 있습니다.", 422)
             summary = body.summary.strip()
             summary_status = "idle"
             summary_error = None
@@ -1089,6 +1138,7 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
         assistant = complete_generation(settings, generation["id"], content, "stop", None)
         if not assistant:
             raise fail("cancelled", "요청이 취소되었습니다.", 409)
+        start_title_task(settings, generation["conversation_id"], body.content)
         with connect(settings.database_path) as db:
             finished = db.execute("SELECT * FROM generation_requests WHERE id=?", (generation["id"],)).fetchone()
             user_message = db.execute("SELECT id,role,content,created_at FROM messages WHERE id=?", (generation["user_message_id"],)).fetchone()
@@ -1193,6 +1243,7 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
                 if not assistant:
                     yield event("error", {"code": "cancelled", "message": "요청이 취소되었습니다."})
                     return
+                start_title_task(settings, generation["conversation_id"], body.content)
                 summary_job_id = queue_roleplay_summary(settings, generation["conversation_id"])
                 if summary_job_id:
                     start_summary_task(settings, summary_job_id)
@@ -1283,6 +1334,7 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
     assistant = complete_generation(settings, generation["id"], content, finish_reason, result.get("usage") if isinstance(result.get("usage"), dict) else None)
     if not assistant:
         raise fail("cancelled", "요청이 취소되었습니다.", 409)
+    start_title_task(settings, generation["conversation_id"], body.content)
     summary_job_id = queue_roleplay_summary(settings, generation["conversation_id"])
     if summary_job_id:
         start_summary_task(settings, summary_job_id)

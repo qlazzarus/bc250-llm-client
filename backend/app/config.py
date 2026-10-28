@@ -17,14 +17,14 @@ class Settings(BaseSettings):
     llm_gate_api_key: str
     llm_timeout_seconds: float = 180
     max_request_bytes: int = 65536
-    max_history_messages: int = 20
+    max_history_messages: int = 200
     max_completion_tokens: int = 2048
     default_max_tokens: int = 512
     max_concurrent_generations: int = 2
     store_reasoning_content: bool = False
     llm_disable_reasoning: bool = True
     llm_model_id: str = ""
-    llm_context_tokens: int = 8192
+    llm_context_tokens: int = 16384
     llm_context_safety_tokens: int = 512
     response_length_short_tokens: int = 512
     response_length_medium_tokens: int = 1024

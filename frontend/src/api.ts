@@ -9,7 +9,7 @@ export type ModeSettings = Record<string, string>;
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; created_at: string };
 export type MessagePage = { data: Message[]; next_before: string | null; has_more: boolean };
 export type Conversation = {
-  id: string; title: string; mode: Mode; context_policy: 'none' | 'recent'; mode_settings: ModeSettings;
+  id: string; title: string; title_pending: boolean; mode: Mode; context_policy: 'none' | 'recent'; mode_settings: ModeSettings;
   response_length: ResponseLength; summary: string; summary_up_to_message_id: string | null;
   summary_status: 'idle' | 'pending' | 'running' | 'failed'; summary_error: string | null;
   created_at: string; updated_at: string;

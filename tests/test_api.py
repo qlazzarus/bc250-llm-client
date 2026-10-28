@@ -243,9 +243,9 @@ def test_mode_create_update_and_validation(monkeypatch):
             assert mode_change.json()["error"]["code"] == "validation_error"
 
             quick = client.post("/api/v1/conversations", headers=headers, json={"mode": "quick"}).json()
-            unsupported_summary = client.patch(f"/api/v1/conversations/{quick['id']}", headers=headers, json={"summary": "허용 안 됨"})
-            assert unsupported_summary.status_code == 422
-            assert unsupported_summary.json()["error"]["code"] == "summary_not_supported"
+            updated_summary = client.patch(f"/api/v1/conversations/{quick['id']}", headers=headers, json={"summary": "기억할 내용"})
+            assert updated_summary.status_code == 200
+            assert updated_summary.json()["summary"] == "기억할 내용"
 
             image_with_settings = client.post("/api/v1/conversations", headers=headers, json={
                 "mode": "image_prompt", "mode_settings": {"style": "cinematic"},
@@ -316,7 +316,7 @@ def test_legacy_database_migrates_without_losing_conversation_data(tmp_path):
     assert old_image["mode_settings"] == '{"style": "legacy"}'
     assert old_image["summary"] == "old summary"
     assert old_roleplay["context_policy"] == "recent"
-    assert [row["version"] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    assert [row["version"] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 
 
 def test_image_draft_revision_validation_and_image_job_deletion_guard(monkeypatch):
@@ -781,14 +781,15 @@ def test_fake_studio_edit_submit_complete_and_asset_flow(monkeypatch):
         directory.cleanup()
 
 
-def test_roleplay_summary_job_only_covers_completed_history(monkeypatch):
+@pytest.mark.parametrize("mode", ["quick", "roleplay"])
+def test_summary_job_only_covers_completed_history(monkeypatch, mode):
     client, directory = make_client(monkeypatch)
     monkeypatch.setattr(main.get_settings(), "roleplay_summary_trigger_tokens", 1)
     monkeypatch.setattr(main.get_settings(), "roleplay_summary_keep_recent_turns", 1)
     try:
         with client:
             headers = {"Authorization": "Bearer client-key"}
-            cid = client.post("/api/v1/conversations", headers=headers, json={"mode": "roleplay"}).json()["id"]
+            cid = client.post("/api/v1/conversations", headers=headers, json={"mode": mode}).json()["id"]
             with connect(main.get_settings().database_path) as db:
                 for number in range(2):
                     user_id, assistant_id = f"summary-u-{number}", f"summary-a-{number}"

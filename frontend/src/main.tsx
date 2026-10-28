@@ -12,7 +12,7 @@ type InFlightGeneration = { conversationId: string; requestId: string; controlle
 export type ImageDraftEditor = Pick<ImageDraft, 'prompt' | 'width' | 'height' | 'generation_config' | 'revision' | 'preset_name'> & { persisted: boolean; dirty: boolean };
 
 const MODE_META: Record<Mode, { label: string; description: string; fields: Array<[string, string, string]> }> = {
-  quick: { label: '빠른 질문', description: '현재 질문만 모델에 전달합니다.', fields: [] },
+  quick: { label: '일반 대화', description: '최근 대화와 장기 기억 요약을 참고합니다.', fields: [] },
   roleplay: { label: '롤플레잉', description: '설정과 최근 완료 대화를 이어 갑니다.', fields: [['character', '캐릭터', '이름·역할·성격'], ['world', '세계관', '배경과 규칙'], ['voice', '말투', '예: 차분한 존댓말'], ['scenario', '현재 상황', '시작 장면'], ['rules', '응답 규칙', '지켜야 할 조건']] },
   image_prompt: { label: '이미지 프롬프트', description: '한 번의 요청을 영어 프롬프트와 설정 JSON으로 변환합니다. 이미지는 직접 생성하지 않습니다.', fields: [] },
 };
@@ -37,7 +37,7 @@ function NewConversationDialog({ onClose, onCreate }: { onClose: () => void; onC
   };
   return <div className="modal-backdrop" role="presentation"><form className="modal" onSubmit={submit}>
     <header><h2>새 대화</h2><button type="button" className="plain" onClick={onClose}>닫기</button></header>
-    <label>제목<input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} required /></label>
+    <label>제목<input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} required /><small className="muted">기본 제목은 첫 답변 후 자동으로 정해집니다.</small></label>
     <fieldset><legend>용도</legend>{(Object.keys(MODE_META) as Mode[]).map(option =>
       <label className="mode-option" key={option}><input type="radio" checked={mode === option} onChange={() => { setMode(option); setSettings({}); }} />
         <span><b>{MODE_META[option].label}</b><small>{MODE_META[option].description}</small></span>
@@ -51,7 +51,7 @@ function NewConversationDialog({ onClose, onCreate }: { onClose: () => void; onC
   </form></div>;
 }
 
-function ConversationSettings({ conversation, onClose, onSave }: { conversation: Detail; onClose: () => void; onSave: (data: { title: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => Promise<void> }) {
+function ConversationSettings({ conversation, onClose, onSave }: { conversation: Detail; onClose: () => void; onSave: (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => Promise<void> }) {
   const [title, setTitle] = useState(conversation.title);
   const [responseLength, setResponseLength] = useState<ResponseLength>(conversation.response_length);
   const [settings, setSettings] = useState<ModeSettings>(conversation.mode_settings);
@@ -61,8 +61,8 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
     event.preventDefault();
     try {
       await onSave(conversation.mode === 'image_prompt'
-        ? { title }
-        : { title, response_length: responseLength, mode_settings: settings, ...(conversation.mode === 'roleplay' ? { summary } : {}) });
+        ? { ...(title !== conversation.title ? { title } : {}) }
+        : { ...(title !== conversation.title ? { title } : {}), response_length: responseLength, mode_settings: settings, ...(summary !== conversation.summary ? { summary } : {}) });
       onClose();
     }
     catch (caught) { setError(caught instanceof Error ? caught.message : '설정을 저장하지 못했습니다.'); }
@@ -76,8 +76,8 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
     </select></label>}
     {conversation.mode === 'image_prompt' && <p className="muted">매 요청은 독립적으로 작성됩니다. 원하는 장면을 전체 문장으로 입력하세요. 기존 기록은 보이지만 생성에 사용되지 않습니다.</p>}
     {conversation.mode !== 'image_prompt' && <ModeFields mode={conversation.mode} value={settings} onChange={setSettings} />}
-    {conversation.mode === 'roleplay' && <label>장기 기억 요약
-      <textarea value={summary} maxLength={12000} onChange={event => setSummary(event.target.value)} placeholder="자동 요약된 이야기의 핵심 설정과 현재 상황입니다." />
+    {conversation.mode !== 'image_prompt' && <label>장기 기억 요약
+      <textarea value={summary} maxLength={12000} onChange={event => setSummary(event.target.value)} placeholder="자동 요약된 대화의 핵심 내용입니다." />
       <small className="muted">{conversation.summary_status === 'pending' || conversation.summary_status === 'running' ? '장기 기억을 정리하고 있습니다. 저장하면 현재 자동 요약 작업을 취소합니다.' : '필요하면 직접 수정할 수 있습니다.'}</small>
     </label>}
     {error && <p className="error">{error}</p>}<button type="submit">저장</button>
@@ -220,6 +220,19 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [active?.id, active?.summary_status]);
   useEffect(() => {
+    if (!active?.title_pending) return;
+    const conversationId = active.id;
+    const timer = window.setInterval(() => {
+      request<Conversation>('/conversations/' + conversationId)
+        .then(detail => {
+          setActive(current => current?.id === conversationId ? { ...current, ...detail } : current);
+          setConversations(current => current.map(item => item.id === conversationId ? { ...item, ...detail } : item));
+        })
+        .catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [active?.id, active?.title_pending]);
+  useEffect(() => {
     if (active?.mode !== 'image_prompt') return;
     void loadImageJobs(active.id).catch(error => setNotice(error instanceof Error ? error.message : '이미지 작업 목록을 가져오지 못했습니다.'));
   }, [active?.id, active?.mode, loadImageJobs]);
@@ -240,7 +253,7 @@ function App() {
     const created = await request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify(data) });
     setNewDialog(false); await refresh(); await loadConversation(created.id, true);
   };
-  const saveConversation = async (data: { title: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => {
+  const saveConversation = async (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => {
     if (!active) return;
     await request('/conversations/' + active.id, { method: 'PATCH', body: JSON.stringify(data) });
     await refresh(); await loadConversation(active.id);
@@ -388,8 +401,9 @@ function App() {
     <section className="chat">
       {systemView ? <section className="system-panel"><h2>BC-250 시스템 상태</h2><p>이미지 작업이 진행 중이면 image_priority 정책에 따라 LLM이 대기할 수 있습니다.</p><h3>사용 가능 모델</h3><ul>{models.map(model => <li key={model}>{model}</li>)}</ul><h3>LLM Gate</h3><pre>{JSON.stringify(gate, null, 2)}</pre><button onClick={showSystem}>새로고침</button></section>
       : active ? <><header><div><h2>{active.title}</h2><p className="muted">{MODE_META[active.mode].label} · {active.mode === 'image_prompt' ? '영어 JSON 설정 · 매 요청 독립 작성' : `${LENGTH_LABEL[active.response_length]} · ${active.context_policy === 'none' ? '이전 대화 미포함' : '최근 대화 포함'}`}</p></div><button onClick={() => setSettingsDialog(true)} disabled={busy}>설정</button><button className="danger" disabled={busy} onClick={() => void deleteConversation(active)}>삭제</button></header>
+        {active.mode !== 'image_prompt' && <div className="mode-banner" role="status">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다. <button className="plain" onClick={() => setSettingsDialog(true)} disabled={busy}>기억 확인</button></div>}
         {active.mode === 'image_prompt' && <div className="mode-banner">매 요청은 독립적으로 작성됩니다. 결과 카드에서 모델·프리셋·프롬프트·세부 옵션을 확인·수정한 뒤, 원할 때만 이미지 생성 요청을 누르세요.</div>}
-        {active.mode === 'roleplay' && active.summary_status !== 'idle' && <div className={active.summary_status === 'failed' ? 'notice error' : 'notice'}>{active.summary_status === 'failed' ? (active.summary_error || '장기 기억 요약에 실패했습니다. 기존 요약은 유지됩니다.') : '롤플레잉 장기 기억을 정리하고 있습니다. 다음 응답은 기존 대화도 계속 참고합니다.'}</div>}
+        {active.mode !== 'image_prompt' && active.summary_status !== 'idle' && <div className={active.summary_status === 'failed' ? 'notice error' : 'notice'}>{active.summary_status === 'failed' ? (active.summary_error || '장기 기억 요약에 실패했습니다. 기존 요약은 유지됩니다.') : '장기 기억을 정리하고 있습니다. 완료 전에는 기존 요약과 최근 대화를 참고합니다.'}</div>}
         <MessageList mode={active.mode} messages={active.messages} hasMore={active.hasMore} onLoadOlder={loadOlderMessages} scrollSignal={scrollSignal} conversationId={active.id}
           imageCapabilities={imageCapabilities} imageDrafts={imageDrafts} onEnsureImageDraft={ensureImageDraft}
           onUpdateImageDraft={updateImageDraft} onPersistImageDraft={persistImageDraft} onSubmitImageJob={submitImageJob}

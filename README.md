@@ -16,7 +16,9 @@ Browser ─ HTTPS ─ Caddy (/llm/, /llm/api/*) ─ loopback ─ FastAPI:8010
                                                        └─ loopback ─ Studio:8090 (image_priority, opt-in)
 ```
 
-대화와 메시지는 SQLite에 저장합니다. assistant 최종 `content`만 저장·표시하며 `reasoning_content`는 저장하지 않습니다. 기본 생성값은 `temperature=0.7`, `max_tokens=512`, 최근 20개 메시지입니다. gate가 이미지 작업을 우선하면 클라이언트는 대기 안내를 보입니다.
+기본 제목 `새 대화`로 만든 채팅방은 첫 답변이 완료된 후 첫 메시지를 바탕으로 제목을 자동 생성합니다. 직접 지정하거나 변경한 제목은 유지합니다. 제목 생성이 실패하면 첫 메시지의 일부를 제목으로 사용합니다.
+
+대화와 메시지는 SQLite에 저장합니다. assistant 최종 `content`만 저장·표시하며 `reasoning_content`는 저장하지 않습니다. 일반 대화와 롤플레잉은 최근 완료 대화와 장기 기억 요약을 참고합니다. 기본 생성값은 `temperature=0.7`, `max_tokens=512`, 최근 최대 200개 메시지이며 토큰 예산을 넘는 오래된 턴은 제외합니다. gate가 이미지 작업을 우선하면 클라이언트는 대기 안내를 보입니다.
 
 Chat replies use Server-Sent Events: only final answer token deltas are rendered and saved. Reasoning deltas are discarded. If a model consumes its entire budget on reasoning and produces no final content, the UI explains this rather than exposing reasoning.
 
@@ -106,12 +108,14 @@ LLM_GATE_URL=http://127.0.0.1:8081
 LLM_GATE_API_KEY=replace-with-existing-gate-key
 LLM_TIMEOUT_SECONDS=180
 MAX_REQUEST_BYTES=65536
-MAX_HISTORY_MESSAGES=20
+MAX_HISTORY_MESSAGES=200
 MAX_COMPLETION_TOKENS=2048
 DEFAULT_MAX_TOKENS=512
 MAX_CONCURRENT_GENERATIONS=2
 STORE_REASONING_CONTENT=false
 LLM_DISABLE_REASONING=true
+LLM_CONTEXT_TOKENS=16384
+LLM_CONTEXT_SAFETY_TOKENS=512
 IMAGE_PROMPT_MAX_TOKENS=512
 IMAGEGEN_ENABLED=false
 IMAGEGEN_ALLOW_FAKE=false
@@ -126,7 +130,9 @@ ROLEPLAY_SUMMARY_KEEP_RECENT_TURNS=6
 ROLEPLAY_SUMMARY_MAX_TOKENS=512
 ```
 
-롤플레잉의 장기 기억 요약은 위 임계값을 넘은 **완료된** 턴만 대상으로 백그라운드에서 실행됩니다. 요약은 기존 gate를 통해서만 실행되며, image_priority 대기 정책과 생성 동시성 제한을 공유합니다. 실패하면 기존 요약은 유지됩니다.
+서버의 실제 컨텍스트 한도를 확인해 `LLM_CONTEXT_TOKENS`를 설정하세요. 기존 서버 환경 파일은 자동으로 바뀌지 않으므로 16k 서버에서는 `LLM_CONTEXT_TOKENS=16384`, `MAX_HISTORY_MESSAGES=200`을 직접 반영해야 합니다. 토큰 수는 현재 UTF-8 바이트 기반 추정치이며 모델의 정확한 토큰 수가 아닙니다.
+
+일반 대화와 롤플레잉의 장기 기억 요약은 위 임계값을 넘은 **완료된** 턴만 대상으로 백그라운드에서 실행됩니다. 요약은 기존 gate를 통해서만 실행되며, image_priority 대기 정책과 생성 동시성 제한을 공유합니다. 실패하면 기존 요약은 유지됩니다.
 
 Install and start only the new service:
 

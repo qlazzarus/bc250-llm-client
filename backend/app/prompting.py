@@ -50,7 +50,7 @@ def mode_instruction(conversation: dict[str, Any]) -> str:
     # database for compatibility.  They are intentionally never LLM input.
     settings = {} if mode == "image_prompt" else conversation["mode_settings"]
     if mode == "quick":
-        return "현재 사용자 질문에만 답하세요. 이전 대화 내용은 참고하지 마세요. 정확하고 간결하게 답하세요."
+        return "이전 대화의 문맥을 참고하여 현재 질문에 정확하고 간결하게 답하세요."
     if mode == "roleplay":
         fields = [
             ("캐릭터", settings.get("character")),
@@ -78,7 +78,7 @@ def build_prompt(conversation: dict[str, Any], completed_history: list[dict[str,
     max_tokens = prompt_output_tokens(conversation, settings)
     input_budget = settings.llm_context_tokens - max_tokens - settings.llm_context_safety_tokens
     system_messages = [{"role": "system", "content": mode_instruction(conversation)}]
-    if conversation["mode"] == "roleplay" and conversation["summary"]:
+    if conversation["mode"] in {"quick", "roleplay"} and conversation["summary"]:
         system_messages.append({"role": "system", "content": f"이전 대화 요약:\n{conversation['summary']}"})
     current_message = {"role": "user", "content": current_user_content}
     mandatory = system_messages + [current_message]

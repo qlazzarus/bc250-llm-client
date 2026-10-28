@@ -32,16 +32,18 @@ def conversation(mode, context_policy, mode_settings=None, response_length="medi
     }
 
 
-def test_quick_mode_does_not_send_history():
+def test_quick_mode_sends_history():
     plan = build_prompt(
-        conversation("quick", "none"),
+        conversation("quick", "recent"),
         [{"role": "user", "content": "이전 질문"}, {"role": "assistant", "content": "이전 답변"}],
         "현재 질문",
         settings(),
     )
 
     assert [message["content"] for message in plan.messages] == [
-        "현재 사용자 질문에만 답하세요. 이전 대화 내용은 참고하지 마세요. 정확하고 간결하게 답하세요.",
+        "이전 대화의 문맥을 참고하여 현재 질문에 정확하고 간결하게 답하세요.",
+        "이전 질문",
+        "이전 답변",
         "현재 질문",
     ]
     assert plan.max_tokens == 32
@@ -134,3 +136,14 @@ def test_image_prompt_context_budget_uses_its_own_reserved_output_tokens():
             "현재 요청",
             settings(llm_context_tokens=100, image_prompt_max_tokens=48, llm_context_safety_tokens=16),
         )
+
+
+def test_quick_summary_and_recent_history_are_sent():
+    plan = build_prompt(
+        conversation("quick", "recent", summary="목표: 화성 여행"),
+        [{"role": "user", "content": "최근 질문"}, {"role": "assistant", "content": "최근 답변"}],
+        "다음 질문", settings(llm_context_tokens=512),
+    )
+    assert [message["content"] for message in plan.messages[1:]] == [
+        "이전 대화 요약:\n목표: 화성 여행", "최근 질문", "최근 답변", "다음 질문"
+    ]

@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-LATEST_SCHEMA_VERSION = 13
+LATEST_SCHEMA_VERSION = 14
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -64,6 +64,7 @@ def initialize(path: str) -> None:
     with connect(path) as connection:
         connection.executescript(SCHEMA)
         _apply_conversation_mode_migration(connection)
+        connection.execute("UPDATE conversations SET context_policy='recent' WHERE mode='quick' AND context_policy='none'")
         _apply_generation_request_migration(connection)
         _apply_generation_metrics_migration(connection)
         _apply_summary_migration(connection)
@@ -76,6 +77,7 @@ def initialize(path: str) -> None:
         _apply_studio_metadata_migration(connection)
         _apply_image_evaluation_migration(connection)
         _apply_image_preset_migration(connection)
+        _apply_title_migration(connection)
 
 
 def _apply_conversation_mode_migration(connection: sqlite3.Connection) -> None:
@@ -258,3 +260,10 @@ def _apply_image_preset_migration(connection: sqlite3.Connection) -> None:
         if "preset_name" not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN preset_name TEXT")
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (13)")
+
+
+def _apply_title_migration(connection: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(conversations)")}
+    if "title_pending" not in columns:
+        connection.execute("ALTER TABLE conversations ADD COLUMN title_pending INTEGER NOT NULL DEFAULT 0")
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (14)")
