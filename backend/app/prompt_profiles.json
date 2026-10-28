@@ -1,0 +1,9 @@
+{
+  "klein-4b-q4": "Use concise natural language with a clear subject, composition, background and lighting; avoid repetitive quality tags.",
+  "klein-4b-q8": "Use concise natural language with a clear subject, composition, background and lighting; avoid repetitive quality tags.",
+  "pornmaster-klein-9b": "Use a concise natural-language scene description with visual style, camera composition and lighting; do not add sexual content unless requested.",
+  "z-image-turbo": "Use natural sentences describing the subject in relation to the background, lighting and mood; avoid SD1.5 quality tags.",
+  "z-image-nsfw-v2": "Use natural sentences describing the subject in relation to the background, lighting and mood; avoid SD1.5 quality tags and unrequested sexual content.",
+  "realistic-vision-v6": "Use concise SD1.5-style photographic terms, with camera angle, lens, natural light and skin texture only when relevant; short quality tags may be used.",
+  "moss-image-nsfw": "Use natural sentences to describe spatial layout, relative object positions and sizes; preserve any requested text exactly, including spelling and case. Do not add a LoRA trigger."
+}

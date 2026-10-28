@@ -1,0 +1,16 @@
+# Add inside the existing HTTP site block. This does not modify Art Studio routes.
+# The API remains backend `/api/v1`, but external routing is namespaced below /llm
+# so it does not interfere with Art Studio's existing `/api/*` endpoints.
+handle /llm/api/* {
+    uri strip_prefix /llm
+    reverse_proxy 127.0.0.1:8010 {
+        # Preserve token-by-token Server-Sent Events without proxy buffering.
+        flush_interval -1
+    }
+}
+
+handle_path /llm/* {
+    root * /opt/bc250-llm-client/frontend/dist
+    try_files {path} /index.html
+    file_server
+}

@@ -1,0 +1,157 @@
+.image-prompt-result {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.image-prompt-editor {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: #a8b6c8;
+}
+
+.image-prompt-editor textarea {
+  min-height: 120px;
+  resize: vertical;
+  color: #e7edf5;
+  line-height: 1.55;
+  background: #111923;
+  border: 1px solid #38506c;
+}
+
+.image-prompt-options {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(180px, 1fr) 2fr;
+}
+
+.image-prompt-options > label {
+  display: grid;
+  gap: 5px;
+  color: #a8b6c8;
+  font-size: 12px;
+}
+
+.image-prompt-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.image-prompt-meta div {
+  padding: 8px 10px;
+  background: #202a36;
+  border-radius: 6px;
+}
+
+.image-prompt-meta dt {
+  font-size: 11px;
+  color: #a8b6c8;
+}
+
+.image-prompt-meta dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.image-prompt-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.image-generate {
+  background: #3c9167;
+}
+
+.image-prompt-legacy-resolution {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid #8a6730;
+  border-radius: 6px;
+  color: #ffd675;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.image-prompt-availability, .image-prompt-error, .image-prompt-submitted {
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.image-prompt-availability { background: #342a1b; color: #ffd675; }
+.image-prompt-error { background: #44242b; color: #ffb3bc; }
+.image-prompt-submitted { background: #1d3e32; color: #b6f0d1; }
+
+.image-prompt-manual-copy {
+  display: grid;
+  gap: 6px;
+  color: #ffd675;
+  font-size: 12px;
+}
+
+.image-prompt-manual-copy textarea {
+  min-height: 90px;
+  resize: vertical;
+  background: #111923;
+}
+
+.image-job-status { display: grid; gap: 8px; border-top: 1px solid #3a495c; padding-top: 12px; }
+.image-job-status h4 { margin: 0; font-size: 13px; }
+.image-job { display: grid; gap: 8px; padding: 10px; border: 1px solid #3b4c60; border-radius: 7px; background: #17212c; }
+.image-job > div:first-child { display: grid; gap: 4px; }
+.image-job small { line-height: 1.4; }
+.image-job-submission_unknown { border-color: #8a6730; }
+.image-job-failed, .image-job-interrupted { border-color: #86404d; }
+.image-job-completed { border-color: #337457; }
+.image-job-assets { display: flex; flex-wrap: wrap; gap: 10px; }
+.image-job-assets figure { margin: 0; display: grid; gap: 5px; max-width: 200px; }
+.image-job-assets img { width: 100%; border-radius: 5px; border: 1px solid #3a495c; }
+.image-job-assets a { color: #87c5ff; font-size: 12px; }
+
+.image-compose-settings { display: grid; grid-template-columns: minmax(145px, .8fr) minmax(0, 2fr); gap: 12px 20px; align-items: center; max-width: 1000px; margin: 0 auto 10px; padding: 12px 14px; background: #192431; border: 1px solid #31465d; border-radius: 11px; }
+.image-compose-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.image-compose-heading > div { display: grid; gap: 3px; }
+.image-compose-heading strong { font-size: 13px; color: #edf5ff; }
+.image-compose-heading small { line-height: 1.35; }
+.image-compose-icon { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: 9px; background: #294664; color: #a9d8ff; font-size: 18px; }
+.image-compose-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 10px; }
+.image-compose-fields label { display: grid; gap: 5px; min-width: 0; color: #b8c8dc; font-size: 11px; font-weight: 600; }
+.image-compose-fields select { width: 100%; min-width: 0; padding: 8px 10px; background: #111b27; border-color: #40546a; font-size: 13px; }
+.image-compose-hint { grid-column: 1 / -1; margin: -2px 0 0; color: #b5c6d8; font-size: 12px; }
+.composer-panel .composer { max-width: 1000px; margin: 0 auto; }
+
+.image-thumbnail { position: relative; display: block; width: 100%; padding: 0; border: 0; overflow: hidden; background: #101820; border-radius: 6px; }
+.image-thumbnail img { display: block; transition: transform .18s ease; }
+.image-thumbnail span { position: absolute; right: 7px; bottom: 7px; padding: 4px 7px; border-radius: 5px; background: #101820db; color: #eef7ff; font-size: 11px; opacity: 0; transition: opacity .18s ease; }
+.image-thumbnail:hover img { transform: scale(1.025); }
+.image-thumbnail:hover span, .image-thumbnail:focus-visible span { opacity: 1; }
+.image-thumbnail:focus-visible, .image-lightbox-close:focus-visible { outline: 2px solid #83c4ff; outline-offset: 3px; }
+.image-lightbox { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 20px; border: 0; background: transparent; color: #e7edf5; overflow: auto; }
+.image-lightbox::backdrop { background: #05090ee8; }
+.image-lightbox[open] { display: grid; place-items: center; }
+.image-lightbox-content { display: grid; gap: 10px; width: min(100%, 1100px); max-height: 100%; }
+.image-lightbox-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; color: #d7e5f4; font-size: 13px; }
+.image-lightbox-toolbar > div { display: flex; align-items: center; gap: 14px; }
+.image-lightbox-toolbar a { color: #9ccfff; text-decoration: none; }
+.image-lightbox-close { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid #526174; background: #1d2938; color: #e7edf5; font-size: 24px; line-height: 1; }
+.image-lightbox-content img { display: block; max-width: 100%; max-height: calc(100dvh - 100px); margin: 0 auto; object-fit: contain; border-radius: 8px; }
+
+@media (max-width: 850px) {
+  .image-compose-settings { grid-template-columns: 1fr; gap: 10px; }
+  .image-compose-heading small { display: none; }
+}
+
+@media (max-width: 560px) {
+  .image-prompt-options { grid-template-columns: 1fr; }
+  .image-compose-settings { padding: 9px 10px; }
+  .image-compose-icon { flex-basis: 26px; height: 26px; font-size: 15px; }
+  .image-compose-fields { gap: 7px; }
+  .image-compose-fields select { font-size: 12px; padding: 7px; }
+  .image-lightbox { padding: 12px; }
+}

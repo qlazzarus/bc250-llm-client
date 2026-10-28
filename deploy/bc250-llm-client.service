@@ -1,0 +1,23 @@
+[Unit]
+Description=BC-250 LLM Client API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# Replace both values with the server's service account before installation.
+User=YOUR_SERVICE_USER
+Group=YOUR_SERVICE_GROUP
+WorkingDirectory=/opt/bc250-llm-client/backend
+EnvironmentFile=/etc/bc250-llm-client.env
+ExecStart=/opt/bc250-llm-client/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --proxy-headers
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bc250-llm-client
+
+[Install]
+WantedBy=multi-user.target

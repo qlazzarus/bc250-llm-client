@@ -1,0 +1,95 @@
+--- a/backend/app/models/schemas.py
++++ b/backend/app/models/schemas.py
+@@ -1,6 +1,6 @@
+ from typing import Literal
+ 
+-from pydantic import BaseModel, ConfigDict, Field, model_validator
++from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+ 
+ SamplingMethod = Literal[
+     "euler",
+@@ -64,6 +64,7 @@
+     priority: int = Field(default=0, ge=0, le=100)
+     batch_count: int = Field(default=1, ge=1, le=16)
+     preset: Literal["fast", "balanced", "quality"] = "balanced"
++    lora_enabled: StrictBool | None = None
+     client_reference: str | None = Field(default=None, max_length=200)
+ 
+     @model_validator(mode="after")
+--- a/backend/app/services/registry.py
++++ b/backend/app/services/registry.py
+@@ -1,4 +1,6 @@
+ from pathlib import Path
++from copy import deepcopy
++import re
+ from secrets import randbelow
+ from typing import Literal
+ 
+@@ -137,6 +139,7 @@
+             missing_files=missing,
+             execution_enabled=available,
+             verification_status=model["validation_status"] if not missing else "unavailable",
++            lora_toggle_supported=model["family"] == "moss-image" and bool(lora and lora["enabled"]),
+         )
+         return model
+ 
+@@ -172,6 +175,11 @@
+         if model["validation_status"] == "failed":
+             raise ValueError("Model failed validation; operator review required")
+         spec = request.model_dump()
++        lora_enabled = spec.get("lora_enabled")
++        if lora_enabled is not None and not model["lora_toggle_supported"]:
++            raise ValueError("Model does not support per-job LoRA control")
++        if lora_enabled is False and re.search(r"<lora:", request.prompt, re.IGNORECASE):
++            raise ValueError("LoRA tags are not allowed when LoRA is disabled")
+         preset = model["presets"][request.preset]
+         for field in ("width", "height", "steps"):
+             if spec[field] is None:
+@@ -197,5 +205,7 @@
+         if spec["seed"] == -1:
+             spec["seed"] = randbelow(2147483632)
+         # Freeze the model configuration so queued jobs and retries stay reproducible.
+-        spec["model_snapshot"] = self.models[request.model_id].copy()
++        spec["model_snapshot"] = deepcopy(self.models[request.model_id])
++        if lora_enabled is not None:
++            spec["model_snapshot"]["lora"]["enabled"] = lora_enabled
+         return spec
+--- a/backend/tests/test_moss.py
++++ b/backend/tests/test_moss.py
+@@ -124,6 +124,36 @@
+     settings.sd_cli = tmp_path / "sd-cli"
+     settings.sd_cli.touch(mode=0o700)
+     SdCppEngine(settings).validate(spec)
++
++
++def test_per_job_lora_toggle_is_frozen_and_does_not_mutate_registry(settings, moss, tmp_path):
++    assert moss.get(MODEL_ID)["lora_toggle_supported"] is True
++    base = moss.resolve(JobRequest(model_id=MODEL_ID, prompt="landscape", lora_enabled=False))
++    enabled = moss.resolve(JobRequest(model_id=MODEL_ID, prompt="landscape", lora_enabled=True))
++    default = moss.resolve(JobRequest(model_id=MODEL_ID, prompt="landscape"))
++    assert moss.models[MODEL_ID]["lora"]["enabled"] is True
++    assert base["model_snapshot"]["lora"]["enabled"] is False
++    assert enabled["model_snapshot"]["lora"]["enabled"] is True
++    assert default["model_snapshot"]["lora"]["enabled"] is True
++    cmd = SdCppEngine(settings).command(base, 1, tmp_path / 'base.png')
++    assert '--lora-model-dir' not in cmd
++    assert cmd[cmd.index('-p') + 1] == 'landscape'
++    cmd_on = SdCppEngine(settings).command(enabled, 1, tmp_path / 'on.png')
++    assert '--lora-model-dir' in cmd_on
++    assert 'moss_xvstyle' in cmd_on[cmd_on.index('-p') + 1]
++    moss.models[MODEL_ID]['lora']['strength'] = 0.2
++    assert enabled['model_snapshot']['lora']['strength'] == 0.7
++
++
++def test_lora_override_rejected_for_non_moss_and_non_boolean(moss):
++    moss.models['non-moss'] = deepcopy(moss.models[MODEL_ID])
++    moss.models['non-moss']['family'] = 'flux2'
++    with pytest.raises(ValueError, match='per-job LoRA'):
++        moss.resolve(JobRequest(model_id='non-moss', prompt='landscape', lora_enabled=False))
++    with pytest.raises(ValidationError):
++        JobRequest(model_id=MODEL_ID, prompt='landscape', lora_enabled='false')
++    with pytest.raises(ValueError, match='LoRA tags'):
++        moss.resolve(JobRequest(model_id=MODEL_ID, prompt='landscape <LoRA:adapter:0.7>', lora_enabled=False))
+ 
+ 
+ def test_moss_schema_rejects_incomplete_or_misplaced_options(moss):
