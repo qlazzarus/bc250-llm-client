@@ -371,9 +371,9 @@ AI 최적화 요청은 먼저 같은 분석을 수행하고 원문과 분석 결
 
 이미지 프롬프트 작성 단계에서 응답 JSON이 유효하지 않거나 비어 있거나 잘렸을 때, 또는 지정 문구가 누락되었을 때 한 번 재시도한다. 두 번 실패하면 요청을 실패로 기록하며 이미지 큐에 제출하지 않는다. 취소가 감지되면 다음 시도를 중단한다. 반환되는 LLM usage는 마지막 프롬프트 작성 호출의 값이며 분석이나 실패한 시도의 토큰을 합산하지 않는다.
 
-## GitHub Actions를 통한 수동 배포
+## GitHub Actions를 통한 배포
 
-`.github/workflows/deploy.yml`은 `main`에서 수동 실행할 때 GitHub 호스팅 runner에서 백엔드 테스트와 프런트엔드 lint/build를 수행한 후 SSH로 배포한다. `production` environment의 배포 브랜치를 `main`으로 제한한다. 외부 PR에서는 배포하지 않는다. 이 워크플로는 서버의 `/etc/bc250-llm-client.env`, Caddy 설정, SQLite DB를 수정하지 않는다.
+`.github/workflows/deploy.yml`은 `main`에 푸시하거나 `main`에서 수동 실행할 때 GitHub 호스팅 runner에서 백엔드 테스트와 프런트엔드 lint/build를 수행한 후 SSH로 배포한다. `production` environment의 배포 브랜치를 `main`으로 제한한다. 외부 PR에서는 배포하지 않는다. 이 워크플로는 서버의 `/etc/bc250-llm-client.env`, Caddy 설정, SQLite DB를 수정하지 않는다.
 
 최초 배포 전에 서버에서 환경 파일에 `APP_AUTH_MODE=local`, `APP_ALLOWED_HOSTS=localhost,127.0.0.1,192.168.0.57`, 빈 `CORS_ORIGINS`를 설정한다. 공유기와 방화벽이 외부 웹 접근을 차단하는지 확인한다. 서버 주소가 바뀌면 허용 Host도 수정해야 한다. 기존 환경 파일과 Caddyfile을 백업하고 기존 설정을 보존한다.
 

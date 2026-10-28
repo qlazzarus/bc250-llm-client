@@ -1,6 +1,8 @@
 name: Deploy BC-250 client
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
