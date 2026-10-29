@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength } from './api';
 import { MessageList } from './components/MessageList';
@@ -24,6 +24,17 @@ function ModeFields({ mode, value, onChange }: { mode: Mode; value: ModeSettings
   </label>)}</div>;
 }
 
+function Modal({ children, titleId, onClose }: { children: ReactNode; titleId: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog?.showModal();
+    return () => { dialog?.close(); previous?.focus(); };
+  }, []);
+  return <dialog ref={dialogRef} className="modal-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
+}
+
 function NewConversationDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (data: { title: string; mode: Mode; response_length: ResponseLength; mode_settings: ModeSettings }) => Promise<void> }) {
   const [title, setTitle] = useState('새 대화');
   const [mode, setMode] = useState<Mode>('quick');
@@ -35,8 +46,8 @@ function NewConversationDialog({ onClose, onCreate }: { onClose: () => void; onC
     try { await onCreate({ title, mode, response_length: responseLength, mode_settings: settings }); }
     catch (caught) { setError(caught instanceof Error ? caught.message : '대화를 만들지 못했습니다.'); }
   };
-  return <div className="modal-backdrop" role="presentation"><form className="modal" onSubmit={submit}>
-    <header><h2>새 대화</h2><button type="button" className="plain" onClick={onClose}>닫기</button></header>
+  return <Modal titleId="new-dialog-title" onClose={onClose}><form className="modal" onSubmit={submit}>
+    <header><h2 id="new-dialog-title">새 대화</h2><button type="button" className="plain" onClick={onClose}>닫기</button></header>
     <label>제목<input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} required /><small className="muted">기본 제목은 첫 답변 후 자동으로 정해집니다.</small></label>
     <fieldset><legend>용도</legend>{(Object.keys(MODE_META) as Mode[]).map(option =>
       <label className="mode-option" key={option}><input type="radio" checked={mode === option} onChange={() => { setMode(option); setSettings({}); }} />
@@ -48,7 +59,7 @@ function NewConversationDialog({ onClose, onCreate }: { onClose: () => void; onC
     {mode === 'image_prompt' && <p className="muted">원하는 장면과 모델을 입력하면 영어 프롬프트를 작성합니다. 생성 설정은 결과 카드에서 확인하고 변경할 수 있습니다.</p>}
     {mode !== 'image_prompt' && <ModeFields mode={mode} value={settings} onChange={setSettings} />}
     {error && <p className="error">{error}</p>}<button type="submit">대화 만들기</button>
-  </form></div>;
+  </form></Modal>;
 }
 
 function ConversationSettings({ conversation, onClose, onSave }: { conversation: Detail; onClose: () => void; onSave: (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => Promise<void> }) {
@@ -67,8 +78,8 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
     }
     catch (caught) { setError(caught instanceof Error ? caught.message : '설정을 저장하지 못했습니다.'); }
   };
-  return <div className="modal-backdrop" role="presentation"><form className="modal" onSubmit={submit}>
-    <header><h2>대화 설정</h2><button type="button" className="plain" onClick={onClose}>닫기</button></header>
+  return <Modal titleId="settings-dialog-title" onClose={onClose}><form className="modal" onSubmit={submit}>
+    <header><h2 id="settings-dialog-title">대화 설정</h2><button type="button" className="plain" onClick={onClose}>닫기</button></header>
     <p className="muted">모드: {MODE_META[conversation.mode].label} · 생성 후에는 모드를 변경할 수 없습니다.</p>
     <label>제목<input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} required /></label>
     {conversation.mode !== 'image_prompt' && <label>응답 길이<select value={responseLength} onChange={event => setResponseLength(event.target.value as ResponseLength)}>
@@ -81,7 +92,7 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
       <small className="muted">{conversation.summary_status === 'pending' || conversation.summary_status === 'running' ? '장기 기억을 정리하고 있습니다. 저장하면 현재 자동 요약 작업을 취소합니다.' : '필요하면 직접 수정할 수 있습니다.'}</small>
     </label>}
     {error && <p className="error">{error}</p>}<button type="submit">저장</button>
-  </form></div>;
+  </form></Modal>;
 }
 
 function App() {
@@ -97,6 +108,7 @@ function App() {
   const [gate, setGate] = useState<unknown>();
   const [systemView, setSystemView] = useState(false);
   const [newDialog, setNewDialog] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
   const [imageCapabilities, setImageCapabilities] = useState<ImageCapabilities>();
   const [imageDrafts, setImageDrafts] = useState<Record<string, ImageDraftEditor>>({});
@@ -394,9 +406,9 @@ function App() {
 
 
   return <main className="layout">
-    <aside><h1>BC-250</h1><button onClick={() => setNewDialog(true)}>＋ 새 대화</button>
-      <nav aria-label="대화 목록">{conversations.map(conversation => <button className={active?.id === conversation.id && !systemView ? 'selected' : ''} key={conversation.id} onClick={() => loadConversation(conversation.id, true)}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></button>)}</nav>
-      <button onClick={showSystem}>시스템 상태</button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
+    <aside><h1>BC-250</h1><button className="mobile-menu-toggle plain" aria-expanded={menuOpen} aria-controls="conversation-nav" onClick={() => setMenuOpen(value => !value)}>{menuOpen ? '목록 닫기' : '대화 목록'}</button><button onClick={() => { setMenuOpen(false); setNewDialog(true); }}>＋ 새 대화</button>
+      <nav id="conversation-nav" className={menuOpen ? 'mobile-open' : ''} aria-label="대화 목록">{conversations.map(conversation => <button className={active?.id === conversation.id && !systemView ? 'selected' : ''} key={conversation.id} onClick={() => { setMenuOpen(false); void loadConversation(conversation.id, true); }}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></button>)}</nav>
+      <button onClick={() => { setMenuOpen(false); void showSystem(); }}>시스템 상태</button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
     </aside>
     <section className="chat">
       {systemView ? <section className="system-panel"><h2>BC-250 시스템 상태</h2><p>이미지 작업이 진행 중이면 image_priority 정책에 따라 LLM이 대기할 수 있습니다.</p><h3>사용 가능 모델</h3><ul>{models.map(model => <li key={model}>{model}</li>)}</ul><h3>LLM Gate</h3><pre>{JSON.stringify(gate, null, 2)}</pre><button onClick={showSystem}>새로고침</button></section>
@@ -409,15 +421,15 @@ function App() {
           onUpdateImageDraft={updateImageDraft} onPersistImageDraft={persistImageDraft} onSubmitImageJob={submitImageJob}
           imageJobs={imageJobs[active.id] || []} onCancelImageJob={cancelImageJob} />
         <div className="composer-panel">
-          {active.mode === 'image_prompt' && <div className="image-compose-settings" aria-label="이미지 프롬프트 작성 설정">
+          {active.mode === 'image_prompt' && <details className="image-compose-disclosure"><summary>프롬프트 설정 · {promptMode === 'ai_optimized' ? 'AI 최적화' : promptMode === 'direct_translation' ? '직접 번역' : '원본 그대로'} · {imageCapabilities?.models.find(model => model.model_id === imageModelId)?.display_name || '추천받기'}</summary><div className="image-compose-settings" aria-label="이미지 프롬프트 작성 설정">
             <div className="image-compose-heading"><span className="image-compose-icon" aria-hidden="true">✦</span><div><strong>프롬프트 설정</strong><small>원하는 방식과 모델을 선택하세요</small></div></div>
             <div className="image-compose-fields">
               <label><span>프롬프트 방식</span><select value={promptMode} disabled={busy} onChange={event => setPromptMode(event.target.value as PromptMode)}><option value="ai_optimized">AI 최적화</option><option value="direct_translation">직접 번역</option><option value="original">원본 그대로</option></select></label>
               <label><span>이미지 모델</span><select value={imageModelId} disabled={busy || !imageCapabilities} onChange={event => setImageModelId(event.target.value)}><option value="">추천받기</option>{imageCapabilities?.models.map(model => <option key={model.model_id} value={model.model_id} disabled={Boolean(imageCapabilities.available && !model.execution_enabled)}>{model.display_name}{imageCapabilities.available && !model.execution_enabled ? ' · 실행 불가' : ''}</option>)}</select></label>
             </div>
             {promptMode === 'original' && <p className="image-compose-hint">모델을 직접 선택하세요. 입력 문구의 앞뒤 공백만 제거합니다.</p>}
-          </div>}
-          <div className="composer"><textarea value={input} disabled={busy} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={active.mode === 'image_prompt' ? '원하는 이미지 장면을 전체 문장으로 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)' : '메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)'} /><button disabled={busy || !input.trim() || (active.mode === 'image_prompt' && promptMode === 'original' ? !imageModelId : !models.length)} onClick={() => void send()}>{busy ? (active.mode === 'image_prompt' ? '작성 중' : '생성 중') : (active.mode === 'image_prompt' ? '프롬프트 작성' : '전송')}</button>{busy && inFlightRef.current?.conversationId === active.id && <button className="plain" onClick={() => void cancel()}>취소</button>}</div>
+          </div></details>}
+          <div className="composer"><textarea aria-label={active.mode === 'image_prompt' ? '이미지 장면 입력' : '메시지 입력'} value={input} disabled={busy} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} placeholder={active.mode === 'image_prompt' ? '원하는 이미지 장면을 전체 문장으로 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)' : '메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)'} /><button disabled={busy || !input.trim() || (active.mode === 'image_prompt' && promptMode === 'original' ? !imageModelId : !models.length)} onClick={() => void send()}>{busy ? (active.mode === 'image_prompt' ? '작성 중' : '생성 중') : (active.mode === 'image_prompt' ? '프롬프트 작성' : '전송')}</button>{busy && inFlightRef.current?.conversationId === active.id && <button className="plain" onClick={() => void cancel()}>취소</button>}</div>
         </div>
         {notice && <div className="notice">{notice}{retryInfo && <button className="plain" onClick={() => void retry()}>재시도</button>}</div>}
       </> : <div className="empty"><h2>새 대화를 시작하세요</h2><button onClick={() => setNewDialog(true)}>대화 만들기</button></div>}

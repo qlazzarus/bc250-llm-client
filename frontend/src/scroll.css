@@ -21,3 +21,42 @@
   .layout aside .model-name{display:none}
   .composer-panel{padding:10px 12px 12px}
 }
+
+.mobile-menu-toggle{display:none}
+.modal-dialog{padding:0;border:0;background:transparent;color:inherit;max-width:calc(100% - 24px);max-height:calc(100dvh - 24px);overflow:visible}
+.modal-dialog::backdrop{background:#000a}
+.modal-dialog .modal{max-height:calc(100dvh - 24px)}
+.image-compose-disclosure,.image-options-disclosure{min-width:0}
+.image-compose-disclosure>summary,.image-options-disclosure>summary{cursor:pointer;padding:8px 10px;color:#c7ddf5;overflow-wrap:anywhere}
+.image-compose-settings{margin-bottom:8px}
+.image-options-disclosure .image-prompt-options{margin-top:8px}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #83c4ff;outline-offset:2px}
+@media(max-width:700px){
+  .layout aside{grid-template-columns:minmax(0,1fr) auto auto auto;grid-template-rows:auto}
+  .layout aside h1{grid-column:1;grid-row:1}
+  .layout aside .mobile-menu-toggle{display:block;grid-column:2;grid-row:1}
+  .layout aside>button:nth-of-type(2){grid-column:3;grid-row:1}
+  .layout aside>button:last-of-type{grid-column:4;grid-row:1}
+  .layout aside nav{display:none;grid-column:1/-1;grid-row:2;max-height:min(40dvh,320px)}
+  .layout aside nav.mobile-open{display:flex}
+  .layout aside button{min-height:44px;padding:8px}
+  .chat>header{padding:8px 12px;min-width:0}
+  .chat>header>div{min-width:0;overflow-wrap:anywhere}
+  .chat>header p{margin:3px 0}
+  .chat>header button{min-height:44px;flex-shrink:0}
+  .messages{padding:12px}
+  .messages article{overflow-wrap:anywhere}
+  .mode-banner{padding:6px 12px;line-height:1.35}
+  .mode-banner button{flex-shrink:0}
+  .composer-panel{padding:6px 12px max(8px, env(safe-area-inset-bottom))}
+  .composer textarea{min-width:0;min-height:44px;max-height:25dvh}
+  .composer button{min-height:44px}
+  input,textarea,select,.image-compose-fields select{font-size:16px}
+  .system-panel{padding:16px}
+}
+@media(max-width:380px){
+  .layout aside{grid-template-columns:minmax(0,1fr) auto auto}
+  .layout aside>button:last-of-type{grid-column:1/-1;grid-row:3}
+  .layout aside nav{grid-row:2}
+  .mode-banner{font-size:12px}
+}

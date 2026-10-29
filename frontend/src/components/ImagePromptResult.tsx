@@ -111,7 +111,7 @@ export function ImagePromptResult({ conversationId, messageId, config, capabilit
     <label className="image-prompt-editor">{promptMode === 'original' ? '원본 프롬프트' : '영어 프롬프트'}
       <textarea value={current.prompt} maxLength={8000} onChange={event => onUpdateDraft(messageId, { prompt: event.target.value }, current)} />
     </label>
-    <div className="image-prompt-options">
+    <details className="image-options-disclosure"><summary>모델 및 세부 설정 · {model?.display_name || selected.model_id} · {current.preset_name || '기록 없음'}</summary><div className="image-prompt-options">
       <label>대상 모델<select value={selected.model_id} onChange={event => {
         const target = capabilities?.models.find(item => item.model_id === event.target.value);
         if (!target) return;
@@ -144,7 +144,11 @@ export function ImagePromptResult({ conversationId, messageId, config, capabilit
       {model?.server_settings && <p className="muted">Studio 기본 설정: {JSON.stringify(model.server_settings)}</p>}
       {model && !model.execution_enabled && <p className="image-prompt-error">이 모델은 현재 Studio에서 실행할 수 없습니다. 모델 설치 상태와 옵션 계약을 확인하세요.</p>}
 
-    </div>
+    </div></details>
+    {invalidNegative && <p className="image-prompt-error">Negative prompt 사용에 필요한 옵션을 확인해 주세요.</p>}
+    {unsupportedLora && <p className="image-prompt-error">작업별 LoRA 설정을 확인해 주세요.</p>}
+    {invalidLoraTag && <p className="image-prompt-error">LoRA OFF 상태에서는 프롬프트의 LoRA 태그를 제거해 주세요.</p>}
+    {model && !model.execution_enabled && <p className="image-prompt-error">이 모델은 현재 실행할 수 없습니다. 설정을 확인해 주세요.</p>}
     {!supportedResolution && <p className="image-prompt-legacy-resolution">선택한 모델이 지원하는 해상도 조합을 다시 선택해 주세요.</p>}
     {availabilityMessage(capabilities) && <p className="image-prompt-availability">{availabilityMessage(capabilities)}</p>}
     <div className="image-prompt-actions">
