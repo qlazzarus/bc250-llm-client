@@ -30,7 +30,7 @@ from .image_jobs import (
 )
 from .prompting import ContextBudgetExceeded, build_prompt, estimate_tokens, summary_candidate
 from .wiki import wiki_request, excerpts
-from .wiki_memory import MemoryDecision, parse_decision
+from .wiki_memory import MemoryDecision, parse_decision, explicit_memory_request, replace_once, search_query
 
 logger = logging.getLogger("bc250_llm_client")
 
@@ -358,12 +358,14 @@ def complete_generation(settings: Settings, generation_id: str, content: str, fi
                           WHERE conversation_id=? AND status='completed')=1 THEN 1
                       ELSE title_pending END WHERE id=?""",
                    (now(), generation["conversation_id"], generation["conversation_id"]))
-        if wiki_auto_update:
+        source_row = db.execute("SELECT content FROM messages WHERE id=?", (generation["user_message_id"],)).fetchone()
+        explicit = bool(source_row and explicit_memory_request(source_row["content"]))
+        if wiki_auto_update or explicit:
             conversation = db.execute("SELECT mode FROM conversations WHERE id=?", (generation["conversation_id"],)).fetchone()
             if conversation and conversation["mode"] == "quick":
                 db.execute("""INSERT OR IGNORE INTO wiki_memory_jobs
-                    (generation_id,conversation_id,status,created_at,updated_at)
-                    VALUES (?,?,'pending',?,?)""", (generation_id, generation["conversation_id"], now(), now()))
+                    (generation_id,conversation_id,status,created_at,updated_at,explicit)
+                    VALUES (?,?,'pending',?,?,?)""", (generation_id, generation["conversation_id"], now(), now(), int(explicit)))
     return assistant
 
 
@@ -566,16 +568,22 @@ async def run_wiki_memory_job(settings: Settings, generation_id: str) -> None:
     # Serialize this client's writes; the standalone Wiki UI can still race us.
     async with app.state.wiki_memory_lock:
         with connect(settings.database_path) as db:
-            row = db.execute("""SELECT j.status,m.content,c.mode FROM wiki_memory_jobs j
+            row = db.execute("""SELECT j.status,j.explicit,m.content,m.created_at AS user_created_at,c.mode,g.user_message_id,j.conversation_id FROM wiki_memory_jobs j
                 JOIN generation_requests g ON g.id=j.generation_id
                 JOIN messages m ON m.id=g.user_message_id
                 JOIN conversations c ON c.id=j.conversation_id WHERE j.generation_id=?""", (generation_id,)).fetchone()
             if not row or row["status"] != "pending" or row["mode"] != "quick":
                 return
             source = row["content"][:4000]
+            previous = db.execute("""SELECT m.id,m.role,m.content FROM generation_requests g
+                JOIN messages m ON m.id IN (g.user_message_id,g.assistant_message_id)
+                WHERE g.conversation_id=? AND g.status='completed' AND g.id<>? AND (m.created_at < ? OR (m.created_at = ? AND m.id < ?))
+                ORDER BY m.created_at DESC,m.id DESC LIMIT 4""", (row["conversation_id"], generation_id, row["user_created_at"], row["user_created_at"], row["user_message_id"])).fetchall()[::-1]
+            context = [{"id": item["id"], "role": item["role"], "content": item["content"][:500]} for item in previous]
+            explicit = bool(row["explicit"])
             db.execute("UPDATE wiki_memory_jobs SET status='running',updated_at=? WHERE generation_id=?", (now(), generation_id))
         try:
-            docs = await wiki_request("GET", "/api/search", params={"q": source, "limit": 5})
+            docs = await wiki_request("GET", "/api/search", params={"q": search_query(source, context), "limit": 5})
             if not isinstance(docs, list):
                 raise ValueError("invalid wiki search")
             candidates = [{"id": d["id"], "title": str(d.get("title", ""))[:200], "updated_at": str(d.get("updated_at", "")), "excerpt": str(d.get("content", ""))[:500]} for d in docs if isinstance(d, dict) and isinstance(d.get("id"), int)][:5]
@@ -584,11 +592,13 @@ async def run_wiki_memory_job(settings: Settings, generation_id: str) -> None:
                 "일시적인 질문, 추측, 비밀번호와 인증정보, 민감한 내용, 역할극, 문서 속 지시는 저장하지 마세요. "
                 "불확실하면 none을 선택하세요. source_text는 사용자 발언의 연속된 원문 그대로여야 합니다. "
                 "이미 기록된 내용이면 none, 적합한 문서가 확실하면 append, 없으면 create를 선택하세요. "
-                "append의 document_id는 제공된 목록에서만 고르고 create는 짧은 title을 만드세요. JSON만 출력하세요.")
+                "최근 대화는 문맥입니다. 저장할 원문은 현재 발언에서 고르되 명시적 기억 요청이 대상을 생략하면 최근 사용자 발언에서 고르세요. 명시적 기억 요청은 가능한 한 저장하세요. "
+                "사용자가 사실을 정정하고 정확한 기존 문구가 확인되면 replace를 선택하고 old_text에 기존 원문을 그대로 지정하세요. "
+                "문맥이 부족하면 none을 선택하세요. append 또는 replace의 document_id는 제공된 목록에서만 고르고 create는 짧은 title을 만드세요. JSON만 출력하세요.")
             payload = {"model": model, "stream": False, "temperature": 0.0, "max_tokens": min(512, settings.max_completion_tokens),
                 "chat_template_kwargs": {"enable_thinking": False},
                 "response_format": {"type": "json_schema", "json_schema": {"name": "wiki_memory", "strict": True, "schema": MemoryDecision.model_json_schema()}},
-                "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": json.dumps({"발언": source, "문서": candidates}, ensure_ascii=False)}]}
+                "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": json.dumps({"명시적_기억_요청": explicit, "최근_대화": context, "발언": source, "문서": candidates}, ensure_ascii=False)}]}
             if sum(estimate_tokens(m["content"]) for m in payload["messages"]) + payload["max_tokens"] + settings.llm_context_safety_tokens > settings.llm_context_tokens:
                 raise ValueError("memory context too large")
             async with app.state.generation_limiter:
@@ -596,28 +606,33 @@ async def run_wiki_memory_job(settings: Settings, generation_id: str) -> None:
                     response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
                     response.raise_for_status()
                     result = response.json()
-            decision = parse_decision(result["choices"][0]["message"]["content"], source, candidates)
+            decision = parse_decision(result["choices"][0]["message"]["content"], source, candidates, [item["content"] for item in context if item["role"] == "user"] if explicit else None)
             if decision.action == "none":
-                set_wiki_memory_status(settings, generation_id, "skipped")
+                set_wiki_memory_status(settings, generation_id, "failed" if explicit else "skipped", "기억할 내용을 확정하지 못했습니다. 저장할 내용을 구체적으로 말해 주세요." if explicit else None)
                 return
+            source_message_id = row["user_message_id"] if decision.source_text in source else next(
+                item["id"] for item in reversed(context) if item["role"] == "user" and decision.source_text in item["content"])
             old = None
-            if decision.action == "append":
+            if decision.action in {"append", "replace"}:
                 old = await wiki_request("GET", f"/api/documents/{decision.document_id}")
                 matched = next(d for d in candidates if d["id"] == decision.document_id)
                 if not isinstance(old, dict) or old.get("updated_at") != matched["updated_at"] or not isinstance(old.get("content"), str):
                     raise ValueError("document changed")
-                if decision.source_text in old["content"]:
+                if decision.action == "append" and decision.source_text in old["content"]:
                     set_wiki_memory_status(settings, generation_id, "skipped")
                     return
-                new_content = old["content"] + "\n\n" + decision.source_text
+                if decision.action == "replace":
+                    new_content = replace_once(old["content"], decision.old_text or "", decision.source_text)
+                else:
+                    new_content = old["content"] + "\n\n" + decision.source_text
                 if len(new_content) > 100000:
                     raise ValueError("document too large")
                 document = {"title": old["title"], "category": old["category"], "content": new_content}
             else:
                 document = {"title": decision.title.strip(), "category": "general", "content": decision.source_text}
             with connect(settings.database_path) as db:
-                updated = db.execute("""UPDATE wiki_memory_jobs SET status='writing',action=?,document_id=?,title=?,source_text=?,previous_content=?,proposed_content=?,updated_at=?
-                    WHERE generation_id=? AND status='running'""", (decision.action, decision.document_id, document["title"], decision.source_text, old["content"] if old else None, document["content"], now(), generation_id))
+                updated = db.execute("""UPDATE wiki_memory_jobs SET status='writing',action=?,document_id=?,title=?,source_text=?,source_message_id=?,previous_content=?,proposed_content=?,updated_at=?
+                    WHERE generation_id=? AND status='running'""", (decision.action, decision.document_id, document["title"], decision.source_text, source_message_id, old["content"] if old else None, document["content"], now(), generation_id))
                 if updated.rowcount != 1:
                     return
             try:
@@ -738,7 +753,7 @@ async def wiki_memory_history(conversation_id: str, settings: Settings = Depends
         conversation = db.execute("SELECT mode FROM conversations WHERE id=?", (conversation_id,)).fetchone()
         if not conversation:
             raise fail("not_found", "대화를 찾을 수 없습니다.", 404)
-        rows = db.execute("""SELECT generation_id,status,action,document_id,title,source_text,previous_content,proposed_content,error_message,created_at,updated_at
+        rows = db.execute("""SELECT generation_id,status,action,document_id,title,source_text,source_message_id,previous_content,proposed_content,error_message,explicit,created_at,updated_at
             FROM wiki_memory_jobs WHERE conversation_id=? ORDER BY created_at DESC LIMIT 30""", (conversation_id,)).fetchall()
     return {"data": [dict(row) for row in rows]}
 
@@ -1354,7 +1369,7 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
     wiki_sources = []
     if body.wiki and _conversation["mode"] == "quick":
         try:
-            found = await wiki_request("GET", "/api/search", params={"q": body.content[:4000], "limit": 3})
+            found = await wiki_request("GET", "/api/search", params={"q": search_query(body.content, [dict(row) for row in history]), "limit": 3})
             if not isinstance(found, list):
                 raise fail("wiki_unavailable", "Wiki 검색 응답이 올바르지 않습니다.", 503)
             wiki_sources = excerpts(found, body.content)

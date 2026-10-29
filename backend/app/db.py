@@ -86,6 +86,11 @@ def initialize(path: str) -> None:
         _apply_image_evaluation_migration(connection)
         _apply_image_preset_migration(connection)
         _apply_title_migration(connection)
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(wiki_memory_jobs)")}
+        if "explicit" not in columns:
+            connection.execute("ALTER TABLE wiki_memory_jobs ADD COLUMN explicit INTEGER NOT NULL DEFAULT 0")
+        if "source_message_id" not in columns:
+            connection.execute("ALTER TABLE wiki_memory_jobs ADD COLUMN source_message_id TEXT")
 
 
 def _apply_conversation_mode_migration(connection: sqlite3.Connection) -> None:
