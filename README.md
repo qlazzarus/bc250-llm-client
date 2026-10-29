@@ -386,3 +386,11 @@ yeppyshiba ALL=(root) NOPASSWD: /usr/bin/systemctl restart bc250-llm-client.serv
 배포 전용 SSH 키를 별도로 생성하여 공개키만 서버의 `authorized_keys`에 추가한다. GitHub `production` environment secrets에 `BC250_SSH_PRIVATE_KEY`, `BC250_SSH_HOST`, `BC250_SSH_PORT`, `BC250_SSH_USER`, `BC250_SSH_KNOWN_HOSTS`를 등록한다. `BC250_SSH_KNOWN_HOSTS`는 `[hostname]:port` 형식의 실제 서버 공개 호스트 키 한 줄이다. `ssh-keyscan -p 2222 hostname`의 출력은 반드시 서버에서 직접 확인한 ED25519 fingerprint와 비교한 후 등록한다. `ssh-keyscan` 결과를 검증 없이 신뢰하지 않는다.
 
 수동 실행은 GitHub Actions에서 **Deploy BC-250 client → Run workflow → main**을 선택한다. 실패 시 이전 앱 파일을 복원하고 재시작을 시도하지만 pip 의존성 변경과 DB 마이그레이션은 되돌리지 않는다. 운영 DB 백업을 유지하고, 최초 배포는 사용자가 실행 결과와 웹 접근을 확인한다. 서버 Python 및 실행 중인 가상환경에 `pip`와 인터넷 연결이 필요하다.
+
+## 가족 Wiki 연동
+
+같은 서버의 `127.0.0.1:8020`에 사용자가 제공한 BC-250 Family Wiki API가 실행 중이면 사이드바의 **가족 Wiki**에서 문서를 관리할 수 있다. 일반 대화의 **Wiki 검색 참고**를 켜면 각 질문으로 검색해 최대 세 문서의 발췌를 기존 gate를 통해 전달한다. 답변 아래에 검색된 문서의 ID, 제목, 수정 시각과 전달한 발췌를 기록한다. 이는 모델이 실제로 인용한 문서 목록이 아니라 검색 참고자료다. 검색 결과가 없으면 답변에 표시하며, Wiki 연결 실패 시에는 생성이 실패하므로 참조를 끄고 새 요청을 보낼 수 있다. 이미지 프롬프트와 롤플레잉은 Wiki를 검색하지 않는다.
+
+Wiki 편집 화면의 LLM 초안 작성은 현재 본문과 요청을 gate로 보내 편집기에 결과만 넣는다. 내용을 확인하고 직접 저장해야 Wiki가 바뀐다. 편집 화면은 본문 12,000자까지 지원한다. 기존 문서 저장 시 열어 둔 수정 시각을 확인하지만, 기존 Wiki API의 조회와 수정은 별도 요청이므로 그 사이의 동시 수정을 원자적으로 막지는 못한다. 완전한 충돌 방지는 Wiki 서버가 수정 시각 조건부 갱신을 지원해야 한다. 삭제도 기존 Wiki API와 같이 되돌릴 수 없다.
+
+Wiki에는 별도 인증이 없으므로 8020 포트를 loopback에 유지한다. 클라이언트에 접근 가능한 사용자는 Wiki 문서를 열람·변경할 수 있다. Wiki 검색은 단어와 부분 문자열 기반이라 한국어 조사, 간접 표현과 후속 질문을 놓칠 수 있다. Wiki의 `/api/ask`는 LLM 8080을 직접 호출하므로 이 클라이언트는 사용하지 않는다.

@@ -1,3 +1,4 @@
+import { WikiPanel } from './components/WikiPanel';
 import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength } from './api';
@@ -107,6 +108,8 @@ function App() {
   const [imageModelId, setImageModelId] = useState('');
   const [gate, setGate] = useState<unknown>();
   const [systemView, setSystemView] = useState(false);
+  const [wikiView, setWikiView] = useState(false);
+  const [wikiEnabled, setWikiEnabled] = useState(false);
   const [newDialog, setNewDialog] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
@@ -330,7 +333,7 @@ function App() {
     setScrollSignal(signal => signal + 1);
     setActive(current => current?.id === conversationId ? { ...current, messages: [...current.messages, ...(reuseExistingUser ? [] : [{ id: 'local-' + requestId, role: 'user' as const, content, created_at: '' }]), { id: streamId, role: 'assistant', content: '', created_at: '' }] } : current);
     try {
-      await streamRequest('/conversations/' + conversationId + '/messages', { content, request_id: requestId, stream: true }, (name, data) => {
+      await streamRequest('/conversations/' + conversationId + '/messages', { content, request_id: requestId, stream: true, wiki: conversation.mode === 'quick' && wikiEnabled }, (name, data) => {
         if (name === 'status') {
           if (activeIdRef.current === conversationId) {
             setNotice(String(data.message || '응답을 기다리는 중입니다.'));
@@ -406,12 +409,12 @@ function App() {
 
 
   return <main className="layout">
-    <aside><h1>BC-250</h1><button className="mobile-menu-toggle plain" aria-expanded={menuOpen} aria-controls="conversation-nav" onClick={() => setMenuOpen(value => !value)}>{menuOpen ? '목록 닫기' : '대화 목록'}</button><button onClick={() => { setMenuOpen(false); setNewDialog(true); }}>＋ 새 대화</button>
-      <nav id="conversation-nav" className={menuOpen ? 'mobile-open' : ''} aria-label="대화 목록">{conversations.map(conversation => <button className={active?.id === conversation.id && !systemView ? 'selected' : ''} key={conversation.id} onClick={() => { setMenuOpen(false); void loadConversation(conversation.id, true); }}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></button>)}</nav>
-      <button onClick={() => { setMenuOpen(false); void showSystem(); }}>시스템 상태</button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
+    <aside><h1>BC-250</h1><button className="mobile-menu-toggle plain" aria-expanded={menuOpen} aria-controls="conversation-nav" onClick={() => setMenuOpen(value => !value)}>{menuOpen ? '목록 닫기' : '대화 목록'}</button><button onClick={() => { setMenuOpen(false); setWikiView(false); setNewDialog(true); }}>＋ 새 대화</button>
+      <nav id="conversation-nav" className={menuOpen ? 'mobile-open' : ''} aria-label="대화 목록">{conversations.map(conversation => <button className={active?.id === conversation.id && !systemView ? 'selected' : ''} key={conversation.id} onClick={() => { setMenuOpen(false); setWikiView(false); void loadConversation(conversation.id, true); }}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></button>)}</nav>
+      <button onClick={() => { setMenuOpen(false); setWikiView(true); setSystemView(false); }}>가족 Wiki</button><button onClick={() => { setMenuOpen(false); setWikiView(false); void showSystem(); }}>시스템 상태</button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
     </aside>
     <section className="chat">
-      {systemView ? <section className="system-panel"><h2>BC-250 시스템 상태</h2><p>이미지 작업이 진행 중이면 image_priority 정책에 따라 LLM이 대기할 수 있습니다.</p><h3>사용 가능 모델</h3><ul>{models.map(model => <li key={model}>{model}</li>)}</ul><h3>LLM Gate</h3><pre>{JSON.stringify(gate, null, 2)}</pre><button onClick={showSystem}>새로고침</button></section>
+      {wikiView ? <WikiPanel /> : systemView ? <section className="system-panel"><h2>BC-250 시스템 상태</h2><p>이미지 작업이 진행 중이면 image_priority 정책에 따라 LLM이 대기할 수 있습니다.</p><h3>사용 가능 모델</h3><ul>{models.map(model => <li key={model}>{model}</li>)}</ul><h3>LLM Gate</h3><pre>{JSON.stringify(gate, null, 2)}</pre><button onClick={showSystem}>새로고침</button></section>
       : active ? <><header><div><h2>{active.title}</h2><p className="muted">{MODE_META[active.mode].label} · {active.mode === 'image_prompt' ? '영어 JSON 설정 · 매 요청 독립 작성' : `${LENGTH_LABEL[active.response_length]} · ${active.context_policy === 'none' ? '이전 대화 미포함' : '최근 대화 포함'}`}</p></div><button onClick={() => setSettingsDialog(true)} disabled={busy}>설정</button><button className="danger" disabled={busy} onClick={() => void deleteConversation(active)}>삭제</button></header>
         {active.mode !== 'image_prompt' && <div className="mode-banner" role="status">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다. <button className="plain" onClick={() => setSettingsDialog(true)} disabled={busy}>기억 확인</button></div>}
         {active.mode === 'image_prompt' && <div className="mode-banner">매 요청은 독립적으로 작성됩니다. 결과 카드에서 모델·프리셋·프롬프트·세부 옵션을 확인·수정한 뒤, 원할 때만 이미지 생성 요청을 누르세요.</div>}
@@ -421,6 +424,7 @@ function App() {
           onUpdateImageDraft={updateImageDraft} onPersistImageDraft={persistImageDraft} onSubmitImageJob={submitImageJob}
           imageJobs={imageJobs[active.id] || []} onCancelImageJob={cancelImageJob} />
         <div className="composer-panel">
+          {active.mode === 'quick' && <label><input type="checkbox" checked={wikiEnabled} disabled={busy} onChange={event => setWikiEnabled(event.target.checked)} /> Wiki 검색 참고</label>}
           {active.mode === 'image_prompt' && <details className="image-compose-disclosure"><summary>프롬프트 설정 · {promptMode === 'ai_optimized' ? 'AI 최적화' : promptMode === 'direct_translation' ? '직접 번역' : '원본 그대로'} · {imageCapabilities?.models.find(model => model.model_id === imageModelId)?.display_name || '추천받기'}</summary><div className="image-compose-settings" aria-label="이미지 프롬프트 작성 설정">
             <div className="image-compose-heading"><span className="image-compose-icon" aria-hidden="true">✦</span><div><strong>프롬프트 설정</strong><small>원하는 방식과 모델을 선택하세요</small></div></div>
             <div className="image-compose-fields">
