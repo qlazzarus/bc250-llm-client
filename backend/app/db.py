@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS summary_jobs (
  updated_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_jobs_one_active_per_conversation ON summary_jobs(conversation_id) WHERE status IN ('pending','running');
+CREATE TABLE IF NOT EXISTS wiki_memory_jobs (
+ generation_id TEXT PRIMARY KEY REFERENCES generation_requests(id) ON DELETE CASCADE,
+ conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+ status TEXT NOT NULL, action TEXT, document_id INTEGER, title TEXT, source_text TEXT,
+ previous_content TEXT, proposed_content TEXT, error_message TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_memory_conversation ON wiki_memory_jobs(conversation_id, created_at);
 CREATE TABLE IF NOT EXISTS schema_migrations (
  version INTEGER PRIMARY KEY,
  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

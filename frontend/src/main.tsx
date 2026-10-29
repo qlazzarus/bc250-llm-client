@@ -110,6 +110,8 @@ function App() {
   const [systemView, setSystemView] = useState(false);
   const [wikiView, setWikiView] = useState(false);
   const [wikiEnabled, setWikiEnabled] = useState(false);
+  const [wikiAutoUpdate, setWikiAutoUpdate] = useState(true);
+  const [wikiMemory, setWikiMemory] = useState<{ generation_id: string; status: string; action: string | null; title: string | null; document_id: number | null; source_text: string | null; previous_content: string | null; proposed_content: string | null; error_message: string | null }[]>([]);
   const [newDialog, setNewDialog] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
@@ -121,6 +123,20 @@ function App() {
   const [scrollSignal, setScrollSignal] = useState(0);
   const activeIdRef = useRef<string | undefined>(undefined);
   const inFlightRef = useRef<InFlightGeneration | undefined>(undefined);
+
+  useEffect(() => {
+    if (!active || active.mode !== 'quick') { setWikiMemory([]); return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const result = await request<{ data: typeof wikiMemory }>('/conversations/' + active.id + '/wiki-memory');
+        if (!cancelled) setWikiMemory(result.data);
+      } catch { if (!cancelled) setWikiMemory([]); }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [active?.id, active?.mode]);
 
   const refresh = async () => {
     const [conversationResponse, modelResponse, capabilities] = await Promise.all([
@@ -333,7 +349,7 @@ function App() {
     setScrollSignal(signal => signal + 1);
     setActive(current => current?.id === conversationId ? { ...current, messages: [...current.messages, ...(reuseExistingUser ? [] : [{ id: 'local-' + requestId, role: 'user' as const, content, created_at: '' }]), { id: streamId, role: 'assistant', content: '', created_at: '' }] } : current);
     try {
-      await streamRequest('/conversations/' + conversationId + '/messages', { content, request_id: requestId, stream: true, wiki: conversation.mode === 'quick' && wikiEnabled }, (name, data) => {
+      await streamRequest('/conversations/' + conversationId + '/messages', { content, request_id: requestId, stream: true, wiki: conversation.mode === 'quick' && wikiEnabled, wiki_auto_update: conversation.mode === 'quick' && wikiAutoUpdate }, (name, data) => {
         if (name === 'status') {
           if (activeIdRef.current === conversationId) {
             setNotice(String(data.message || '응답을 기다리는 중입니다.'));
@@ -424,7 +440,16 @@ function App() {
           onUpdateImageDraft={updateImageDraft} onPersistImageDraft={persistImageDraft} onSubmitImageJob={submitImageJob}
           imageJobs={imageJobs[active.id] || []} onCancelImageJob={cancelImageJob} />
         <div className="composer-panel">
-          {active.mode === 'quick' && <label><input type="checkbox" checked={wikiEnabled} disabled={busy} onChange={event => setWikiEnabled(event.target.checked)} /> Wiki 검색 참고</label>}
+          {active.mode === 'quick' && <div><label><input type="checkbox" checked={wikiEnabled} disabled={busy} onChange={event => setWikiEnabled(event.target.checked)} /> Wiki 검색 참고</label>{' '}
+            <label><input type="checkbox" checked={wikiAutoUpdate} disabled={busy} onChange={event => setWikiAutoUpdate(event.target.checked)} /> Wiki 자동 기억</label>
+            <small> 켜면 사용자 발언에서 LLM이 고른 원문을 Wiki에 저장할 수 있습니다.</small>
+            {wikiMemory.length > 0 && <details><summary>Wiki 자동 기억 기록</summary>{wikiMemory.map(job => <div key={job.generation_id}>
+              <p>{({ pending: '대기 중', running: '판단 중', writing: '저장 중', completed: '저장 완료', skipped: '저장할 내용 없음', failed: '처리 실패', unknown: '저장 결과 확인 필요' } as Record<string, string>)[job.status] || job.status}{job.title ? ' · ' + job.title : ''}{job.document_id ? ' (문서 ' + job.document_id + ')' : ''}</p>
+              {job.source_text && <p>저장할 발언: {job.source_text}</p>}{job.error_message && <p>{job.error_message}</p>}
+              {job.previous_content && <details><summary>변경 전 본문</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{job.previous_content}</pre></details>}
+              {job.proposed_content && <details><summary>저장 시도한 본문</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{job.proposed_content}</pre></details>}
+            </div>)}</details>}
+          </div>}
           {active.mode === 'image_prompt' && <details className="image-compose-disclosure"><summary>프롬프트 설정 · {promptMode === 'ai_optimized' ? 'AI 최적화' : promptMode === 'direct_translation' ? '직접 번역' : '원본 그대로'} · {imageCapabilities?.models.find(model => model.model_id === imageModelId)?.display_name || '추천받기'}</summary><div className="image-compose-settings" aria-label="이미지 프롬프트 작성 설정">
             <div className="image-compose-heading"><span className="image-compose-icon" aria-hidden="true">✦</span><div><strong>프롬프트 설정</strong><small>원하는 방식과 모델을 선택하세요</small></div></div>
             <div className="image-compose-fields">
