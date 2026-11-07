@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     max_concurrent_generations: int = 2
     store_reasoning_content: bool = False
     llm_disable_reasoning: bool = True
+    model_control_enabled: bool = False
+    model_control_socket: str = "/run/bc250-model-control/control.sock"
+    operator_key: str = ""
     llm_model_id: str = ""
     llm_context_tokens: int = 16384
     llm_context_safety_tokens: int = 512

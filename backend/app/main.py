@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import secrets
+import re
 import sqlite3
 import time
 import uuid
@@ -14,9 +16,11 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import Settings, get_settings
+from .model_control.client import ModelControlClient, WorkerUnavailable
+from .model_control.schemas import ModelList, Operation, CurrentOperation
 from .db import connect, initialize
 from .image_prompt import IMAGE_MODELS, ImagePromptValidationError, parse_image_prompt_config, text_response_format as image_prompt_response_format, apply_balanced_preset
 from .image_intent import INTENT_INSTRUCTION, parse_intent, prompt_with_intent, response_format as image_intent_response_format
@@ -137,6 +141,43 @@ def require_key(request: Request, settings: Settings = Depends(get_settings)) ->
     value = request.headers.get("authorization", "")
     if value != f"Bearer {settings.app_api_key}":
         raise fail("unauthorized", "인증이 필요합니다.", status.HTTP_401_UNAUTHORIZED)
+
+
+def require_operator(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    require_key(request, settings)
+    key = request.headers.get("x-bc250-operator-key", "")
+    if not settings.operator_key or not secrets.compare_digest(key.encode(), settings.operator_key.encode()):
+        raise fail("operator_required", "운영자 인증이 필요합니다.", 403)
+
+
+class ModelSwitchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,128}$")
+
+
+def get_model_control(settings: Settings = Depends(get_settings)):
+    if not settings.model_control_enabled:
+        raise fail("model_control_unavailable", "모델 전환 기능을 사용할 수 없습니다.", 503)
+    return ModelControlClient(settings.model_control_socket)
+
+
+async def worker_request(client, operation, **arguments):
+    try:
+        result = await client.request(operation, **arguments)
+    except WorkerUnavailable:
+        raise fail("model_control_unavailable", "모델 제어 작업자에 연결할 수 없습니다.", 503)
+    error = result.get("error")
+    if error:
+        if error in ("idempotency_conflict", "switch_busy_or_recovery_required"):
+            raise fail(error, "다른 전환 작업 또는 복구가 진행 중입니다.", 409)
+        if error == "not_found":
+            raise fail(error, "작업을 찾을 수 없습니다.", 404)
+        raise fail("model_control_unavailable", "모델 제어 작업자를 사용할 수 없습니다.", 503)
+    schema = {"models": ModelList, "current": CurrentOperation, "get": Operation, "submit": Operation}[operation]
+    try:
+        return schema.model_validate(result).model_dump()
+    except ValidationError:
+        raise fail("model_control_unavailable", "모델 제어 작업자의 응답을 확인할 수 없습니다.", 503)
 
 
 MODE_SETTING_KEYS = {
@@ -1572,7 +1613,7 @@ async def gate_status(settings: Settings = Depends(get_settings)):
     except httpx.HTTPError: raise fail("gate_unavailable", "LLM gate 상태를 조회할 수 없습니다.", 503)
 
 
-@app.put("/api/v1/admin/gate-control", dependencies=[Depends(require_key)])
+@app.put("/api/v1/admin/gate-control", dependencies=[Depends(require_operator)])
 async def gate_control(body: GateControl, settings: Settings = Depends(get_settings)):
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -1580,3 +1621,26 @@ async def gate_control(body: GateControl, settings: Settings = Depends(get_setti
             response.raise_for_status()
             return response.json()
     except httpx.HTTPError: raise fail("gate_unavailable", "LLM gate 제어 요청에 실패했습니다.", 503)
+
+
+@app.get("/api/v1/llm/models", dependencies=[Depends(require_operator)])
+async def managed_models(client=Depends(get_model_control)):
+    return await worker_request(client, "models")
+
+
+@app.get("/api/v1/llm/switches/current", dependencies=[Depends(require_operator)])
+async def current_switch(client=Depends(get_model_control)):
+    return await worker_request(client, "current")
+
+
+@app.get("/api/v1/llm/switches/{operation_id}", dependencies=[Depends(require_operator)])
+async def get_switch(operation_id: UUID, client=Depends(get_model_control)):
+    return await worker_request(client, "get", id=operation_id.hex)
+
+
+@app.post("/api/v1/llm/switches", status_code=202, dependencies=[Depends(require_operator)])
+async def submit_switch(body: ModelSwitchRequest, request: Request, client=Depends(get_model_control)):
+    key = request.headers.get("idempotency-key", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key):
+        raise fail("invalid_idempotency_key", "유효한 Idempotency-Key가 필요합니다.", 422)
+    return await worker_request(client, "submit", model=body.model, idempotency_key=key)

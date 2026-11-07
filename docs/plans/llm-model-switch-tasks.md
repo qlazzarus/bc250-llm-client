@@ -1,0 +1,126 @@
+# 모델 전환 구현 작업과 차단 조건
+
+2026-11-07 기준. 현재 단계·작업 상태의 단일 기준은 [통합 계획 §7](llm-model-switch-plan.md#7-실행-체크리스트와-완료-조건)이며, 이 문서는 구현·조사 근거를 보존한다. M3와 M4 핵심은 로컬에 구현했으나 실제 전환은 사용할 수 없다.
+
+## M1 운영 읽기 전용 조사
+
+- `/usr/local/bin/ai-model`은 root 소유 `/opt/ai/scripts/ai-model`을 가리킨다. llama unit은 root로 `/opt/ai/scripts/start-llama.sh`를 실행하며 8080 loopback을 사용한다. 설정의 `ACTIVE_MODEL`과 개별 모델 conf를 source하고 `MODEL_PATH`를 `-m`으로 전달한다. 재시작 on-failure, stop timeout 60초다.
+- 설치된 모델 설정은 4개. 조사 당시 설정은 `gemma4-e4b-hauhaucs`, health는 `ok`, `/v1/models` ID는 해당 `MODEL_PATH`와 일치했다. 예시 설정은 context 16384, parallel 1, reasoning off다. 모델별 설정을 공통으로 가정하지 않는다.
+- Client는 UID 1000 (`yeppyshiba`), Studio와 gate는 `ai-studio`, 각각 NoNewPrivileges 적용. 모두 active. model-worker service/socket은 설치되지 않았다. Wiki 서비스도 active다.
+- 당시 SSH 계정은 보호된 Client/Studio env를 읽을 수 없었으며 sudo 비대화형 허용은 Client restart와 Studio deploy 명령뿐이었다. 후속 조사에서 확인한 Client 프로세스와 Wiki 구성은 아래에 기록한다. 공유 잠금/journal 설정은 여전히 미확인이다. 소스 기본값이나 유휴 순간의 연결 부재를 운영 설정의 증거로 사용하지 않는다. 운영 재시작·전환·배포는 하지 않았다.
+
+### M1 추가 조사 — 2026-11-07
+
+- 설치된 네 모델 `gemma4-e4b-hauhaucs`, `gemma4-e4b-heretic-rp`, `qwen35-35b-a3b-uncensored`, `qwen36-35b-a3b-uncensored`의 설정은 모두 현재 `ModelRegistry.model_id`의 literal 구문 및 이름·절대 GGUF 경로 규칙과 일치하고 파일도 비어 있지 않았다. 활성 설정 역시 현재 literal 규칙과 일치했다. 모델별 추론 옵션의 실제 호환성은 별개다.
+- `/opt/ai/config`의 관련 디렉터리 및 파일은 root 소유이며 group/other 쓰기가 없고, 모델·활성 설정은 일반 파일과 단일 링크로 확인했다. 이 확인은 ACL/SELinux나 실행 시점의 무결성 검증을 대신하지 않는다.
+- 초기 조사에서는 읽을 수 있는 `/opt/ai/scripts`, systemd unit 및 시스템 cron 파일 범위에서 기존 `ai-model`을 호출하는 다른 파일은 발견하지 못했고 root cron spool은 읽을 수 없었다. 이후 사용자 제공 검색 결과와 호출 분석은 아래에 기록한다.
+- 이후 사용자가 root 권한으로 cron spool을 포함한 서버 파일을 검색한 결과 벤치마크 두 파일과 `/usr/local/bin/bc250-model-switch`가 호출 후보로 나왔다. bash history와 테스트·문서는 실행 자동화의 증거로 취급하지 않는다. 오류는 컨테이너 overlay의 끊어진 링크에서 발생했으며 그 내부 호출 여부는 확인하지 못했다. 사용자는 이 서버 밖에서 SSH로 두 명령을 호출하는 자동화는 없는 것으로 알고 있다고 확인했다. 이는 사용자 확인 범위이며 외부 전체를 기술적으로 검색했다는 뜻은 아니다.
+- 읽기 전용 코드 분석에서 `benchmark.py`는 `ai-model list`의 각 줄을 활성 모델 이름과 정확히 비교하고, `run-comparison.py`는 `switch`의 0이 아닌 모든 종료 코드를 실패로 처리한다. `bc250-model-switch`는 `exec`로 종료 코드를 그대로 전달한다. 읽을 수 있는 주요 로컬 호출 범위에서 이 래퍼의 추가 참조는 발견하지 못했다. 특정 실패 코드 1만 비교하는 의존성은 확인되지 않았지만, 래퍼나 외부 미확인 호출자의 정확한 코드 의존은 배제할 수 없다.
+- 운영 `ai-model list`는 한 줄에 이름만 출력한다. 기존 벤치마크 호환을 위해 로컬 후보 CLI도 표시 접두사 없이 출력하도록 수정하고 `tests/test_worker_socket_integration.py`의 소켓 연결 경로에서 확인했다. 해당 파일의 테스트 3개가 통과했다. 이 확인은 운영 명령 교체나 운영 벤치마크 실행이 아니다.
+- `run-comparison.py`는 같은 모델일 때 llama 서비스가 꺼져 있으면 직접 `systemctl start`를 수행하고, 전환 subprocess에 360초 timeout을 둔다. timeout이 작업자 측 작업 취소를 뜻하지 않으므로 M5-03/M7에서 벤치마크 실행 경로의 조율과 불명 결과 처리를 확인한다.
+- 실행 중 Client 프로세스의 `LLM_MODEL_ID`는 빈 값이었다. 이는 당시 프로세스 환경의 관찰이며 이후 설정이나 다른 호출자의 정책을 보장하지 않는다. 보호된 환경파일의 원문·키 값은 출력하지 않았다.
+- 같은 Client 프로세스의 gate 주소는 loopback HTTP 8081이다. Studio와 gate의 프로세스 환경 및 세 서비스의 `/etc/bc250-*.env`는 현재 SSH 계정으로 읽을 수 없었다. 이 계정의 접근 가능 경로 외 설정을 추측하거나 우회하지 않았다.
+- 운영 Wiki `/opt/bc250-family-wiki/app/main.py`의 `LLM_URL`은 `127.0.0.1:8080`을 가리키고 `ask` 함수가 사용한다. Wiki는 gate를 우회하는 실제 구성이다. 사용자 결정으로 독립 Wiki API/UI 통합은 후속 작업이며 이번 M1~M8에서 예외로 둔다. 전환 중 Wiki 요청은 중단·실패할 수 있고 gate drain의 보호를 받지 못한다. Wiki 외 LLM/GPU 경로의 조사는 아직 완료되지 않았다.
+- 읽을 수 있는 `/opt/bc250-*` 소스에서 추가로 Studio 설정 기본값의 `llm_url`/`upstream_url`과 모델 제어·health 검사 코드의 8080 참조를 발견했다. 이 문자열만으로 현재 Studio의 실제 요청 경로를 판단하지 않는다. 가상환경·의존성·테스트·숨김 경로와 외부 호스트는 조사 범위에서 제외했다.
+- 사용자가 비밀값을 가린 `/etc/bc250-*.env` 내용을 제공했다. Studio의 GPU lock 설정은 `/run/bc250-ai-studio/gpu.lock`, LLM과 admission은 각각 loopback 8080과 8081이다. Client는 `LLM_MODEL_ID`가 비어 있고 context 상한은 16384, gate는 upstream 8080이다. 설정에 Studio owned hold·secure precreated lock·switch journal과 gate owned control/state가 보이지 않는다. 키의 실값이나 일치 여부는 제공되지 않았으며 저장하지 않는다.
+- 별도 읽기 전용 systemd 조회에서 Studio·gate는 각각 하나의 지정된 환경파일을 사용하고 해당 전환 변수의 inline 설정은 없었다. Studio는 `PrivateMounts=no`, 별도 `RootDirectory`/`RootImage` 없음이다. 조회 당시 호스트에서 `/run/bc250-ai-studio` 디렉터리는 있었지만 그 안의 `gpu.lock`은 없었고 `/run/bc250-gpu`도 없었다. Studio의 일반 잠금은 실제 획득 시 파일을 만들 수 있으므로 부재만으로 이미지 실행 실패로 판정하지 않는다. 잠금 생성 시점·권한·서비스가 보는 inode는 아직 확인하지 않았다.
+- 운영 gate 원본은 단일 paused bool이며 owned hold를 제공하지 않는다. 현재 Studio 설정의 잠금 경로는 Client 후보 작업자의 `/run/bc250-gpu/gpu.lock`과 달라 같은 파일 잠금을 공유하지 않는다. 후보 Studio 계약의 journal 및 secure precreated lock 설정도 제공된 env에는 없다. 전환을 활성화하기 전 이 계약을 명시적으로 통일·검증해야 한다. 이 정보는 현재 Studio 설정 변경 지시가 아니다.
+
+### M1-02 운영 계약표 — 2026-11-07
+
+| 항목 | 현재 운영에서 확인한 값 | 후보와의 차이 / 남은 확인 |
+| --- | --- | --- |
+| Client 계정·권한 | `yeppyshiba:yeppyshiba`, UID 1000, `NoNewPrivileges=yes` | 작업자 socket 허용 UID는 일치. 실제 Linux peer credential 검증은 M6-02 |
+| Studio·gate 계정 | 둘 다 `ai-studio:ai-studio`, `NoNewPrivileges=yes` | 후보 preflight는 Studio `ai-studio`, gate `ai-gate`를 요구하므로 현재 gate는 불일치. 배포 계정 설계는 M2-02 |
+| Studio GPU 잠금 | env의 `/run/bc250-ai-studio/gpu.lock`; 부모 디렉터리 UID 970/GID 967, mode 0755 | 후보는 `/run/bc250-gpu/gpu.lock` 및 root 소유 secure-precreated 파일을 요구한다. root 조회 시 양쪽 파일 및 후보 디렉터리 부재; 실제 작업 중 생성 파일의 inode·소유권·권한은 M4/M6에서 검증 |
+| 전환 journal | 제공된 Studio env에 `STUDIO_SWITCH_JOURNAL_PATH` 없음 | 후보는 `/var/lib/bc250-model-control/switch.json`을 요구한다. 해당 디렉터리와 파일은 조사 시 부재 |
+| gate 조율 | 운영 gate는 단일 pause bool. env에 owned control 및 durable state 항목 없음 | 후보는 역할별 credential과 영속 protocol 2 owned hold가 필요하다. legacy bool을 대체물로 사용하지 않음 |
+| 현재 키 역할 | Client의 `LLM_GATE_API_KEY`와 Studio의 `STUDIO_ADMISSION_KEY`는 각각 운영 gate 접근에 사용, gate의 `GATE_API_KEY`가 서버 쪽 키 | 사용자가 값 비노출 방식으로 확인: 세 서비스 모두 실행값↔각 환경파일 일치, Client 실행값↔gate 실행값 불일치, Studio 실행값↔gate 실행값 일치. Client 실행 키의 읽기 전용 `/control` 조회는 HTTP 401. 후보의 switch 전용 gate 키와 Studio coordination 키는 제공 env에 없음 |
+| namespace·서비스 | 세 서비스 모두 `PrivateTmp=yes`, `PrivateMounts=no`, 별도 `RootDirectory`/`RootImage` 없음, `ProtectSystem=strict`. 사용자 root 조회 시 host·Studio·gate·Client는 서로 다른 mount namespace | 존재하는 `/run/bc250-ai-studio` 디렉터리는 host와 Studio 관점 모두 dev 27, inode 13512. 잠금·journal 파일은 두 관점에서 없어 파일 자체의 inode 비교는 불가. 후보 설치 후 양쪽 파일과 보유 FD의 inode를 M4/M6에서 비교해야 함 |
+
+이는 현재 운영 설정을 기록한 것으로, 잠금 파일 생성·권한 변경이나 Studio/gate 재설정을 지시하지 않는다. 실제 전환은 M2·M4·M6/M7의 계약 및 검증 완료 전 비활성 상태로 유지한다.
+
+운영 gate의 `/v1/models` 프록시는 별도의 gate 제어 인증을 검사하지 않아 Client 키로 HTTP 200이 나와도 키 일치 증거가 아니다. 인증이 필요한 읽기 전용 `GET /control`에서는 Client 실행 키가 401로 거절됐다. 따라서 Client의 gate 제어·상태 기능에 영향이 있으며, 키 불일치를 자동으로 수정하거나 운영 서비스를 재시작하지 않는다.
+
+사용자가 2026-11-07에 확인한 실행 프로세스↔환경파일 비교는 gate·Client·Studio 모두 일치하며, 실행 중인 Client↔gate는 불일치, Studio↔gate는 일치다. 따라서 확인 시점의 Client `/control` 401은 Client가 gate의 제어 키와 다른 값을 보내는 것으로 설명된다. 서비스가 오래된 환경파일을 읽고 있다는 증거는 없다. 이는 Studio의 키 일치 결과이지 이미지 생성 전체 성공 검증은 아니다. 키의 평문이나 해시는 기록하지 않는다.
+
+**남은 작업 구분:**
+
+- 현재 운영 설정: Client의 기존 gate 상태·제어 기능을 사용하려면 Client가 gate에 허용되는 제어 자격 증명을 사용하도록 별도 변경 계획·적용과 인증된 읽기 전용 확인이 필요하다. 정확한 credential 배포 방식·서비스 반영·롤백은 기존 운영 구성과 영향에 맞게 검토한다. 이번 조사에서는 변경·재시작하지 않는다.
+- M2-02: legacy 단일 gate 키와 후보의 switch 전용 gate 키, Studio coordination 키 및 Client 운영자 자격의 역할·배포·전환 경로를 정의하고, 운영 gate/Studio 계정 차이와 owned hold를 결정한다. 현재 키 하나를 그대로 모든 역할에 재사용한다고 가정하지 않는다.
+- M4-02: 확정된 계정·credential·공유 lock/journal 계약을 preflight 및 설치 템플릿에 반영하고 불일치 시 차단한다. M4-03은 별도 root 전용 복구 진입을 구현한다.
+- M6-02/M7: Linux에서 실제 socket 권한, namespace·lock/journal inode, ACL/SELinux 및 credential 전달을 검증하고, 운영 적용·백업·롤백 절차와 키 비노출 인증 확인을 준비한다.
+
+사용자 root 읽기 전용 조회 결과 host `mnt:[4026531832]`, Studio `mnt:[4026532633]`, gate `mnt:[4026532707]`, Client `mnt:[4026532703]`로 각 mount namespace가 달랐다. host와 Studio에서 현재 Studio 런타임 디렉터리는 같은 dev/inode로 보였고, Studio lock·후보 lock 및 journal 경로는 모두 없었다. PID와 namespace 번호·inode는 조사 당시의 값이며 서비스 재시작 후 고정값으로 가정하지 않는다.
+
+M1-02의 **현 운영 계약 조사와 미확인 사유 기록은 완료**다. lock/journal 파일이 없어 해당 파일의 생성 시점·inode·실제 파일 권한을 검증할 수 없다는 한계는 유지한다. 파일을 임의 생성하거나 GPU 작업을 시작하지 않았고, 운영 준비 완료를 뜻하지 않는다. 후보 설치 후 M4/M6에서 실제 공유 파일과 Studio가 보는 inode 및 권한을 확인해야 한다.
+
+### M1-03 호출 경로 조사 — 2026-11-07
+
+| 호출자 / 경로 | 현재 확인한 구성 | 전환 시 처리 및 남은 점 |
+| --- | --- | --- |
+| Client | `LLM_MODEL_ID` 빈 값. loopback 8081 gate 사용, 서비스는 8010 loopback. 활성 Caddy 설정에 `/llm`→8010 경로 존재 | M5-01/02에서 실제 로드 모델 추종·요청 진입 경합과 context를 처리. gate 제어 키 불일치는 M1-02 참고 |
+| Studio 이미지 | `sdcpp` 이미지 엔진이 `sd-cli` subprocess 실행. GPUManager는 설정된 `/run/bc250-ai-studio/gpu.lock`과 현재 gate pause를 이용 | 후보 worker의 잠금 경로 및 owned hold/journal과 다름. M2-02/M4/M5-03에서 공용 계약을 적용하고 M6에서 검증 |
+| llama-server·gate | llama는 8080 loopback, gate는 8081 loopback에서 실행 | gate는 유일한 범위 내 추론 admission 지점이어야 한다. 운영 gate의 bool pause는 owned hold가 아님 |
+| Wiki | `ask`가 8080 직접 호출 | 사용자가 독립 Wiki를 이번 범위의 명시적 예외로 지정. 전환 시 요청 실패·중단 가능; API/UI 통합은 후속 계획 |
+| `/opt/ai-benchmark/benchmark.py` | `/v1` 관련 요청을 8080에 직접 전송하고 `ai-model list` 사용 | 전환 중 gate를 우회한다. M5-03/M7에서 gate 경유 및 실행 제한·검증 전에는 전환과 동시 사용을 허용하는 구성으로 취급하지 않는다 |
+| `/opt/ai-benchmark/run-comparison.py` | 전환은 `ai-model switch`; 직접 8080 health 및 subprocess timeout 360초, 경우에 따라 `systemctl start` | M5-03/M7에서 systemd 직접 제어와 timeout 뒤 지속되는 작업의 상태 확인을 조율. 작업자 완료를 추정하거나 중복 restart하지 않음 |
+| `benchmark-memory.py`, `monitor-memory.sh` | `systemctl`을 통한 서비스 상태·메모리 관찰 참조 | 확인된 코드는 관찰 목적. 자동 호출 여부와 변경성은 운영 실행 경로 기준으로 재검토 |
+| Studio `scripts/probe_server.py`, `bc250-ttm.service` | probe는 선택 시 `sd-cli --help` 등 정보를 조회. TTM은 memory limit 설정용 oneshot이며 조사 시 active/exited | 이 확인을 GPU 추론 자동 실행 증거로 간주하지 않음 |
+
+사용자가 root로 `/etc/crontab`, cron spool·시스템 cron 디렉터리와 시스템 unit 파일을 검색한 결과 관련 문자열 일치 항목이 없고 읽기 오류는 0건이었다. 해당 시점 `systemctl list-timers --all`에서 관련 이름의 timer도 없었다. 이는 검색한 문자열·위치에 한정되며 동적 생성 명령, 외부 호출이나 다른 scheduler가 없다는 증명은 아니다. 조사 시 `yeppyshiba`의 rootless Podman 실행 컨테이너는 없고 Docker 명령은 없었다. 사용자가 root `podman ps` 결과도 실행 중 컨테이너가 없음을 확인했고, 서버에서 Docker/Podman은 테스트 외에 사용하지 않는다고 밝혔다. 유휴 시점의 `ps`에서는 `llama-server`만 해당 이름으로 보였으며, 이를 다른 호출자가 영구적으로 없다는 증거로 사용하지 않는다. 어떠한 서비스 재시작·모델 전환·GPU 작업도 실행하지 않았다.
+
+M1-03은 **현재 알려진 호출 경로와 후속 조율·제한 방안의 조사 완료**다. M5-03의 벤치마크 gate 경유 또는 명시적 실행 제한, 직접 systemd 제어 정리와 Studio 공용 계약은 아직 구현·검증되지 않았다. 알려지지 않은 외부·수동 호출의 부재까지 증명한 것은 아니며 운영 전환 준비 완료를 뜻하지 않는다.
+- 모델 설정의 context/추론 옵션은 다음과 같다. 이는 파일 설정만의 조사이며 JSON schema·실제 요청 호환성 시험은 아니다.
+
+  | 관리 이름 | context | parallel | reasoning mode / budget |
+  | --- | ---: | ---: | --- |
+  | `gemma4-e4b-hauhaucs` | 16384 | 1 | off / 0 |
+  | `gemma4-e4b-heretic-rp` | 16384 | 1 | off / 0 |
+  | `qwen35-35b-a3b-uncensored` | 4096 | 1 | 설정 없음 |
+  | `qwen36-35b-a3b-uncensored` | 16384 | 1 | auto / -1 |
+
+Client 기본 `llm_context_tokens`는 16384이며 여러 추론 경로가 이를 공통 사용한다. 따라서 Qwen 3.5를 선택했을 때 설정상 4096 한도를 초과하는 요청을 허용할 수 있다. M2-03/M5-01에서 실제 모델에 따른 한도를 적용하고 각 요청 경로를 검증하기 전 기능 완료로 보지 않는다.
+
+M2-03의 구현 방향: 신뢰된 모델 설정에서 관리 이름·GGUF ID·per-sequence context를 읽고 실제 로드 ID 및 준비 상태와 일치시킨다. 요청 유효 context는 Client 상한과 검증된 모델 한도 중 작은 값이다. 알 수 없는 모델에 16384를 적용하지 않는다. 채팅·제목·요약·Wiki 메모리·이미지 의도/프롬프트가 같은 요청별 모델 프로필을 사용하고, 최종 payload의 전체 메시지와 출력 예산을 함께 검사한다. 요약은 기존 요약 및 지시문도 예산에 포함하고 오래된 대기 작업의 메시지 선택·cursor를 보존해야 한다. 모델별 reasoning/JSON schema 허용 여부는 실제 모델별 시험 근거가 필요하다. 전환 경합의 마지막 방어는 M5-02 gate admission으로 처리하며 이 설계만으로 운영 준비 완료가 아니다.
+
+## M2 결정과 프로토콜
+
+CLI `ai-model list/status/switch`와 Client는 동일한 root 소유 별도 설치본의 작업자를 호출한다. Client UID 1000과 root peer만 허용하고 웹 서비스에 sudo를 주지 않는다. CLI 종료·HTTP 연결 유실은 작업을 취소하지 않는다. Unix socket은 줄 단위 JSON, 요청 최대 4096바이트, 응답 최대 65536바이트다. 작업자는 `models`, `current`, `get`, `submit`을 제공하고 `submit`의 중복 키와 활성 작업 충돌을 원자적으로 처리한다. models는 `models[{name,current}]`, `configured_model`, `loaded_model`, `ready`, `switch_enabled`, `active_operation_id`를 반환한다. current는 `{operation: 작업 또는 null}`이다. 후보 bridge의 관리자 전용 `pending`을 그대로 사용하지 않는다. `get`/`submit`은 작업 객체를 반환한다. 오류는 `error` 코드로 반환한다. 이 계약은 로컬 작업자에 구현됐으며 실제 운영 작업자 설치·통합은 검증되지 않았다.
+
+관리 API는 기존 앱 인증에 더해 별도 `OPERATOR_KEY`를 요구한다. local 모드는 관리자가 아니다. 브라우저 자격은 메모리에만 두고 HTTPS 또는 SSH 터널에서 사용한다. 기존 gate-control에도 같은 권한을 요구한다. `MODEL_CONTROL_ENABLED` 기본값은 false이며 테스트 fake는 의존성 오버라이드로만 주입한다. 실제 배포에서 fake를 고를 수 없다.
+
+운영 gate의 단일 paused bool은 소유자 hold가 아니다. **영속 owned hold와 기존 관리자 pause 보존을 gate에 추가하는 것이 필수**다. 대기하던 오래된 모델 ID의 재전송을 방지해야 한다. Studio `switch_barrier`의 8192바이트 제한 및 journal stage `pausing`, `draining`, `switching`, `verifying`만 허용하는 계약을 준수한다. DB의 `rolling_back` 상태를 그대로 journal stage로 기록하지 않는다. imagegen은 이번 변경에서 수정하지 않는다. 복구 불명 시 hold와 journal을 유지하고 새 작업을 차단한다.
+
+## 후속 작업 개요
+
+세부 상태·선행관계·완료 조건은 [통합 계획 §7](llm-model-switch-plan.md#7-실행-체크리스트와-완료-조건)의 M번호 표를 따른다.
+
+- M3: API/UI는 기본 비활성으로 추가했다. fake 작업자 API 흐름은 실제 전환 증거가 아니다. 브라우저 상호작용 자동 검증, Unix 소켓 오류 및 보안 경계 검증을 추가하고 실제 작업자 계약과 일치시킨다.
+- M4: 상태 저장·조정·잠금·systemd 제어 및 CLI/socket을 선별 이관했다. root 전용 복구 진입과 실제 환경 권한·조율 검증을 완료한다. gate owned hold와 Studio journal/공유 잠금이 실제 설치와 맞기 전 활성화 금지. 기존 코드의 `studio_files`, `switch_barrier`, `llm`, `model_control`, `systemd_model`, bridge 및 SQLite 의존을 분리한다.
+- M5: 고정 `LLM_MODEL_ID`, 모델별 context/옵션, 채팅·요약·제목·Client 내부 Wiki 메모리·이미지 프롬프트 진입 및 전환 경쟁을 해결한다. 독립 Wiki 외 직접 호출은 gate로 조율하거나 명확히 차단한다. 독립 Wiki API와 UI 통합은 후속 계획이다.
+- M6: 동일 최종 후보로 CLI/API 동시성, idempotency, drain, 이미지 경쟁, restart/health 실패, 롤백, 작업자 종료와 불명 상태 복구를 검증한다. 가짜 시험과 실제 GPU 시험을 구별한다.
+- M7: root 설치본·gate/Studio 최소 변경의 배포, 백업, SELinux/권한, 복구와 롤백 절차를 작성한다. 환경 미확인 항목을 확인하기 전 운영 활성화하지 않는다.
+- M8: 별도 운영 절차에서 실제 UI A→B 전환 및 B 후속 대화, CLI/API 일치, 복구와 최종 정리를 확인한다. 이번 턴에서는 운영 적용하지 않는다.
+
+### M3-02 추가 진행 — 2026-11-07
+
+접수 결과 불명 시 요청 키와 선택한 모델을 세션에 보관해 관리자 확인 정보로 표시하고, 알려진 작업 ID를 보관해 새로고침 후에도 결과를 조회한다. 조회가 실패한 동안 새 전환을 차단하고, 이전 조회 응답이 새 작업을 덮어쓰지 않도록 요청 세대를 검사한다. 인증 정보는 세션에 저장하지 않는다. 프런트 lint/build와 관련 API·Unix socket 시험 6개는 통과했다. 시험은 실제 브라우저 조작이 아니며 브라우저 자동화 호스트 연결 실패로 UI 상호작용·새로고침·응답 유실 시나리오 검증은 남아 있다. 불명 요청의 관리자 해소 절차도 M4-03과 함께 완료해야 한다.
+
+## M4 로컬 구현 기록 — 2026-11-07
+
+Client의 `backend/app/model_control/`에 imagegen 후보의 작업 DB, coordinator, journal, systemd/registry, GPU 잠금, gate adapter를 선별해 분리했다. API와 `ai-model list/status/switch` CLI는 같은 Unix socket worker를 사용한다. 접수된 작업은 연결 종료와 독립적으로 실행된다. CLI는 접수 키와 작업 ID를 출력하며 `status --operation ID`로 결과를 다시 확인한다. CLI `switch` 종료 코드는 성공 0, 실패 1, 결과 불명/복구 필요 2다. 운영 원본 명령은 변경하지 않았다.
+
+작업 DB는 단일 미완료 작업과 idempotency를 원자적으로 보장하고, 재시작 시 journal/DB 불일치를 복구 필요로 보수적으로 처리한다. 검증된 이전·현재 모델만 기록하며 전환 중 불명인 현재 모델은 비운다. systemd restart 결과 불명이면 겹치는 restart를 하지 않는다. 복구 성공은 이전 모델의 health와 ID 검증 후에만 기록한다. journal stage는 Studio가 읽는 네 가지로 제한한다.
+
+운영 adapter는 공유 GPU 잠금을 획득한 후 Studio protocol 1 및 gate switch-role protocol 2를 인증해 확인하고, Studio/gate의 안정된 프로세스 식별자, Studio가 보는 lock·journal inode, 보유한 lock FD의 inode를 확인한다. gate는 durable owned hold를 요구하며 기존 관리자 hold는 유지한다. 예시 systemd service/socket과 root 설치본 부트스트랩은 `deploy/model-control/`에 있다. worker는 기본적으로 전환 비활성이며 별도 활성화 시에도 이 모든 검사를 통과해야 한다. 부트스트랩은 격리된 시스템 Python으로 root 소유이며 일반 사용자가 쓸 수 없는 설치 트리만 import하고 링크와 `.pth`/`.pyc`를 거부한다. 배포 시 이 부트스트랩 및 시스템 Python 자체가 실행 전에 신뢰 가능한 root 소유 경로에 설치돼야 한다.
+
+### 수용 근거와 한계
+
+- `tests/test_worker_switch_operations.py`, `test_worker_switch_worker.py`: 중복 키, 동시 작업, lifetime 잠금, 재시작 불명확 상태와 복구 차단.
+- `tests/test_worker_model_switch.py`, `test_worker_systemd_model.py`: restart/health 실패 시 복구, 불명 systemd 작업·journal 유지, 같은 모델 health, 실제 model ID 판정. macOS에서는 Linux 파일 xattr 검사를 테스트 대역으로 치환했다.
+- `tests/test_worker_gate.py`, `test_worker_preflight.py`, `test_worker_bootstrap.py`: owned hold/관리자 hold, 인증 endpoint, 프로세스 변경 및 lock inode 불일치, 설치 트리 검증. 프로세스·endpoint는 테스트 대역이다.
+- `tests/test_worker_socket_integration.py`: 로컬 Unix socket에서 API·CLI와 동일 작업자 연결, 중복·충돌, CLI 연결 종료 후 작업 지속, 허용되지 않은 peer와 잘못된 프레임 거절. macOS는 Linux `SO_PEERCRED`를 제공하지 않아 peer UID 추출을 테스트 대역으로 주입했다. Linux에서 실제 peer credential, systemd socket activation 및 root/SELinux 환경 시험은 남았다. 템플릿의 CAP_SYS_PTRACE는 다른 UID인 Studio의 /proc/PID/root inode 확인에 필요하며 실제 커널·SELinux에서 접근 가능성과 권한 범위를 검증해야 한다.
+- 전체 로컬 회귀: `PYTHONPATH=. .venv/bin/pytest -o asyncio_mode=auto -q` 219 통과, 1 건너뜀. 프런트 `npm run lint && npm run build` 통과. 실제 gate/Studio, GPU 전환 및 브라우저 상호작용 시험은 수행하지 않았다.
+
+M4 핵심은 **로컬 구현 및 대역 검증 완료**이나 단계 전체는 부분 완료다. root 전용 복구 진입과 runtime 검증 연결, 운영 통합은 미완료다. 운영 gate는 현재 owned hold를 지원하지 않으며 gate 계정도 이 후보의 검증 계정과 다르다. Studio lock 경로는 후보와 다르고, 제공된 env에 공유 journal 설정은 없다. Wiki는 8080을 직접 호출하며 Client의 현재 고정 모델 ID는 비어 있다. Linux의 권한/SELinux 및 재부팅·실제 GPU 시험, 구체적인 안전 설치/백업/복구 절차가 끝나기 전 운영 활성화하지 않는다. M5의 전환 중 요청·고정 모델 처리도 구현되지 않았다.

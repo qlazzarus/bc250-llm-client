@@ -1,0 +1,3 @@
+#!/bin/sh
+# Example CLI launcher for the separately provisioned root-owned package tree.
+exec /usr/bin/python3 -I -S /opt/bc250-model-control/cli-bootstrap.py "$@"

@@ -1,0 +1,25 @@
+[Unit]
+Description=BC-250 model control worker (disabled until coordination is installed)
+Requires=bc250-model-worker.socket
+After=bc250-model-worker.socket bc250-llm-gate.service bc250-ai-studio.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I -S /opt/bc250-model-control/worker-bootstrap.py
+Environment=MODEL_CONTROL_SWITCH_ENABLED=false
+LoadCredential=gate-key:/etc/bc250-model-control/switch-gate-key
+LoadCredential=studio-coordination-key:/etc/bc250-model-control/studio-coordination-key
+LoadCredential=llm-key:/etc/bc250-model-control/llm-key
+UMask=0077
+Restart=on-failure
+TimeoutStopSec=1800
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/ai/config /var/lib/bc250-model-control /run/bc250-gpu
+RestrictAddressFamilies=AF_UNIX AF_INET
+CapabilityBoundingSet=CAP_CHOWN CAP_SYS_PTRACE
