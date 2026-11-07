@@ -1,5 +1,7 @@
 # BC-250 LLM Client
 
+LLM 모델 전환 작업의 현재 기준: [통합 계획·현황·이관 및 완료 조건](docs/plans/llm-model-switch-plan.md). 구현 주체는 이 프로젝트이며, imagegen의 기존 모델 전환 후보는 필요한 부분을 이관·재사용합니다. 현재는 계획 정리 단계로 모델 전환 UI/API는 아직 구현되지 않았습니다.
+
 구현·검증 기록: [결과 카드 편집 및 이미지 생성 연동 — GI01~GI08](docs/plans/image-generation-integration-tasks.md). 이미지 프롬프트 결과는 초안으로 편집할 수 있고, Studio 연동을 서버에서 명시적으로 활성화한 경우에만 사용자의 버튼 클릭으로 이미지 작업을 요청합니다.
 
 배포 예시의 `deployuser`, `bc250.example.com`, `192.0.2.10`은 예시 값이다. 실제 환경에 맞게 바꾸고, systemd 서비스 템플릿의 `YOUR_SERVICE_USER`와 `YOUR_SERVICE_GROUP`도 서버 계정으로 수정한 후 설치한다.

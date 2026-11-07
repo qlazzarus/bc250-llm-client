@@ -1,0 +1,91 @@
+ M .github/workflows/deploy.yml
+ D .github/workflows/model-control-candidate.yml
+ M README.md
+ M backend/app/api/routes.py
+ M backend/app/core/config.py
+ M backend/app/core/files.py
+ M backend/app/gate.py
+ M backend/app/main.py
+ M backend/app/models/database.py
+ M backend/app/scheduler/runner.py
+ M backend/app/services/gate_admin.py
+ M backend/app/services/gate_process_identity.py
+ M backend/app/services/gpu.py
+ M backend/app/services/llm.py
+ M backend/app/services/model_control.py
+ M backend/app/services/model_control_offline.py
+ M backend/app/services/model_control_runtime.py
+ M backend/app/services/model_switch.py
+ M backend/app/services/switch_adapters.py
+ M backend/tests/conftest.py
+ M backend/tests/test_api.py
+ M backend/tests/test_gate_holds.py
+ M backend/tests/test_gpu.py
+ M backend/tests/test_gpu_owned_holds.py
+ M backend/tests/test_model_control.py
+ M backend/tests/test_model_control_bridge.py
+ M backend/tests/test_model_management_api.py
+ M backend/tests/test_observe_db_process_references.py
+ M backend/tests/test_observe_gate_identity.py
+ M backend/tests/test_observe_llama_listener.py
+ M backend/tests/test_root_namespace.py
+ M backend/tests/test_secure_gpu_lock.py
+ M backend/tests/test_switch_adapters.py
+ M backend/tests/test_switch_barrier.py
+ M backend/tests/test_switch_integration.py
+ M backend/tests/test_switch_worker.py
+ M deploy/deploy-release.sh
+ M deploy/model-control/backup-archive.sh
+ M deploy/model-control/observe-db-process-references.py
+ M deploy/model-control/observe-llama-listener.py
+ M deploy/model-control/start-new-services.py
+ M docs/ACTIONS_DEPLOYMENT.md
+ M docs/BC250_SERVICE_INVENTORY.md
+ M docs/LLM_MODEL_MANAGEMENT_API.md
+ M docs/LLM_MODEL_SWITCH_DEPLOYMENT_DRAFT.md
+ M docs/LLM_MODEL_SWITCH_DEPLOYMENT_GAPS.md
+ M docs/LLM_MODEL_SWITCH_DEPLOYMENT_TASKS.md
+ M docs/LLM_MODEL_SWITCH_PROPOSAL.md
+ M docs/LLM_MODEL_SWITCH_REMAINING_WORK.md
+ M docs/LLM_MODEL_SWITCH_ROLLOUT_PLAN.md
+ M docs/LLM_MODEL_SWITCH_WORKPLAN.md
+ M docs/NEXT_PROJECT_LLM_CLIENT.md
+ M scripts/run-backup-path-guard-remote.sh
+ M scripts/run-isolated-vm-test-on-host.sh
+?? backend/app/core/studio_config.py
+?? backend/app/core/studio_files.py
+?? backend/app/gate_candidate.py
+?? backend/app/services/switch_barrier.py
+?? backend/tests/test_studio_deploy.py
+?? backend/tests/test_studio_independence.py
+?? deploy/model-control/direct-llm-nft-fence.py
+?? deploy/model-control/locked-service-start.py
+?? deploy/model-control/model-control-candidate.workflow.yml
+?? deploy/model-control/stage-protected-db.py
+?? docs/LLM_MODEL_SWITCH.md
+?? docs/LLM_MODEL_SWITCH_DB_EXCLUSION_DESIGN.md
+?? docs/LLM_MODEL_SWITCH_DIRECTION_REVIEW.md
+?? docs/STUDIO_RESUME_REVIEW.md
+?? docs/TERRA_STUDIO_CLOSEOUT_PLAN.md
+?? scripts/inspect-studio-resume.sh
+?? scripts/prepare-maintenance-vm-host.sh
+?? scripts/start-maintenance-fixture-vm-host.sh
+?? scripts/start-maintenance-rescue-console-host.sh
+?? scripts/start-maintenance-rescue-enforcing-host.sh
+?? scripts/start-maintenance-rescue-probe-host.sh
+?? scripts/start-maintenance-vm-host.sh
+?? scripts/test-backup-archive-failures.py
+?? scripts/test-db-btrfs-readonly-vm.sh
+?? scripts/test-db-fence-integrated-vm.sh
+?? scripts/test-db-fence-outside-writer-vm.sh
+?? scripts/test-db-file-lease-vm.sh
+?? scripts/test-db-other-mount-namespace-vm.sh
+?? scripts/test-db-other-uid-vm.sh
+?? scripts/test-db-thread-fd-vm.sh
+?? scripts/test-db-uid-processes-vm.sh
+?? scripts/test-direct-llm-nft-fence-vm.sh
+?? scripts/test-direct-llm-nft-fence.py
+?? scripts/test-locked-service-start-vm.sh
+?? scripts/test-locked-service-start.py
+?? scripts/test-stage-protected-db.py
+?? scripts/test-studio.sh

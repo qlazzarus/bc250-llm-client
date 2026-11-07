@@ -1,0 +1,49 @@
+ M README.md
+ M backend/app/services/gate_process_identity.py
+ M backend/tests/test_observe_db_process_references.py
+ M backend/tests/test_observe_gate_identity.py
+ M backend/tests/test_observe_llama_listener.py
+ M deploy/model-control/backup-archive.sh
+ M deploy/model-control/observe-db-process-references.py
+ M deploy/model-control/observe-llama-listener.py
+ M deploy/model-control/start-new-services.py
+ M docs/ACTIONS_DEPLOYMENT.md
+ M docs/BC250_SERVICE_INVENTORY.md
+ M docs/LLM_MODEL_MANAGEMENT_API.md
+ M docs/LLM_MODEL_SWITCH_DEPLOYMENT_DRAFT.md
+ M docs/LLM_MODEL_SWITCH_DEPLOYMENT_GAPS.md
+ M docs/LLM_MODEL_SWITCH_DEPLOYMENT_TASKS.md
+ M docs/LLM_MODEL_SWITCH_PROPOSAL.md
+ M docs/LLM_MODEL_SWITCH_REMAINING_WORK.md
+ M docs/LLM_MODEL_SWITCH_ROLLOUT_PLAN.md
+ M docs/LLM_MODEL_SWITCH_WORKPLAN.md
+ M docs/NEXT_PROJECT_LLM_CLIENT.md
+ M scripts/run-backup-path-guard-remote.sh
+ M scripts/run-isolated-vm-test-on-host.sh
+?? deploy/model-control/direct-llm-nft-fence.py
+?? deploy/model-control/locked-service-start.py
+?? deploy/model-control/stage-protected-db.py
+?? docs/LLM_MODEL_SWITCH.md
+?? docs/LLM_MODEL_SWITCH_DB_EXCLUSION_DESIGN.md
+?? docs/LLM_MODEL_SWITCH_DIRECTION_REVIEW.md
+?? docs/STUDIO_RESUME_REVIEW.md
+?? scripts/prepare-maintenance-vm-host.sh
+?? scripts/start-maintenance-fixture-vm-host.sh
+?? scripts/start-maintenance-rescue-console-host.sh
+?? scripts/start-maintenance-rescue-enforcing-host.sh
+?? scripts/start-maintenance-rescue-probe-host.sh
+?? scripts/start-maintenance-vm-host.sh
+?? scripts/test-backup-archive-failures.py
+?? scripts/test-db-btrfs-readonly-vm.sh
+?? scripts/test-db-fence-integrated-vm.sh
+?? scripts/test-db-fence-outside-writer-vm.sh
+?? scripts/test-db-file-lease-vm.sh
+?? scripts/test-db-other-mount-namespace-vm.sh
+?? scripts/test-db-other-uid-vm.sh
+?? scripts/test-db-thread-fd-vm.sh
+?? scripts/test-db-uid-processes-vm.sh
+?? scripts/test-direct-llm-nft-fence-vm.sh
+?? scripts/test-direct-llm-nft-fence.py
+?? scripts/test-locked-service-start-vm.sh
+?? scripts/test-locked-service-start.py
+?? scripts/test-stage-protected-db.py
