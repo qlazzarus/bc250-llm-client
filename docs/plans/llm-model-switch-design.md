@@ -2,6 +2,8 @@
 
 기준: 2026-11-07 사용자가 제공한 운영 `/usr/local/bin/ai-model` 원문과 로컬 Client 코드. 상위 기준은 [통합 계획](llm-model-switch-plan.md)이다. **설계 기준이다. M3/M4 핵심은 로컬에 구현했으며 설치·운영 명령 교체는 하지 않았다. 현재 상태와 남은 태스크는 [통합 계획 §7](llm-model-switch-plan.md#7-실행-체크리스트와-완료-조건)을 따른다.**
 
+M2-02에서 확정한 gate·Studio·credential·요청 epoch 및 전환/복구 계약은 [공용 조율 계약](llm-model-switch-coordination.md)을 따른다. 기존 후보의 구현 상태와 목표 계약은 구별한다.
+
 ## 1. 운영 원본에서 확인된 계약
 
 | 항목 | 확인 내용 |

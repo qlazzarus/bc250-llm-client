@@ -36,6 +36,7 @@ jobs:
         run: |
           npm ci
           npm run lint
+          npm test
           npm run build
       - name: Package release
         run: tar --exclude='__pycache__' -czf /tmp/bc250-release.tar.gz backend frontend/dist

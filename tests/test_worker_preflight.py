@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -15,11 +16,14 @@ def test_preflight_checks_identities_and_authenticated_protocol(tmp_path, monkey
     def response(request):
         requests.append(request)
         if request.url.path.endswith('/identity'):
-            return httpx.Response(200, json={'protocol': 2, 'role': 'switch'})
+            return httpx.Response(200, json={'protocol': 3, 'role': 'switch'})
         return httpx.Response(200, json={'protocol': 1, 'enabled': True, 'transition_clear': True})
     pre = CoordinationPreflight('studio-key', 'gate-key', lock, journal,
                                 held_lock=SimpleNamespace(handle=handle), transport=httpx.MockTransport(response))
     monkeypatch.setattr(pre, 'service_identity', lambda unit, account: (os.getpid(), 'start'))
+    client_checks = []
+    monkeypatch.setattr('backend.app.model_control.preflight.verify_client_process', lambda pid: client_checks.append(pid))
+    monkeypatch.setattr('backend.app.model_control.preflight.verify_operator_frontend', lambda: None)
     # /proc is Linux-only; compare against this process's paths through a test proxy.
     original_stat = os.stat
     def stat(path, **kwargs):
@@ -30,6 +34,7 @@ def test_preflight_checks_identities_and_authenticated_protocol(tmp_path, monkey
     monkeypatch.setattr('backend.app.model_control.preflight.os.stat', stat)
     try:
         pre()
+        assert client_checks == [os.getpid(), os.getpid()]
         assert [r.headers['authorization'] for r in requests] == ['Bearer gate-key', 'Bearer studio-key']
         lock.unlink(); lock.write_text('replaced')
         with pytest.raises(RuntimeError, match='inode changed'):
@@ -38,13 +43,13 @@ def test_preflight_checks_identities_and_authenticated_protocol(tmp_path, monkey
         handle.close()
 
 
-@pytest.mark.parametrize('bad', ['gate', 'studio', 'pid'])
+@pytest.mark.parametrize('bad', ['gate', 'studio', 'pid', 'old_protocol'])
 def test_preflight_rejects_untrusted_contract(tmp_path, monkeypatch, bad):
     lock, journal = tmp_path / 'lock', tmp_path / 'journal'
     lock.write_text(''); journal.write_text('{}')
     def response(request):
         if request.url.path.endswith('/identity'):
-            return httpx.Response(200, json={'protocol': 2, 'role': 'admin' if bad == 'gate' else 'switch'})
+            return httpx.Response(200, json={'protocol': 2 if bad == 'old_protocol' else 3, 'role': 'admin' if bad == 'gate' else 'switch'})
         return httpx.Response(200, json={'protocol': 1, 'enabled': bad != 'studio', 'transition_clear': True})
     with lock.open() as handle:
         pre = CoordinationPreflight('studio', 'gate', lock, journal, held_lock=SimpleNamespace(handle=handle), transport=httpx.MockTransport(response))
@@ -54,9 +59,57 @@ def test_preflight_rejects_untrusted_contract(tmp_path, monkeypatch, bad):
             return (1, str(len(calls)) if bad == 'pid' else 'start')
         monkeypatch.setattr(pre, 'service_identity', identity)
         monkeypatch.setattr(pre, 'same_studio_files', lambda _pid: None)
+        monkeypatch.setattr('backend.app.model_control.preflight.verify_client_process', lambda _pid: None)
+        monkeypatch.setattr('backend.app.model_control.preflight.verify_operator_frontend', lambda: None)
         with pytest.raises(RuntimeError): pre()
 
 
 def test_preflight_requires_both_credentials(tmp_path):
     with pytest.raises(ValueError):
         CoordinationPreflight('', 'key', tmp_path / 'lock', tmp_path / 'journal', held_lock=None)
+
+
+def test_preflight_rejects_untrusted_client_before_gate_or_studio_calls(tmp_path, monkeypatch):
+    requests = []
+    pre = CoordinationPreflight('studio', 'gate', tmp_path / 'lock', tmp_path / 'journal',
+                                held_lock=None, transport=httpx.MockTransport(lambda request: requests.append(request)))
+    monkeypatch.setattr(pre, 'service_identity', lambda unit, account: (123, 'start'))
+    def reject(_pid):
+        raise RuntimeError('Untrusted Client installation')
+    monkeypatch.setattr('backend.app.model_control.preflight.verify_client_process', reject)
+    with pytest.raises(RuntimeError, match='Untrusted Client'):
+        pre()
+    assert requests == []
+
+
+def test_frontend_provenance_absence_blocks_switch_preflight(tmp_path, monkeypatch):
+    pre = CoordinationPreflight('studio', 'gate', tmp_path / 'lock', tmp_path / 'journal', held_lock=None)
+    monkeypatch.setattr(pre, 'service_identity', lambda unit, account: (123, 'start'))
+    monkeypatch.setattr('backend.app.model_control.preflight.verify_client_process', lambda _pid: None)
+    with pytest.raises(RuntimeError, match='frontend provenance'):
+        pre()
+
+
+@pytest.mark.parametrize('fault', [None, 'unit_uid', 'process_uid', 'process_gid', 'process_privileges'])
+def test_service_identity_checks_effective_process_credentials(monkeypatch, fault):
+    props = {'LoadState': 'loaded', 'ActiveState': 'active', 'Job': '', 'KillMode': 'control-group',
+             'User': 'wrong' if fault == 'unit_uid' else 'ai-client', 'Group': 'ai-client',
+             'MainPID': '777', 'NoNewPrivileges': 'yes'}
+    monkeypatch.setattr('backend.app.model_control.preflight.subprocess.run', lambda *args, **kwargs:
+                        SimpleNamespace(stdout='\n'.join(f'{key}={value}' for key, value in props.items())))
+    monkeypatch.setattr('backend.app.model_control.preflight.pwd.getpwnam', lambda _name: SimpleNamespace(pw_uid=1100))
+    monkeypatch.setattr('backend.app.model_control.preflight.grp.getgrnam', lambda _name: SimpleNamespace(gr_gid=1100))
+    real_read = Path.read_text
+    def read_text(path, *args, **kwargs):
+        if str(path) == '/proc/777/status':
+            uid = '1000 1000 1000 1000' if fault == 'process_uid' else '1100 1100 1100 1100'
+            gid = '1000 1000 1000 1000' if fault == 'process_gid' else '1100 1100 1100 1100'
+            priv = '0' if fault == 'process_privileges' else '1'
+            return f'Uid:\t{uid}\nGid:\t{gid}\nNoNewPrivs:\t{priv}\n'
+        if str(path) == '/proc/777/stat': return '777 (test) ' + ' '.join(['0'] * 19 + ['123456'])
+        return real_read(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_text', read_text)
+    if fault is None:
+        assert CoordinationPreflight.service_identity('unit', 'ai-client') == (777, '123456')
+    else:
+        with pytest.raises(RuntimeError): CoordinationPreflight.service_identity('unit', 'ai-client')

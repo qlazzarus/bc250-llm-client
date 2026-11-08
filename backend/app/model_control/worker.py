@@ -6,12 +6,17 @@ not establish a singleton worker. Call close only after all requests have ended.
 
 import asyncio
 import os
+import re
 
 from .coordinator import SwitchAdmissionBlocked, SwitchFailed
 from .operations import OperationConflict
 
 
 class ReconciliationError(RuntimeError):
+    pass
+
+
+class UnknownModel(ValueError):
     pass
 
 
@@ -69,7 +74,7 @@ class SwitchWorker:
             if existing is not None:
                 return existing, False
             if model not in await self.switch.service.installed():
-                raise ValueError("Unknown model")
+                raise UnknownModel("Unknown model")
             return self.store.submit(principal, model, idempotency_key)
         finally:
             self.inflight -= 1
@@ -135,7 +140,9 @@ class SwitchWorker:
                     gate = self.switch.gate
                     status = await gate.llm.gate("GET")
                     holds = status.get("holds")
-                    if (status.get("protocol") != 2 or status.get("durable") is not True
+                    if (status.get("protocol") != 3 or status.get("durable") is not True
+                            or not isinstance(status.get("epoch"), str)
+                            or not re.fullmatch(r"[0-9a-f]{32}", status["epoch"])
                             or status.get("paused") is not True or not isinstance(holds, list)
                             or not holds or any(not isinstance(h, str) or not (
                                 h == "startup" or h == "legacy" or h.startswith("admin-")
@@ -147,7 +154,8 @@ class SwitchWorker:
                     # Recheck before closing the barrier; do not release any hold.
                     after = await gate.llm.gate("GET")
                     if (after.get("paused") is not True or after.get("holds") != holds
-                            or after.get("protocol") != 2 or after.get("durable") is not True):
+                            or after.get("protocol") != 3 or after.get("durable") is not True
+                            or after.get("epoch") != status["epoch"]):
                         raise ReconciliationError("Gate state changed during verification")
                 except ReconciliationError:
                     raise

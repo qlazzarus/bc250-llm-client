@@ -150,6 +150,24 @@ async def test_failure_is_not_reported_as_success(worker):
     assert service.model == "old" and journal.read() == {} and gate.holds == {"legacy"}
 
 
+async def test_cleanup_failure_requires_recovery_without_rollback(worker, monkeypatch):
+    instance, store, journal, gate, service = worker
+    instance.startup()
+    operation, _ = await instance.submit("admin", "new", "request-1")
+
+    def fail_after_replacement():
+        journal.path.write_text('{}')
+        raise OSError('directory fsync failed after replacement')
+
+    monkeypatch.setattr(journal, 'clear', fail_after_replacement)
+    result = await instance.run('admin', operation['id'])
+    assert result['state'] == 'recovery_required' and service.model == 'new'
+    assert journal.read() == {} and len(gate.holds) == 2
+    with pytest.raises(OperationConflict):
+        await instance.submit('admin', 'old', 'request-2')
+    assert store.get('admin', operation['id'])['current_model'] is None
+
+
 async def test_mismatched_journal_blocks_startup_and_new_requests(worker):
     instance, store, journal, _, _ = worker
     operation, _ = store.submit("admin", "new", "request-1")
@@ -240,7 +258,7 @@ async def test_resolve_without_journal_requires_verified_paused_current_model(wo
     class GateStatus:
         async def gate(self, method):
             checks.append("gate")
-            return {"protocol": 2, "durable": True, "paused": True, "holds": ["startup"]}
+            return {"protocol": 3, "durable": True, "paused": True, "epoch": "e" * 32, "holds": ["startup"]}
 
     gate.llm = GateStatus()
     instance.verify_studio = lambda: checks.append("studio")
@@ -255,8 +273,8 @@ async def test_resolve_without_journal_requires_verified_paused_current_model(wo
 
 
 @pytest.mark.parametrize("status", [
-    {"protocol": 2, "durable": True, "paused": False, "holds": []},
-    {"protocol": 2, "durable": True, "paused": True, "holds": ["switch-" + "a" * 32]},
+    {"protocol": 3, "durable": True, "paused": False, "holds": []},
+    {"protocol": 3, "durable": True, "paused": True, "holds": ["switch-" + "a" * 32]},
     {"protocol": 1, "durable": True, "paused": True, "holds": ["startup"]},
 ])
 async def test_resolve_without_journal_preserves_uncertain_state(worker, status):

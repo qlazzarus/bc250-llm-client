@@ -305,7 +305,7 @@ sudo systemctl start bc250-llm-client
 
 ## System-status API
 
-`GET /api/v1/admin/gate-status` and `PUT /api/v1/admin/gate-control` are available to every client allowed to use the local API. The “시스템 상태” screen presents the gate health data and the model IDs returned by `/v1/models`; gate `/health` and `/control` response fields are passed through, preserving gate-specific queue/pause/image state.
+`GET /api/v1/admin/gate-status` is available to clients allowed to use the API. `PUT /api/v1/admin/gate-control` additionally requires the separate `OPERATOR_KEY` in the `X-BC250-Operator-Key` header; local mode is not operator authentication, and an empty operator key disables the operation. The “시스템 상태” screen presents gate health and model IDs returned by `/v1/models`. Model management is disabled by default and is not ready for production switching until the coordination and deployment checks in [the model switch plan](docs/plans/llm-model-switch-plan.md) are complete.
 
 
 ## 다중 이미지 모델과 옵션

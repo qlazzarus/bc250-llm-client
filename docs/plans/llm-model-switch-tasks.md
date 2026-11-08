@@ -84,9 +84,26 @@ Client 기본 `llm_context_tokens`는 16384이며 여러 추론 경로가 이를
 
 M2-03의 구현 방향: 신뢰된 모델 설정에서 관리 이름·GGUF ID·per-sequence context를 읽고 실제 로드 ID 및 준비 상태와 일치시킨다. 요청 유효 context는 Client 상한과 검증된 모델 한도 중 작은 값이다. 알 수 없는 모델에 16384를 적용하지 않는다. 채팅·제목·요약·Wiki 메모리·이미지 의도/프롬프트가 같은 요청별 모델 프로필을 사용하고, 최종 payload의 전체 메시지와 출력 예산을 함께 검사한다. 요약은 기존 요약 및 지시문도 예산에 포함하고 오래된 대기 작업의 메시지 선택·cursor를 보존해야 한다. 모델별 reasoning/JSON schema 허용 여부는 실제 모델별 시험 근거가 필요하다. 전환 경합의 마지막 방어는 M5-02 gate admission으로 처리하며 이 설계만으로 운영 준비 완료가 아니다.
 
+M2-03의 [모델별 추론 정책](llm-model-switch-model-policy.md)은 모델별 설정, 실제 로드 확인 범위, 신뢰된 프로필·epoch·context 및 미검증 기능 처리와 M5/M6 수용 기준을 확정했다. 추가 읽기 전용 조회 당시 현재 `gemma4-e4b-hauhaucs`는 `/props` model path와 `/v1/models` ID가 일치하고 `/props`와 유일 슬롯의 `n_ctx`가 16384였다. 세 모델의 실제 로드 상태 및 네 모델 모두의 reasoning/strict schema 동작은 아직 검증하지 않았다. 이 단계에서 모델 전환이나 추론 요청은 실행하지 않았다.
+
 ## M2 결정과 프로토콜
 
+M2-02의 운영 gate·Studio·credential·잠금·journal 및 요청 epoch 설계는 [공용 조율 계약](llm-model-switch-coordination.md)에 확정했다. 이 문서의 나머지는 기존 구현과 조사 근거이며 실제 변경·Linux/운영 검증을 대신하지 않는다.
+
 CLI `ai-model list/status/switch`와 Client는 동일한 root 소유 별도 설치본의 작업자를 호출한다. Client UID 1000과 root peer만 허용하고 웹 서비스에 sudo를 주지 않는다. CLI 종료·HTTP 연결 유실은 작업을 취소하지 않는다. Unix socket은 줄 단위 JSON, 요청 최대 4096바이트, 응답 최대 65536바이트다. 작업자는 `models`, `current`, `get`, `submit`을 제공하고 `submit`의 중복 키와 활성 작업 충돌을 원자적으로 처리한다. models는 `models[{name,current}]`, `configured_model`, `loaded_model`, `ready`, `switch_enabled`, `active_operation_id`를 반환한다. current는 `{operation: 작업 또는 null}`이다. 후보 bridge의 관리자 전용 `pending`을 그대로 사용하지 않는다. `get`/`submit`은 작업 객체를 반환한다. 오류는 `error` 코드로 반환한다. 이 계약은 로컬 작업자에 구현됐으며 실제 운영 작업자 설치·통합은 검증되지 않았다.
+
+### M2-01 로컬 계약 확인 — 2026-11-07
+
+| 경계 | 확인된 계약 |
+| --- | --- |
+| Client 인증 | 기존 앱 인증과 별도 운영자 키가 모두 필요하다. `local` 모드나 socket 접근 가능 여부만으로 브라우저 운영자 권한을 주지 않는다. 기본 설정은 비활성이다. |
+| 모델·작업 API | 모델 목록, 진행 중 작업, ID별 작업 조회와 switch 접수를 제공한다. 작업 ID는 32자리 소문자 hex이며 상태와 검증된 이전·현재 모델을 구분한다. |
+| 오류 | 설치되지 않은 모델은 `invalid_model`/422, 동일 키의 다른 모델은 `idempotency_conflict`/409, 다른 미완료 작업은 409, 없는 작업은 404, 작업자 비활성·연결 실패는 503이다. 잘못된 모델은 접수하지 않는다. |
+| 중복 방지 키 | CLI·API·socket 모두 ASCII 영문·숫자와 `_ . : -`로 구성된 1~128자를 허용한다. 같은 키와 모델의 반복 접수는 기존 작업을 반환한다. |
+| CLI | `list`는 모델 이름을 한 줄씩 출력한다. `switch`는 키·작업 ID를 출력하고 완료를 기다린다. 검증 성공 0, 요청 또는 전환 실패 1, 복구 필요 또는 통신 결과 불명 2다. `status --operation`으로 다시 조회한다. |
+| 권한·수명 | API와 CLI는 공용 Unix socket 작업자에 연결되며 peer UID를 검사한다. 접수 후 HTTP/CLI 연결 종료는 작업을 취소하지 않는다. 작업 DB가 중복 키와 단일 미완료 작업을 원자적으로 관리한다. |
+
+계약 대조 중 API만 `.`·`:`가 든 중복 방지 키를 거절하던 문제와 미설치 모델이 503으로 나타나던 문제를 수정했다. 관련 API·CLI·작업 저장소·작업자 및 실제 로컬 Unix socket 시험 38개가 통과했다. socket 시험의 peer UID와 GPU/gate/systemd는 대역이며 Linux `SO_PEERCRED`, 실제 gate/Studio 및 GPU 검증은 M6에서 수행한다. 이전에 발견한 운영 Client↔gate 키 불일치와 후보 작업자의 role별 credential 구성은 별개의 M2-02/M4 작업이다.
 
 관리 API는 기존 앱 인증에 더해 별도 `OPERATOR_KEY`를 요구한다. local 모드는 관리자가 아니다. 브라우저 자격은 메모리에만 두고 HTTPS 또는 SSH 터널에서 사용한다. 기존 gate-control에도 같은 권한을 요구한다. `MODEL_CONTROL_ENABLED` 기본값은 false이며 테스트 fake는 의존성 오버라이드로만 주입한다. 실제 배포에서 fake를 고를 수 없다.
 
@@ -103,9 +120,25 @@ CLI `ai-model list/status/switch`와 Client는 동일한 root 소유 별도 설�
 - M7: root 설치본·gate/Studio 최소 변경의 배포, 백업, SELinux/권한, 복구와 롤백 절차를 작성한다. 환경 미확인 항목을 확인하기 전 운영 활성화하지 않는다.
 - M8: 별도 운영 절차에서 실제 UI A→B 전환 및 B 후속 대화, CLI/API 일치, 복구와 최종 정리를 확인한다. 이번 턴에서는 운영 적용하지 않는다.
 
+### M3-01 API 재검증 — 2026-11-07
+
+운영자 키가 있어도 기존 local 요청의 host·origin·클라이언트 헤더 검사를 우회할 수 없고, 운영자 키 미설정일 때 관리 API가 거절되는지 검증했다. 작업자의 응답에서 모델 이름·작업 ID와 허용된 오류 코드만 통과시키고 유효하지 않은 응답의 내부 상세는 503에 노출하지 않는다. 기본 비활성, idempotency·요청 오류·Unix socket 연결 유실과 권한 검사는 기존 관련 시험과 함께 확인했다.
+
+CI가 실행하는 기본 `pytest -q`에서도 비동기 테스트가 실행되도록 `pytest.ini`를 추가했다. 전체 백엔드 회귀는 226 통과·1 건너뜀이며, 이후 응답 필드 검증을 보강한 뒤 관련 API·CLI·socket 13개를 다시 통과했다. 프런트 lint/build도 통과했다. 건너뛴 시험은 외부 Studio 소스와 Python 환경이 필요한 통합 시험이다. 이 결과는 macOS 로컬에서 수행되었고, socket peer UID·운영 GPU/gate/systemd는 대역을 사용했다.
+
+M3-01은 로컬 인증 API·transport 계약 검증으로 완료 가능하며 별도 운영 배포를 요구하지 않는다. 현재 `main` push는 Client 전체를 배포·재시작하고 기존 gate-control에 운영자 인증을 요구하는 동작을 적용한다. 운영에는 `OPERATOR_KEY` 설정과 gate 키 불일치 등의 준비가 필요하고 protocol 3·실제 worker 연결은 미완성이므로 이 단계에서는 푸시나 배포를 수행하지 않았다. 실제 활성화·운영 검증은 M4~M8을 따른다.
+
 ### M3-02 추가 진행 — 2026-11-07
 
-접수 결과 불명 시 요청 키와 선택한 모델을 세션에 보관해 관리자 확인 정보로 표시하고, 알려진 작업 ID를 보관해 새로고침 후에도 결과를 조회한다. 조회가 실패한 동안 새 전환을 차단하고, 이전 조회 응답이 새 작업을 덮어쓰지 않도록 요청 세대를 검사한다. 인증 정보는 세션에 저장하지 않는다. 프런트 lint/build와 관련 API·Unix socket 시험 6개는 통과했다. 시험은 실제 브라우저 조작이 아니며 브라우저 자동화 호스트 연결 실패로 UI 상호작용·새로고침·응답 유실 시나리오 검증은 남아 있다. 불명 요청의 관리자 해소 절차도 M4-03과 함께 완료해야 한다.
+접수 결과 불명 시 요청 키와 선택한 모델을 세션에 보관해 관리자 확인 정보로 표시하고, 알려진 작업 ID를 보관해 새로고침 후에도 결과를 조회했다. 조회가 실패한 동안 새 전환을 차단하고, 이전 조회 응답이 새 작업을 덮어쓰지 않도록 요청 세대를 검사했다. 인증 정보는 세션에 저장하지 않는다. 당시 프런트 lint/build와 관련 API·Unix socket 시험 6개는 통과했으며 브라우저 자동화 호스트 연결 실패로 UI 상호작용은 미검증이었다. 이후 브라우저와 추가 검증 결과는 아래를 따른다. root 전용 복구는 M4-03에 남아 있다.
+
+### M3-02 UI 검증 — 2026-11-08
+
+느린 조회가 서로를 무효화하지 않도록 한 번에 하나만 실행하고, timeout과 완료 후 모델 재조회를 추가했다. 확정적인 인증·입력·충돌 거절과 응답 유실을 구별한다. 결과 불명 시 저장된 같은 모델·같은 중복 방지 키로만 사용자가 접수를 확인할 수 있으며, 원 요청이 접수되지 않았다면 전환이 시작될 수 있음을 화면에 알린다. 화면 종료 시 요청을 중단하되 결과 불명 기록은 유지하고, 이전 화면의 늦은 응답이 새 요청의 기록을 지우지 않도록 저장된 요청 키와 모델을 확인한다.
+
+로컬 Edge에서 운영 서버와 분리된 가짜 HTTP 작업자로 인증 실패, 선택·접수, 새로고침 후 결과 복원, 확정 거절, 응답 유실과 같은 키 재접수, 지연된 조회 및 완료 모델 갱신을 확인했다. 프런트 자동 시험 `npm test` 10개와 lint/build가 통과했다. 자동 시험은 재접수·timeout·recovery_required 차단·느린 polling·이중 클릭 및 언마운트된 요청의 늦은 응답 경합을 포함한다. `npm test`는 배포 workflow의 검증 단계에도 연결했다.
+
+M3-02는 가짜 작업자 기준의 **로컬 UI 흐름 검증 완료**다. 실제 작업자·gate·GPU 및 Linux 권한을 연결한 최종 후보 회귀와 root 전용 불명 상태 복구는 M4-03/M6에서 별도로 검증한다. 브라우저 시험은 실제 모델 전환이나 운영 서비스 변경이 아니다.
 
 ## M4 로컬 구현 기록 — 2026-11-07
 
@@ -124,3 +157,30 @@ Client의 `backend/app/model_control/`에 imagegen 후보의 작업 DB, coordina
 - 전체 로컬 회귀: `PYTHONPATH=. .venv/bin/pytest -o asyncio_mode=auto -q` 219 통과, 1 건너뜀. 프런트 `npm run lint && npm run build` 통과. 실제 gate/Studio, GPU 전환 및 브라우저 상호작용 시험은 수행하지 않았다.
 
 M4 핵심은 **로컬 구현 및 대역 검증 완료**이나 단계 전체는 부분 완료다. root 전용 복구 진입과 runtime 검증 연결, 운영 통합은 미완료다. 운영 gate는 현재 owned hold를 지원하지 않으며 gate 계정도 이 후보의 검증 계정과 다르다. Studio lock 경로는 후보와 다르고, 제공된 env에 공유 journal 설정은 없다. Wiki는 8080을 직접 호출하며 Client의 현재 고정 모델 ID는 비어 있다. Linux의 권한/SELinux 및 재부팅·실제 GPU 시험, 구체적인 안전 설치/백업/복구 절차가 끝나기 전 운영 활성화하지 않는다. M5의 전환 중 요청·고정 모델 처리도 구현되지 않았다.
+
+### M4-01 핵심 재검증 — 2026-11-08
+
+공용 worker·영속 DB·CLI/API socket의 단일 작업 및 중복 방지 경로를 다시 검토했다. 신규 전환을 비활성화한 상태에서도 이미 접수된 같은 키·모델의 기록은 조회할 수 있도록 했으며, 새로운 접수는 계속 거절한다. 이는 작업을 새로 실행하지 않는 조회다.
+
+성공한 모델 검증 후 journal을 원자 교체해 비우고 디렉터리 fsync가 실패하면 파일이 이미 빈 상태일 수 있다. 이때 원래 설정으로 재시작하면 변경 근거가 없는 상태에서 또 다른 변경을 하게 되므로, 성공과 롤백 모두 GPU 잠금과 자기 gate hold를 유지한 채 journal을 먼저 정리한다. journal 정리가 실패하거나 이후 hold 해제 결과가 불명이면 추가 재시작 없이 `recovery_required`로 남긴다. 해제 응답이 불명일 때 자기 hold를 다시 얻으려 시도하지만, gate 자체가 실패하면 재획득까지 보장할 수 없으므로 이를 성공으로 판단하지 않는다.
+
+실제 파일 교체 뒤 디렉터리 fsync 실패, 롤백 정리 실패, 비활성 상태의 기존 키 조회 및 신규 요청 차단을 관련 시험에 추가했다. 관련 시험 62개가 통과했고 이어서 전체 백엔드 회귀 229개 통과·1개 건너뜀이었다. 가짜 gate/systemd와 macOS peer UID 대역을 사용했다. 빈 journal과 남은 hold를 작업과 연결할 영속 근거·root 복구 진입은 M4-03, 실제 Studio/gate protocol 3·공유 잠금 및 Linux 권한 검증은 M4-02/M6의 차단 조건이다.
+
+운영 Client는 SSH 계정 `yeppyshiba`와 UID 1000을 공유한다. 현재 socket의 peer UID 허용만으로 이 계정의 직접 호출을 Client 프로세스의 호출과 구분할 수 없으므로 M4-02에서 비대화형 전용 서비스 UID와 socket·DB 권한 이관을 준비한다. 이번 검증은 운영 서비스나 계정을 변경하지 않았다.
+
+### M4-02 사전 검사·설치 경계 진행 — 2026-11-08
+
+- worker 후보가 gate identity의 protocol 3과 durable 상태·32자리 hex epoch를 요구하도록 변경했다. protocol 2와 epoch 누락·오류, pause/hold 불일치, startup 또는 다른 GPU 작업의 미해결 hold는 거절한다. 운영 gate 및 보존된 protocol 2 후보는 아직 통과할 수 없다.
+- socket 허용 계정과 그룹을 `yeppyshiba`가 아닌 비대화형 전용 `ai-client`로 정했다. root·대화형 shell·다른 계정과 중복 UID·그룹 불일치와 socket 소유자·그룹·mode 불일치를 거절한다. Client·Studio·gate는 systemd 설정값뿐 아니라 실제 프로세스의 UID/GID 네 값, `NoNewPrivs`, PID·시작 시각도 확인한다.
+- Client의 `/usr/bin/python3 -I -S`용 root 관리 실행 트리와 서비스 drop-in 후보를 추가했다. preflight는 Client 실행 unit·인자·interpreter·환경파일·코드/의존성의 소유·쓰기 권한과 Client mount namespace에서의 파일 일치를 확인한다. 실제 Linux `/proc`·systemd·SELinux 환경에서의 검증은 M6-02에 남는다.
+- 2026-11-08 읽기 전용 조회에서 Caddy의 실제 적용 구성은 `/opt/bc250-llm-client/frontend/dist`를 `/llm` 자산으로 제공했고, 이 경로와 `index.html`은 `yeppyshiba`가 쓸 수 있었다. root backend/전용 UID만으로 운영자 UI에 입력한 키가 보호되는 것은 아니다. Caddy admin 구성의 GET은 localhost에서 응답했지만 변경 권한은 시험하지 않았다.
+- 사용자가 기존 `/llm` 주소·origin을 유지하고 같은 origin의 관련 자산·배포 권한을 함께 보호하는 방식을 선택했다. 실제 Caddy HTTP 서버에는 Client·Studio 정적 root 및 Client 8010·Studio 8090·Wiki 8020 loopback upstream 경로가 있다. Studio 정적 root의 조사 당시 소유 UID는 1001이었고 SSH 계정으로 쓸 수 없었다. Wiki `main.py`는 root 소유였지만 상위 `/opt/bc250-family-wiki/app`은 `yeppyshiba`가 쓸 수 있었다. 파일 하나의 소유권만으로 전체 경로 보호를 판정하지 않는다. Wiki 기능·모델 조율은 범위 예외이나 동일 origin의 UI 보안 영향은 따로 검토해야 한다.
+- root 관리 정적 자산의 모든 예상 파일·해시·소유권·권한과 예기치 않은 파일/디렉터리를 대조하는 내부 부품과 음성 시험을 추가했다. 이는 아직 신뢰된 manifest 발급, 실제 Caddy·same-origin 동적 응답 및 자산의 namespace 검사를 포함하는 완성된 검증기가 아니므로 기존 전환 차단을 해제하지 않는다. root 검토 또는 별도 서명 릴리스만을 승격하는 배포 계약은 M7에서 준비한다.
+- Caddy의 실제 설정을 제한된 Unix socket에서 읽는 부품을 추가했다. socket 경로·소유권·권한과 전용 그룹, 연결 상대의 PID/UID/GID, 응답 크기·형식 및 중복 JSON 키를 검사하며 일반 TCP admin으로 대체하지 않는다. 이는 전송 계층 검사일 뿐이며 아직 preflight에 연결된 전체 origin 검증 결과가 아니다. 이 부품과 기존 Client 신뢰·preflight 관련 대역 시험은 51개 통과했다.
+- 별도로 검토된 Caddy 설정 digest와 검사 전후 프로세스·설정 일치 및 제한된 다운로드 응답 헤더를 확인하는 정책 부품을 추가했다. digest의 신뢰된 발급과 전체 경로·동적 응답 검증이 없으므로 이것도 origin 안전 판정이나 차단 해제 근거가 아니다.
+- 독립 digest로 고정한 root 관리 manifest를 읽고 제한된 형태의 route 목록을 대조하는 부품을 추가했다. 허용하지 않은 matcher·handler·upstream은 거절하지만 route 목록의 일치만으로 backend 코드·동적 응답·자산 namespace의 안전성을 증명하지는 못한다. 이 부품을 포함한 관련 대역 시험은 75개 통과했다. manifest의 독립된 신뢰 근거와 모든 응답 및 실행 프로세스의 provenance 검증을 구현해 preflight에 연결해야 한다.
+- Caddy unit과 실행 프로세스·바이너리 및 Caddy namespace의 정적 자산을 확인하고, 검토 manifest·인증된 admin 설정·route 목록과 검사 전후 신원을 대조하는 제한된 조사 함수를 추가했다. 동적 route는 미검증으로 반환한다. 조회 전체 시간 제한과 경로 치환·escape 거절도 추가했다. manifest digest의 독립적인 신뢰 공급, 동적 backend·응답과 OS runtime 보호 및 전체 preflight 연결은 미완성이다. 전체 회귀는 Unix socket 생성이 가능한 환경에서 318개 통과·1개 건너뜀이며 실제 Linux 경계의 증거는 아니다.
+- 실제 적용된 Caddy route와 UI 자산 및 같은 origin의 다른 자산까지 신뢰 경계를 검증하는 구현은 아직 없다. 따라서 후보의 `verify_operator_frontend()`는 **무조건 실패**하며, 설정 플래그로 우회할 수 없다. M4-02에서 실제 유효 Caddy 라우팅·admin 접근 권한·namespace와 root 관리 자산의 검증기 및 로컬 대역 시험을 구현하고, M7에서 그 계약을 충족하는 배포 구성·자산을 준비해야 한다. OS 표준 라이브러리와 동적 로더가 Client namespace에서 대체되지 않는지도 검증해야 한다. 검증기와 배포 준비 전 전환을 활성화하지 않는다.
+- 기존 Client 배포는 `yeppyshiba`가 쓰는 checkout과 venv를 갱신하므로 새 root 관리 실행 트리를 갱신하지 못한다. M7에서 Studio 독립 배포를 보존하면서 Client 코드·정적 자산·의존성의 root 관리 배포, DB/WAL 권한 이관, credential, 백업과 롤백을 준비해야 한다. 현재 운영에 파일을 설치하거나 권한을 바꾸지 않았다.
+
+정적 자산 검증 부품 추가 후 전체 백엔드 회귀는 263 통과·1 건너뜀이었다. protocol·계정·파일 대역 시험의 일부는 미구현 프런트 검사만 대역으로 대체했으며, 실제 프런트 검사의 거절도 별도로 시험했다. 이 결과는 production preflight가 성공한다는 증거가 아니다. 프로세스·namespace·socket 검사는 macOS에서 주입한 대역이므로 Linux 실제 경계 검증이 아니다. M4-02는 위 프런트 provenance 검증기가 미완성이므로 **부분 완료**로 유지한다. 설치 후보와 남은 보안 경계는 [템플릿 안내](../../deploy/model-control/README.md)에 정리했다.

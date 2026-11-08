@@ -172,6 +172,8 @@ async def worker_request(client, operation, **arguments):
             raise fail(error, "다른 전환 작업 또는 복구가 진행 중입니다.", 409)
         if error == "not_found":
             raise fail(error, "작업을 찾을 수 없습니다.", 404)
+        if error == "invalid_model":
+            raise fail(error, "설치된 모델을 선택해 주세요.", 422)
         raise fail("model_control_unavailable", "모델 제어 작업자를 사용할 수 없습니다.", 503)
     schema = {"models": ModelList, "current": CurrentOperation, "get": Operation, "submit": Operation}[operation]
     try:
@@ -1641,6 +1643,6 @@ async def get_switch(operation_id: UUID, client=Depends(get_model_control)):
 @app.post("/api/v1/llm/switches", status_code=202, dependencies=[Depends(require_operator)])
 async def submit_switch(body: ModelSwitchRequest, request: Request, client=Depends(get_model_control)):
     key = request.headers.get("idempotency-key", "")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key):
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", key):
         raise fail("invalid_idempotency_key", "유효한 Idempotency-Key가 필요합니다.", 422)
     return await worker_request(client, "submit", model=body.model, idempotency_key=key)

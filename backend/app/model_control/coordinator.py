@@ -182,13 +182,12 @@ class ModelSwitch:
                 report("verifying")
                 await self.service.healthy(target)
                 record(current=target)
-                await self.gate.release(state["hold_id"])
-                self.journal.clear()
+                await self._finish_verified_cleanup(state)
                 return "succeeded"
             except SwitchOutcomeUnknown as error:
-                # A killed or timed-out systemctl client does not cancel the
-                # systemd job. Leave the durable hold and journal intact.
-                raise SwitchRecoveryRequired("Systemd operation outcome is unknown") from error
+                # A timed-out systemctl client does not cancel its systemd job;
+                # cleanup failure may also leave an uncertain journal/hold.
+                raise SwitchRecoveryRequired("Switch or cleanup outcome is unknown") from error
             except Exception as original:
                 try:
                     report("rolling_back")
@@ -225,5 +224,23 @@ class ModelSwitch:
         if state["mutation_started"]:
             await self.service.apply(state["old"])
         await self.service.healthy(state["old"])
-        await self.gate.release(state["hold_id"])
-        self.journal.clear()
+        await self._finish_verified_cleanup(state)
+
+    async def _finish_verified_cleanup(self, state):
+        # Keep the durable gate hold while clearing the journal. Even a failed
+        # fsync can happen after the journal was replaced, so do not mutate the
+        # model again after cleanup has started.
+        try:
+            self.journal.clear()
+        except Exception as error:
+            raise SwitchOutcomeUnknown("Journal cleanup outcome is unknown") from error
+        try:
+            await self.gate.release(state["hold_id"])
+        except Exception as error:
+            # A lost response may mean the hold was removed. Reacquire it when
+            # possible and require reconciliation; never assume either result.
+            try:
+                await self.gate.acquire(state["hold_id"])
+            except Exception:
+                pass
+            raise SwitchOutcomeUnknown("Gate release outcome is unknown") from error

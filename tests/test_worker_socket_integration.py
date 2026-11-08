@@ -75,11 +75,27 @@ async def test_api_cli_and_socket_share_one_durable_worker(running_worker, monke
         # The existing benchmark compares each list line directly with ACTIVE_MODEL.
         assert capsys.readouterr().out.splitlines() == ['old', 'new']
         assert (await api.get('/api/v1/llm/models', headers=headers)).json()['loaded_model'] == 'old'
-        request_headers = {**headers, 'Idempotency-Key': 'one'}
+        invalid = await api.post('/api/v1/llm/switches', headers={**headers, 'Idempotency-Key': 'invalid'}, json={'model': 'missing'})
+        assert invalid.status_code == 422
+        assert invalid.json()['error']['code'] == 'invalid_model'
+        assert (await api.get('/api/v1/llm/switches/current', headers=headers)).json()['operation'] is None
+        request_headers = {**headers, 'Idempotency-Key': 'one:shared.key'}
         result = await api.post('/api/v1/llm/switches', headers=request_headers, json={'model': 'new'})
         assert result.status_code == 202
         operation = result.json(); await asyncio.wait_for(service.entered.wait(), 2)
+        # Disabling new submissions must not make a lost accepted response
+        # undiscoverable by the same idempotency key.
+        bridge.switch_enabled = False
+        recovered = await api.post('/api/v1/llm/switches', headers=request_headers, json={'model': 'new'})
+        assert recovered.status_code == 202 and recovered.json()['id'] == operation['id']
+        blocked = await api.post('/api/v1/llm/switches', headers={**headers, 'Idempotency-Key': 'disabled'}, json={'model': 'old'})
+        assert blocked.status_code == 503
+        bridge.switch_enabled = True
+        same = await ModelControlClient(str(path)).request('submit', model='new', idempotency_key='one:shared.key')
+        assert same['id'] == operation['id']
         assert (await api.post('/api/v1/llm/switches', headers=request_headers, json={'model': 'new'})).json()['id'] == operation['id']
+        conflict = await api.post('/api/v1/llm/switches', headers=request_headers, json={'model': 'old'})
+        assert conflict.status_code == 409 and conflict.json()['error']['code'] == 'idempotency_conflict'
         assert (await api.post('/api/v1/llm/switches', headers={**headers, 'Idempotency-Key': 'two'}, json={'model': 'old'})).status_code == 409
         assert await cli_run(Namespace(command='status', operation=operation['id']), ModelControlClient(str(path))) == 0
         assert operation['id'] in capsys.readouterr().out

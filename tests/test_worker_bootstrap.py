@@ -28,3 +28,28 @@ def test_install_tree_rejects_writeable_and_linked_entries(tmp_path, monkeypatch
     (root / 'alias').unlink()
     (root / 'startup.pth').write_text('')
     with pytest.raises(RuntimeError): module.validate_tree(root)
+
+
+def test_client_bootstrap_rejects_untrusted_source_before_import(tmp_path, monkeypatch):
+    client_spec = importlib.util.spec_from_file_location('client_bootstrap', Path('deploy/model-control/client-bootstrap.py'))
+    client = importlib.util.module_from_spec(client_spec); client_spec.loader.exec_module(client)
+    ancestors = {part.stat().st_ino for part in (tmp_path, *tmp_path.parents)}
+    real_check = client.check
+    def local_check(info, *, directory):
+        if info.st_ino in ancestors:
+            return
+        proxy = type('Info', (), {'st_mode': info.st_mode, 'st_uid': 0, 'st_nlink': info.st_nlink})()
+        return real_check(proxy, directory=directory)
+    monkeypatch.setattr(client, 'check', local_check)
+    root = tmp_path / 'runtime'; root.mkdir(mode=0o755)
+    (root / 'lib').mkdir(mode=0o755)
+    code = root / 'lib' / 'app.py'; code.write_text('pass'); code.chmod(0o644)
+    client.validate_tree(root)
+    code.chmod(0o666)
+    with pytest.raises(RuntimeError): client.validate_tree(root)
+    code.chmod(0o644)
+    (root / 'lib' / 'alias').symlink_to(code)
+    with pytest.raises(RuntimeError): client.validate_tree(root)
+    (root / 'lib' / 'alias').unlink()
+    (root / 'lib' / 'injection.pth').write_text('')
+    with pytest.raises(RuntimeError): client.validate_tree(root)

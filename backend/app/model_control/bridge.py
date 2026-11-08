@@ -5,7 +5,7 @@ import socket
 import struct
 
 from .operations import IdempotencyConflict, OperationConflict
-from .worker import ReconciliationError
+from .worker import ReconciliationError, UnknownModel
 
 MAX_MESSAGE = 4096
 MAX_RESPONSE = 65536
@@ -64,6 +64,12 @@ class ModelControlBridge:
             return self.worker.store.get(PRINCIPAL, request['id']) or {'error': 'not_found'}
         if action == 'submit' and set(request) == {'operation', 'model', 'idempotency_key'}:
             if not self.switch_enabled:
+                # A lost submit response must remain discoverable while the
+                # operator has disabled new switches. This is read-only: a
+                # queued operation is not scheduled by this lookup.
+                existing = self.worker.store.find_idempotent(PRINCIPAL, request['model'], request['idempotency_key'])
+                if existing is not None:
+                    return existing
                 return {'error': 'switch_disabled'}
             result, created = await self.worker.submit(PRINCIPAL, request['model'], request['idempotency_key'])
             if created:
@@ -82,6 +88,8 @@ class ModelControlBridge:
                 if len(raw) > MAX_MESSAGE or not raw.endswith(b'\n'):
                     raise ValueError('Invalid message')
                 result = await self.dispatch(json.loads(raw))
+        except UnknownModel:
+            result = {'error': 'invalid_model'}
         except IdempotencyConflict:
             result = {'error': 'idempotency_conflict'}
         except OperationConflict:

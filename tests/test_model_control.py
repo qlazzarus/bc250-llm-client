@@ -70,3 +70,38 @@ def test_local_mode_is_not_operator_and_missing_socket(monkeypatch, tmp_path):
         local = {'X-BC250-Client': '1'}
         assert client.put('/api/v1/admin/gate-control', headers=local, json={'paused': True}).status_code == 403
         assert client.get('/api/v1/llm/models', headers={**local, 'X-BC250-Operator-Key': 'operator-secret'}).status_code == 503
+
+
+def test_operator_key_never_bypasses_local_request_checks(monkeypatch):
+    settings = main.get_settings()
+    monkeypatch.setattr(settings, 'app_auth_mode', 'local')
+    monkeypatch.setattr(settings, 'app_allowed_hosts', 'testserver')
+    monkeypatch.setattr(settings, 'operator_key', 'operator-secret')
+    main.app.dependency_overrides[main.get_model_control] = lambda: FakeWorker()
+    try:
+        with TestClient(main.app) as client:
+            operator = {'X-BC250-Operator-Key': 'operator-secret'}
+            assert client.get('/api/v1/llm/models', headers=operator).status_code == 403
+            assert client.get('/api/v1/llm/models', headers={**operator, 'X-BC250-Client': '1', 'Origin': 'https://untrusted.example'}).status_code == 403
+            assert client.get('/api/v1/llm/models', headers={**operator, 'X-BC250-Client': '1'}).status_code == 200
+            monkeypatch.setattr(settings, 'operator_key', '')
+            assert client.get('/api/v1/llm/models', headers={'X-BC250-Client': '1'}).status_code == 403
+    finally:
+        main.app.dependency_overrides.clear()
+
+
+def test_invalid_worker_response_is_not_disclosed(monkeypatch):
+    class InvalidWorker:
+        async def request(self, action, **kwargs):
+            return {'id': 'a' * 32, 'model': 'a', 'state': 'failed', 'error_code': 'internal-server-details'}
+
+    monkeypatch.setattr(main.get_settings(), 'operator_key', 'operator-secret')
+    main.app.dependency_overrides[main.get_model_control] = lambda: InvalidWorker()
+    headers = {'Authorization': 'Bearer client-key', 'X-BC250-Operator-Key': 'operator-secret'}
+    try:
+        with TestClient(main.app) as client:
+            response = client.get('/api/v1/llm/switches/' + 'a' * 32, headers=headers)
+            assert response.status_code == 503
+            assert 'internal-server-details' not in response.text
+    finally:
+        main.app.dependency_overrides.clear()

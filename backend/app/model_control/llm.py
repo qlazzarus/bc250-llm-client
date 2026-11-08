@@ -88,7 +88,7 @@ class SystemdLLM:
     async def ensure_image_admission(self):
         status = await self.gate("GET")
         holds = status.get("holds")
-        if (status.get("protocol") != 2 or status.get("durable") is not True
+        if (status.get("protocol") != 3 or status.get("durable") is not True
                 or not isinstance(holds, list) or any(not isinstance(x, str) for x in holds)):
             raise RuntimeError("Owned durable admission control is unavailable")
         if any(hold == "startup" or hold.startswith(("studio-", "switch-")) for hold in holds):
@@ -99,7 +99,7 @@ class SystemdLLM:
         async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
             response = await client.get(self.s.admission_url.rstrip("/") + "/identity", headers=headers)
             response.raise_for_status()
-            return response.json() == {"role": "studio", "protocol": 2}
+            return response.json() == {"role": "studio", "protocol": 3}
 
     async def resume_owned(self, hold_id):
         await self._owned_hold(hold_id, False)

@@ -1,4 +1,6 @@
 import asyncio
+import os
+import stat
 
 import pytest
 from backend.app.model_control.coordinator import (
@@ -166,14 +168,54 @@ async def test_interruption_after_mutation_is_recoverable(setup):
     assert service.model == "old" and gate.holds == {"administrator"}
 
 
-async def test_lost_resume_response_reacquires_and_drains_before_rollback(setup):
+async def test_lost_resume_response_requires_reconciliation_without_rollback(setup):
     switch, journal, gate, service = setup
     gate.lose_release_response = True
-    with pytest.raises(SwitchFailed):
+    with pytest.raises(SwitchRecoveryRequired):
         await switch.switch("new")
-    assert gate.calls == ["pause", "drain", "release", "pause", "drain", "release"]
-    assert service.model == "old" and gate.holds == {"administrator"}
+    assert gate.calls == ["pause", "drain", "release", "pause"]
+    assert service.model == "new" and len(gate.holds) == 2
     assert journal.read() == {}
+
+
+async def test_cleanup_error_after_journal_replacement_never_starts_rollback(setup, monkeypatch):
+    switch, journal, gate, service = setup
+
+    def fail_after_replacement():
+        original_fsync = os.fsync
+        def fail_directory(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError('directory fsync failed after replacement')
+            return original_fsync(fd)
+        with monkeypatch.context() as patch:
+            patch.setattr('backend.app.model_control.coordinator.os.fsync', fail_directory)
+            journal.write({})
+
+    monkeypatch.setattr(journal, 'clear', fail_after_replacement)
+    with pytest.raises(SwitchRecoveryRequired):
+        await switch.switch('new', operation_id='a' * 32)
+    assert service.model == 'new'
+    assert service.calls == [('health', 'old'), ('apply', 'new'), ('health', 'new')]
+    assert journal.read() == {}
+    assert gate.calls == ['pause', 'drain']
+    assert len(gate.holds) == 2 and 'administrator' in gate.holds
+
+
+async def test_rollback_cleanup_failure_keeps_hold_after_old_model_is_verified(setup, monkeypatch):
+    switch, journal, gate, service = setup
+    service.fail_apply.add('new')
+
+    def fail_after_replacement():
+        journal.path.write_text('{}')
+        raise OSError('directory fsync failed after replacement')
+
+    monkeypatch.setattr(journal, 'clear', fail_after_replacement)
+    with pytest.raises(SwitchRecoveryRequired):
+        await switch.switch('new', operation_id='b' * 32)
+    assert service.model == 'old'
+    assert service.calls[-1] == ('health', 'old')
+    assert journal.read() == {} and len(gate.holds) == 2
+    assert gate.calls == ['pause', 'drain', 'pause', 'drain']
 
 
 async def test_unknown_systemd_result_keeps_hold_and_does_not_restart_old_model(setup):

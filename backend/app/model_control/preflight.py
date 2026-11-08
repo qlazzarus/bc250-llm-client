@@ -1,10 +1,14 @@
 """Verify the cooperating Studio and owned-hold gate before mutation."""
 import os
+import grp
+import pwd
 import re
 import subprocess
 from pathlib import Path
 
 import httpx
+
+from .client_trust import verify_client_process, verify_operator_frontend
 
 
 class CoordinationPreflight:
@@ -19,7 +23,7 @@ class CoordinationPreflight:
     @staticmethod
     def service_identity(unit, account):
         result = subprocess.run(['/usr/bin/systemctl', 'show', '--all',
-            '--property=LoadState,ActiveState,MainPID,Job,KillMode,User,Group', unit],
+            '--property=LoadState,ActiveState,MainPID,Job,KillMode,User,Group,NoNewPrivileges', unit],
             check=True, capture_output=True, text=True, timeout=10)
         rows = [line.partition('=') for line in result.stdout.splitlines()]
         if any(not sep for _, sep, _ in rows) or len({key for key, _, _ in rows}) != len(rows):
@@ -28,9 +32,17 @@ class CoordinationPreflight:
         if (data.get('LoadState') != 'loaded' or data.get('ActiveState') != 'active'
                 or data.get('Job') or data.get('KillMode') != 'control-group'
                 or data.get('User') != account or data.get('Group') != account
+                or data.get('NoNewPrivileges') != 'yes'
                 or not re.fullmatch(r'[1-9][0-9]*', data.get('MainPID', ''))):
             raise RuntimeError('Service identity is not settled')
         pid = int(data['MainPID'])
+        expected_uid, expected_gid = pwd.getpwnam(account).pw_uid, grp.getgrnam(account).gr_gid
+        raw_status = Path(f'/proc/{pid}/status').read_text()
+        status = dict(line.split(':', 1) for line in raw_status.splitlines() if ':' in line)
+        if (status.get('Uid', '').split() != [str(expected_uid)] * 4
+                or status.get('Gid', '').split() != [str(expected_gid)] * 4
+                or status.get('NoNewPrivs', '').strip() != '1'):
+            raise RuntimeError('Service process credentials do not match its unit')
         raw = Path(f'/proc/{pid}/stat').read_text()
         rest = raw[raw.rfind(')') + 2:].split()
         if len(rest) < 20 or not rest[19].isdigit():
@@ -53,6 +65,9 @@ class CoordinationPreflight:
                 raise RuntimeError('Studio sees a different coordination file')
 
     def __call__(self):
+        client_identity = self.service_identity('bc250-llm-client.service', 'ai-client')
+        verify_client_process(client_identity[0])
+        verify_operator_frontend()
         studio = self.service_identity('bc250-ai-studio.service', 'ai-studio')
         gate = self.service_identity('bc250-llm-gate.service', 'ai-gate')
         self.same_studio_files(studio[0])
@@ -60,14 +75,17 @@ class CoordinationPreflight:
             response = client.get('http://127.0.0.1:8081/control/identity',
                                   headers={'Authorization': 'Bearer ' + self.gate_key})
             response.raise_for_status()
-            if response.json() != {'protocol': 2, 'role': 'switch'}:
+            if response.json() != {'protocol': 3, 'role': 'switch'}:
                 raise RuntimeError('Gate identity mismatch')
             response = client.get('http://127.0.0.1:8090/internal/model-switch/coordination',
                                   headers={'Authorization': 'Bearer ' + self.studio_key})
             response.raise_for_status()
             if response.json() != {'protocol': 1, 'enabled': True, 'transition_clear': True}:
                 raise RuntimeError('Studio coordination unavailable')
-        if (studio != self.service_identity('bc250-ai-studio.service', 'ai-studio')
+        if (client_identity != self.service_identity('bc250-llm-client.service', 'ai-client')
+                or studio != self.service_identity('bc250-ai-studio.service', 'ai-studio')
                 or gate != self.service_identity('bc250-llm-gate.service', 'ai-gate')):
             raise RuntimeError('Service identity changed during preflight')
+        verify_client_process(client_identity[0])
+        verify_operator_frontend()
         self.same_studio_files(studio[0])

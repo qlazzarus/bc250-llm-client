@@ -4,6 +4,10 @@
 
 후속 설계: [운영 ai-model 분석 및 CLI/API 공용 실행부 설계](llm-model-switch-design.md). 사용자가 제공한 실제 원문에서 확인된 실패 경로와 변경 구조를 기록한다.
 
+M2-02의 확정된 목표 조율 계약과 운영 환경 차이: [gate·Studio 공용 조율 계약](llm-model-switch-coordination.md). 이 계약은 후보 코드에 이미 모두 구현됐다는 뜻이 아니다.
+
+M2-03의 모델별 설정·요청 예산·미검증 기능 처리 기준: [모델별 추론 정책](llm-model-switch-model-policy.md). 각 모델의 실제 추론 호환은 별도로 검증한다.
+
 이 문서가 두 프로젝트의 **LLM 모델 전환 작업에 대한 단일 기준 문서**다. imagegen의 과거 API 전용 계획, T1~T6 배포 체크리스트, 조사·시험 기록보다 현재 목표와 작업 순서에서 우선한다. 과거 시험 결과와 실제 제약을 폐기하거나 미완료를 완료로 바꾸는 뜻은 아니다. 이미지 생성 기능 자체의 계획은 각 기존 문서를 따른다.
 
 ## 1. 확정된 사용자 요구와 프로젝트 경계
@@ -117,8 +121,8 @@ UI는 현재 모델, 설치 모델 선택, 전환 버튼, 전역 변경 안내, 
 | --- | --- | --- |
 | M0 통합 계획 | 완료 | 목표·소유 저장소·과거 자료 우선순위가 정리됨 |
 | M1 명령·환경 계약 | 완료 | M1-01~03에서 운영 구성과 알려진 범위 내 호출자 확인, 명시된 Wiki 예외 및 조사 한계 기록. 실제 조율 구현·검증은 M2/M4~M7 |
-| M2 구현·공용 변경 설계 | 부분 완료 | M2-01~03에서 로컬 계약과 운영 조율·모델 정책 확정 |
-| M3 Client 사용자 흐름 | 부분 완료 | M3-01~02의 API 및 브라우저 흐름 검증 |
+| M2 구현·공용 변경 설계 | 설계 완료 | M2-01~03의 로컬 계약·운영 조율·모델 정책 확정. 실제 조율 구현과 모델별 추론 검증은 M4~M6 |
+| M3 Client 사용자 흐름 | 로컬 완료 | M3-01~02의 API 및 가짜 작업자 기반 브라우저 흐름 검증. 최종 후보·운영 연동은 M6/M8 |
 | M4 공용 제어 실행부 | 부분 완료 | M4-01~03과 Linux·운영 경계 검증 후 복구 진입까지 준비 |
 | M5 전환 후 Client 호환 | 미착수 | M5-01~03에서 모델 추종·요청 경합·다른 호출자 조율 |
 | M6 최종 통합 검증 | 부분 근거만 있음 | M6-01~02에서 같은 최종 후보의 기능·Linux 경계 검증 |
@@ -133,20 +137,20 @@ UI는 현재 모델, 설치 모델 선택, 전환 버튼, 전역 변경 안내, 
 | M1-01 | M0-01 | 명령·unit·계정·모델 매핑 조사 | 원문, 설치 unit, 네 모델 설정과 알려진 CLI 호출·종료 코드 의존 확인 | 완료: [M1 조사](llm-model-switch-tasks.md#m1-추가-조사--2026-11-07); root 검색·벤치마크·래퍼 확인, 외부 SSH 자동화는 사용자가 없는 것으로 확인. 컨테이너 overlay의 끊어진 링크 등 조사 범위 한계 기록 |
 | M1-02 | M1-01 | 보호 설정·잠금·journal·키 역할·계정·namespace 계약표 | 비밀을 노출하지 않고 실제 설정 및 미확인 사유 확인 | 완료: [운영 계약표](llm-model-switch-tasks.md#m1-02-운영-계약표--2026-11-07) 및 사용자 root 조회 기록. 키 불일치와 namespace 확인; lock/journal 부재로 파일 inode·권한 미검증 사유를 기록하고 M4/M6에 실제 파일 검증 인계 |
 | M1-03 | M1-01 | Client 접속·고정 ID 및 직접 8080·GPU 호출자 목록 | Wiki 예외를 기록하고 알려진 범위 내 경로의 조율 또는 차단 방안 확인 | 완료: [호출 경로 조사](llm-model-switch-tasks.md#m1-03-호출-경로-조사--2026-11-07); Client·Studio·Wiki·벤치마크, root cron·timer 및 Podman 현황 확인. 알려지지 않은 외부 호출 등 조사 한계 기록; 실제 조율은 M2/M5/M6에서 구현·검증 |
-| M2-01 | M0-01 | CLI/API/socket·작업 상태·인증 계약 | 공용 단일 작업자 및 실패 상태를 문서화 | 로컬 완료: [프로토콜](llm-model-switch-tasks.md#m2-결정과-프로토콜); 운영 적용 증거 아님 |
-| M2-02 | M1-02, M1-03 | gate owned hold·기존 pause·stale 요청·Studio barrier/키·계정·배포 소유권 설계 | 공용 변경과 legacy 우회 방지 정책 확정; bool fallback 금지 | 미완료: 운영 gate 미지원, 후보 `ai-gate`와 운영 `ai-studio` 차이 해결 필요 |
-| M2-03 | M1-01, M1-03 | 모델별 관리명·ID·context·reasoning·schema 호환표와 active-follow 정책 | 네 모델별 설정과 검증 기준 확정 | 부분 완료: [네 모델의 설정](llm-model-switch-tasks.md#m1-추가-조사--2026-11-07) 확인; 실제 로드 ID·요청 옵션 호환 검증과 정책 확정은 미완료 |
-| M3-01 | M2-01 | 운영자 인증 API·기본 비활성 transport·작업 조회 | 인증·중복·오류·unavailable API 검증 | 로컬 완료: `tests/test_model_control.py`; 운영 미배포 |
-| M3-02 | M3-01, M4-01 | 선택·진행·terminal·새로고침·응답 유실 및 인증 UI | 브라우저에서 재제출 방지·작업 추적·불명 요청 식별/관리자 해소 안내 검증 | 부분 완료: 요청 불명 식별자 및 작업 ID 새로고침 복원 구현, lint/build 통과; 브라우저 자동화 호스트 미연결로 상호작용 미검증 |
-| M4-01 | M2-01 | 영속 DB·coordinator·registry/systemd·worker·Unix·CLI 핵심 | 단일 작업·복구·연결 유실을 대역 및 로컬 socket에서 검증 | 로컬 완료: [M4 근거](llm-model-switch-tasks.md#m4-로컬-구현-기록--2026-11-07); Linux·운영 별도 |
-| M4-02 | M2-02, M4-01 | production preflight·bootstrap·unit/socket을 실제 계약에 맞춤 | 실제 조사 계약에 맞춘 코드·템플릿과 검증 설계 및 로컬 대역 검사 완료, 불일치 시 차단 | 부분 완료: 템플릿과 preflight 있음; 계정 차이·실제 설정 반영 필요. 실제 Linux 실행 검증은 M6-02 |
-| M4-03 | M2-02, M4-01 | root 전용 복구 진입과 조사·복구 계약 | 중단·orphan·불일치·journal 없는 불명 작업을 독립 hold 보존하며 확인/복구; Client UID 거부 | 미완료: 내부 `recover`/`resolve_verified`만 있으며 bridge/CLI 진입과 runtime 검증 연결 없음. DB/journal 삭제로 차단을 해제하지 않음 |
-| M5-01 | M2-03, M4-01 | 공통 모델 해석과 active-follow, 모델별 옵션 | 채팅·요약·제목·이미지 의도/프롬프트가 전환 후 새 모델을 사용하고 호환 회귀 통과 | 미착수: 고정 ID 정책 필요 |
-| M5-02 | M2-02, M3-01 | Client admission과 gate의 stale 요청 처리 | 신규 요청 409·초안 보존, 기존 요청 drain, 백그라운드 보류 및 동시 진입 경합 검증 | 미착수 |
+| M2-01 | M0-01 | CLI/API/socket·작업 상태·인증 계약 | 공용 단일 작업자 및 실패 상태를 문서화 | 로컬 완료: [계약·시험 근거](llm-model-switch-tasks.md#m2-01-로컬-계약-확인--2026-11-07). 중복 키 문법·미설치 모델 오류 정합, 관련 시험 38개 통과. Linux·운영 적용 증거 아님 |
+| M2-02 | M1-02, M1-03 | gate owned hold·기존 pause·stale 요청·Studio barrier/키·계정·배포 소유권 설계 | 공용 변경과 legacy 우회 방지 정책 확정; bool fallback 금지 | 설계 완료: [공용 조율 계약](llm-model-switch-coordination.md). 실제 gate·Studio·worker 변경과 Linux/운영 검증은 M4~M8; 운영 gate는 현재 미지원 |
+| M2-03 | M1-01, M1-03 | 모델별 관리명·ID·context·reasoning·schema 호환표와 active-follow 정책 | 네 모델별 설정과 미검증 기능 처리·검증 기준 확정 | 설계 완료: [모델별 추론 정책](llm-model-switch-model-policy.md). 현재 모델의 ID/slot context 읽기 전용 확인, 나머지 모델 로드 및 모든 모델의 옵션 호환은 M6에서 실제 검증 |
+| M3-01 | M2-01 | 운영자 인증 API·기본 비활성 transport·작업 조회 | 인증·중복·오류·unavailable API 검증 | 로컬 완료: [재검증 기록](llm-model-switch-tasks.md#m3-01-api-재검증--2026-11-07). 전체 226 통과·1 건너뜀 및 최종 변경 관련 13 통과; 운영 미배포 |
+| M3-02 | M3-01, M4-01 | 선택·진행·terminal·새로고침·응답 유실 및 인증 UI | 브라우저에서 재제출 방지·작업 추적·불명 요청 식별/관리자 해소 안내 검증 | 로컬 완료: [UI 검증](llm-model-switch-tasks.md#m3-02-ui-검증--2026-11-08). Edge+가짜 HTTP 작업자 및 자동 시험 10개, lint/build 통과. 실제 worker·운영 통합은 M6/M8 |
+| M4-01 | M2-01 | 영속 DB·coordinator·registry/systemd·worker·Unix·CLI 핵심 | 단일 작업·복구·연결 유실을 대역 및 로컬 socket에서 검증 | 로컬 완료: [핵심 재검증](llm-model-switch-tasks.md#m4-01-핵심-재검증--2026-11-08). journal 정리 실패 및 비활성 중 기존 키 조회 보완; 전체 229 통과·1 건너뜀. Linux·운영 별도 |
+| M4-02 | M2-02, M4-01 | production preflight·bootstrap·unit/socket을 실제 계약에 맞춤 | 실제 조사 계약에 맞춘 코드·템플릿과 검증 설계 및 로컬 대역 검사 완료, 불일치 시 차단 | 부분 완료: [사전 검사·설치 경계](llm-model-switch-tasks.md#m4-02-사전-검사설치-경계-진행--2026-11-08). protocol 3·전용 UID·Client 검사와 Caddy·정적 자산 검사 부품 추가. 신뢰 근거·동적 경로 검증과 preflight 연결이 미완성이어서 전환 무조건 차단; M7 배포 및 M6-02 Linux 검증 별도 |
+| M4-03 | M2-02, M4-01 | root 전용 복구 진입과 조사·복구 계약 | 중단·orphan·불일치·journal 없는 불명 작업을 독립 hold 보존하며 확인/복구; Client UID 거부 | 미완료: 내부 `recover`/`resolve_verified`만 있으며 bridge/CLI 진입과 runtime 검증 연결 없음. journal이 빈 상태에서 잔존 hold와 작업을 연결할 영속 근거 필요. DB/journal 삭제로 차단을 해제하지 않음 |
+| M5-01 | M2-03, M4-01 | 공통 모델 해석과 active-follow, 모델별 옵션 | 채팅·요약·제목·이미지 의도/프롬프트가 검증된 모델 프로필·예산을 사용하고 호환 회귀 통과 | 미착수: 모델별 context·기능 프로필과 검증된 최종 payload 토큰 계산 필요 |
+| M5-02 | M2-02, M3-01 | Client admission과 gate의 stale 요청 처리 | 신규 요청 409·초안 보존, 모델 snapshot epoch 검증, 기존 요청 drain, 백그라운드 보류 및 동시 진입 경합 검증 | 미착수: 구형·후보 gate의 hold 중 대기 후 원본문 전달은 계약 미충족 |
 | M5-03 | M1-03, M2-02 | 범위 내 다른 LLM/GPU 호출자 및 gate/Studio 최소 연동 | 독립 Wiki를 제외한 자동 경로가 공용 잠금·journal·owned hold를 따르거나 명확히 차단됨 | 미착수: 벤치마크 직접 systemctl과 360초 timeout 후 불명 작업 처리 확인. 독립 Wiki API/UI 통합은 후속 작업; Studio DB fence·전체 배포는 범위 아님 |
 | M6-01 | M3-02, M4-03, M5-01, M5-02, M5-03 | 같은 최종 후보의 UI/API/CLI→worker 통합 회귀 | 중복·동시성·hold·cleanup crash window·불명 결과·재시작과 기존 회귀 통과 | 부분 완료: 기존 219 통과는 선행 증거일 뿐 최종 후보 통과 아님 |
 | M6-02 | M4-02, M7-01 | 최소 Linux 격리 시험 | 실제 SO_PEERCRED·socket activation·root bootstrap·ACL/SELinux/xattr·CAP_SYS_PTRACE/proc namespace·재시작·원자 교체 검증 | 미완료: macOS 대역만 있음. 과거 유지보수 VM/DB 차단 시험은 재개하지 않음 |
-| M7-01 | M2-02, M4-02, M4-03 | 패키지·credential·state 초기화, CLI 백업/교체, 공용 변경·비활성 설치·복구/rollback 절차 | 미해결 상태 보존, 중복 controller 방지, Studio 독립 배포 보존이 가능한 검토용 runbook | 부분 완료: 템플릿만 있음; 완전한 설치·복구 절차 미작성 |
+| M7-01 | M2-02, M4-02, M4-03 | 패키지·credential·state 초기화, CLI 백업/교체, 공용 변경·비활성 설치·복구/rollback 절차 | 미해결 상태 보존, 중복 controller 방지, Studio 독립 배포 보존이 가능한 검토용 runbook | 부분 완료: 템플릿만 있음; root 관리 Client runtime·정적 자산·실제 Caddy route/admin·OS runtime 신뢰 검사 및 배포/DB 권한 이관·복구 절차 미완료 |
 | M7-02 | M1-02, M1-03, M6-01, M6-02, M7-01 | 배포 준비 판정표 | 후보 commit/hash·시험 근거·구체 변경/복구 목록이 일치하고 미확인 해소·fail-closed 확인 | 미완료 |
 | M8-01 | M7-02 | 허용된 운영 단계에서 비활성 설치→준비 확인→단일 CLI/API 경로 활성화 | 원본 CLI 백업, Wiki를 제외한 제어 우회 제거 및 실제 gate/Studio owned 계약 확인. Wiki 예외와 영향 기록 | 미착수: 이 문서 갱신은 운영 실행 승인 아님 |
 | M8-02 | M8-01 | 실제 UI A→B 전환과 B 후속 대화 | 현재 모델 갱신, 같은 모델·CLI/API 일치·이미지/채팅 경합 및 운영 회귀 증거 확보 | 미착수: 사용자 기능의 최종 완료 게이트 |

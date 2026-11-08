@@ -60,11 +60,15 @@ export function newRequestId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+export class ApiError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
 export const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
   const response = await fetch(`${API}${path}`, { ...init, headers: { 'Content-Type': 'application/json', 'X-BC250-Client': '1', ...init.headers } });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(body?.error?.message || '요청에 실패했습니다.');
+    throw new ApiError(response.status, body?.error?.message || '요청에 실패했습니다.');
   }
   return response.status === 204 ? undefined as T : response.json();
 };
