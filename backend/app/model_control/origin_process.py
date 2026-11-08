@@ -17,10 +17,19 @@ def verify_caddy_identity(*, unit, account, group, executable, argv, binary_dige
     The caller supplies independently reviewed fixed policy, not request data.
     This does not verify shared libraries, dynamic responses, or origin safety.
     """
+    if unit != 'caddy.service':
+        raise ValueError('Invalid Caddy unit policy')
+    return _verify_service_identity(unit=unit, account=account, group=group, executable=executable,
+                                    argv=argv, binary_digest=binary_digest)
+
+
+def _verify_service_identity(*, unit, account, group, executable, argv, binary_digest):
+    """Verify a reviewed single-process service; this does not prove response provenance."""
     import grp
     import pwd
-    if unit != 'caddy.service' or not isinstance(argv, list) or not argv or argv[0] != executable:
-        raise ValueError('Invalid Caddy unit policy')
+    if (not isinstance(unit, str) or not re.fullmatch(r'[a-zA-Z0-9_.@-]+\.service', unit)
+            or not isinstance(argv, list) or not argv or argv[0] != executable):
+        raise ValueError('Invalid service unit policy')
     if (not isinstance(binary_digest, str) or not re.fullmatch(r'[0-9a-f]{64}', binary_digest)
             or not isinstance(executable, str) or not executable.startswith('/')
             or any(not isinstance(arg, str) or not arg for arg in argv)):
@@ -79,6 +88,83 @@ def verify_caddy_identity(*, unit, account, group, executable, argv, binary_dige
     finally:
         os.close(fd)
     return (pid, parts[19], uid, gid)
+
+
+def inspect_dynamic_backend(*, unit, account, group, executable, argv, binary_digest, tree, files):
+    """Inspect one reviewed backend and code tree, without claiming origin safety.
+
+    The caller must independently trust the policy. Listening socket ownership,
+    shared libraries, runtime inputs and every possible response remain unchecked.
+    """
+    args = dict(unit=unit, account=account, group=group, executable=executable,
+                argv=argv, binary_digest=binary_digest)
+    identity = _verify_service_identity(**args)
+    verify_static_route_assets({'backend': {'kind': 'static', 'target': tree}},
+                               {'backend': files}, caddy_pid=identity[0])
+    if identity != _verify_service_identity(**args):
+        raise RuntimeError('Backend identity changed during inspection')
+    return identity
+
+
+def inspect_loopback_listener(target, *, backend_pid, caddy_pid, proc_root=Path('/proc')):
+    """Check one Linux TCP listener and its sole visible process owner.
+
+    Requires a complete, privileged /proc view; inaccessible entries and
+    observed changes fail closed, but FD transfers and other races may escape
+    detection. PID namespace and hidepid visibility and separate task FD
+    tables are not established, so this does not prove exclusive ownership.
+    The snapshot cannot prevent later changes, authenticate HTTP responses,
+    or establish the safety of a network namespace or runtime.
+    """
+    if (not isinstance(target, str) or not re.fullmatch(r'127\.0\.0\.1:[1-9][0-9]{0,4}', target)
+            or int(target.split(':')[1]) > 65535
+            or type(backend_pid) is not int or backend_pid <= 0
+            or type(caddy_pid) is not int or caddy_pid <= 0):
+        raise ValueError('Invalid listener policy')
+    root = Path(proc_root)
+    port = int(target.split(':')[1])
+
+    def namespace(pid):
+        info = os.stat(root / str(pid) / 'ns/net')
+        return info.st_dev, info.st_ino
+
+    def listeners():
+        found = []
+        for protocol in ('tcp', 'tcp6'):
+            lines = (root / str(backend_pid) / 'net' / protocol).read_text().splitlines()
+            remote_header = 'rem_address' if protocol == 'tcp' else 'remote_address'
+            if not lines or lines[0].split()[:4] != ['sl', 'local_address', remote_header, 'st']:
+                raise RuntimeError('Invalid TCP listener table')
+            for line in lines[1:]:
+                fields = line.split()
+                if len(fields) < 10 or not re.fullmatch(r'[0-9A-Fa-f]+:[0-9A-Fa-f]{4}', fields[1]):
+                    raise RuntimeError('Invalid TCP listener entry')
+                address, encoded_port = fields[1].split(':')
+                if fields[3] != '0A' or int(encoded_port, 16) != port:
+                    continue
+                if protocol != 'tcp' or address.upper() != '0100007F' or not re.fullmatch(r'[1-9][0-9]*', fields[9]):
+                    raise RuntimeError('Ambiguous listener address or inode')
+                found.append(fields[9])
+        if len(found) != 1:
+            raise RuntimeError('Listener is absent or has multiple sockets')
+        return found[0]
+
+    ns = namespace(backend_pid)
+    if namespace(caddy_pid) != ns or namespace('self') != ns:
+        raise RuntimeError('Listener network namespace mismatch')
+    inode = listeners()
+    pids_before = {entry.name for entry in os.scandir(root) if entry.name.isdigit()}
+    owners = set()
+    for pid in pids_before:
+        with os.scandir(root / pid / 'fd') as entries:
+            for entry in entries:
+                if os.readlink(entry.path) == f'socket:[{inode}]':
+                    owners.add(int(pid))
+    pids_after = {entry.name for entry in os.scandir(root) if entry.name.isdigit()}
+    if (pids_before != pids_after or owners != {backend_pid} or listeners() != inode
+            or namespace(backend_pid) != ns or namespace(caddy_pid) != ns or namespace('self') != ns):
+        raise RuntimeError('Listener owner or namespace is unstable or untrusted')
+    return inode
 
 
 def verify_static_route_assets(routes, reviewed_assets, *, caddy_pid):

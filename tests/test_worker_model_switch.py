@@ -29,6 +29,18 @@ class Gate:
         self.calls.append("pause")
         self.holds.add(hold)
 
+    async def reserve_recovery(self, hold):
+        assert hold in self.holds
+        return 'e' * 32
+
+    async def verify_recovery_reservation(self, hold, epoch):
+        assert hold in self.holds and epoch == 'e' * 32
+        return list(self.holds)
+
+    async def release_recovery_reservation(self, hold, epoch, holds):
+        assert set(holds) == self.holds
+        await self.release(hold)
+
     async def drain(self):
         self.calls.append("drain")
 
@@ -250,3 +262,35 @@ def test_corrupt_or_missing_journal_is_not_treated_as_empty(tmp_path):
     path.write_text('{"old":"old"}')
     with pytest.raises(SwitchRecoveryRequired):
         journal.read()
+
+
+async def test_recovery_rechecks_reservation_before_model_mutation(setup):
+    switch, journal, gate, service = setup
+    service.crash = True
+    with pytest.raises(SimulatedCrash):
+        await switch.switch('new')
+    service.crash = False
+    calls = 0
+    async def verify(hold, epoch):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError('conflicting hold')
+    gate.verify_recovery_reservation = verify
+    before = list(service.calls)
+    with pytest.raises(SwitchRecoveryRequired):
+        await switch.recover()
+    assert calls == 2 and service.calls == before
+    assert journal.read() and len(gate.holds) == 2
+
+
+async def test_switch_rejects_unsupported_reservation_before_mutation(setup):
+    switch, journal, gate, service = setup
+    async def unsupported(hold):
+        raise RuntimeError('unsupported reservation')
+    gate.reserve_recovery = unsupported
+    with pytest.raises(SwitchRecoveryRequired):
+        await switch.switch('new')
+    assert service.model == 'old'
+    assert all(call[0] != 'apply' for call in service.calls)
+    assert journal.read() and len(gate.holds) == 2

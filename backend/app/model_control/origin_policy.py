@@ -45,6 +45,11 @@ def verify_untrusted_download_response(status, headers):
 
     `headers` must contain every wire header as (name, value) pairs. This is not
     sufficient for HTML/API responses, redirects, or service-worker provenance.
+    Reject all other headers: even an attachment can mutate origin state via
+    Set-Cookie or Clear-Site-Data. A single checked response cannot establish
+    that an untrusted upstream will emit this policy on every response.
+    This intentionally rejects even routine headers such as Date and
+    Content-Length; a deployment must enforce this exact wire policy.
     """
     if type(status) is not int or status != 200 or not isinstance(headers, (list, tuple)):
         raise ValueError('Unsupported download response')
@@ -61,12 +66,11 @@ def verify_untrusted_download_response(status, headers):
         if key in fields:
             raise ValueError('Duplicate header')
         fields[key] = value.strip()
-    if (fields.get('content-type', '').lower() != 'application/octet-stream'
+    if (set(fields) != {'content-type', 'content-disposition', 'x-content-type-options', 'content-security-policy'}
+            or fields.get('content-type', '').lower() != 'application/octet-stream'
             or fields.get('content-disposition', '').lower() != 'attachment'
             or fields.get('x-content-type-options', '').lower() != 'nosniff'
-            or fields.get('content-security-policy') != "default-src 'none'; sandbox"
-            or 'service-worker-allowed' in fields or 'location' in fields
-            or 'content-encoding' in fields):
+            or fields.get('content-security-policy') != "default-src 'none'; sandbox"):
         raise ValueError('Untrusted response is not an inert download')
 
 
@@ -193,9 +197,10 @@ def load_reviewed_manifest(path, *, expected_manifest_digest):
             raise ValueError('Reviewed manifest changed or digest mismatched')
         value = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
         valid_keys = ({'version', 'config_digest', 'admin_socket', 'routes'} if isinstance(value, dict) and value.get('version') == 1
+                      else {'version', 'config_digest', 'admin_socket', 'routes', 'caddy', 'static_assets', 'backends'} if isinstance(value, dict) and value.get('version') == 3
                       else {'version', 'config_digest', 'admin_socket', 'routes', 'caddy', 'static_assets'})
         if (not isinstance(value, dict) or set(value) != valid_keys
-                or type(value['version']) is not int or value['version'] not in (1, 2)
+                or type(value['version']) is not int or value['version'] not in (1, 2, 3)
                 or not isinstance(value['config_digest'], str)
                 or not re.fullmatch(r'[0-9a-f]{64}', value['config_digest'])
                 or not isinstance(value['admin_socket'], str) or not isinstance(value['routes'], dict)
@@ -214,16 +219,18 @@ def load_reviewed_manifest(path, *, expected_manifest_digest):
 def inspect_reviewed_static_origin(path, *, expected_manifest_digest):
     """Bind reviewed policy to authenticated Caddy and static files only.
 
-    This is deliberately not called by the enabling preflight. In particular,
-    even a successful return says nothing about dynamic routes, loaded shared
-    libraries or the provenance of the independently supplied digest.
+    Version 3 also inspects reviewed dynamic backend processes and code trees.
+    Dynamic routes remain unverified: listener ownership, runtime dependencies,
+    and response policy are not established. This is deliberately not called
+    by the enabling preflight, and does not establish the digest's provenance.
     """
-    from .origin_process import verify_caddy_identity, verify_static_route_assets
+    from .origin_process import (verify_caddy_identity, verify_static_route_assets,
+                                 inspect_dynamic_backend, inspect_loopback_listener)
     from .origin_transport import fetch_caddy_config, verify_admin_group
 
     manifest = load_reviewed_manifest(path, expected_manifest_digest=expected_manifest_digest)
-    if manifest['version'] != 2:
-        raise ValueError('Static origin manifest version 2 required')
+    if manifest['version'] not in (2, 3):
+        raise ValueError('Static origin manifest version 2 or 3 required')
     caddy = manifest['caddy']
     required = {'unit', 'account', 'group', 'executable', 'argv', 'binary_digest', 'admin_group'}
     if not isinstance(caddy, dict) or set(caddy) != required or any(not isinstance(caddy[k], str) or not caddy[k] for k in required - {'argv'}):
@@ -240,6 +247,25 @@ def inspect_reviewed_static_origin(path, *, expected_manifest_digest):
     match_reviewed_config(first, expected_digest=manifest['config_digest'], admin_socket=manifest['admin_socket'])
     routes = enumerate_supported_routes(first, manifest['routes'])
     verify_static_route_assets(routes, manifest['static_assets'], caddy_pid=identity[0])
+    backend_listeners = []
+    backend_checks = []
+    if manifest['version'] == 3:
+        backends = manifest['backends']
+        dynamic = {key for key, route in routes.items() if route['kind'] != 'static'}
+        if not isinstance(backends, dict) or set(backends) != dynamic:
+            raise ValueError('Backend inventory and dynamic routes differ')
+        required_backend = {'kind', 'target', 'unit', 'account', 'group', 'executable',
+                            'argv', 'binary_digest', 'tree', 'files'}
+        for key in sorted(dynamic):
+            backend = backends[key]
+            if (not isinstance(backend, dict) or set(backend) != required_backend
+                    or backend['kind'] != routes[key]['kind'] or backend['target'] != routes[key]['target']):
+                raise ValueError('Backend policy differs from route')
+            backend_args = {name: backend[name] for name in required_backend - {'kind', 'target'}}
+            backend_identity = inspect_dynamic_backend(**backend_args)
+            backend_checks.append((backend_args, backend_identity))
+            listener_args = {'target': backend['target'], 'backend_pid': backend_identity[0], 'caddy_pid': identity[0]}
+            backend_listeners.append((listener_args, inspect_loopback_listener(**listener_args)))
     second = read_config()
     match_reviewed_config(second, expected_digest=manifest['config_digest'], admin_socket=manifest['admin_socket'])
     if (config_digest(first) != config_digest(second)
@@ -247,5 +273,9 @@ def inspect_reviewed_static_origin(path, *, expected_manifest_digest):
             or (admin_gid, admin_uid, primary_gid) != verify_admin_group(caddy['admin_group'], caddy['account'])
             or manifest != load_reviewed_manifest(path, expected_manifest_digest=expected_manifest_digest)):
         raise ValueError('Caddy or reviewed origin policy changed')
+    if any(inspect_dynamic_backend(**args) != identity for args, identity in backend_checks):
+        raise ValueError('Backend identity changed')
+    if any(inspect_loopback_listener(**args) != inode for args, inode in backend_listeners):
+        raise ValueError('Backend listener changed')
     return {'static_routes': sorted(key for key, route in routes.items() if route['kind'] == 'static'),
             'unverified_routes': sorted(key for key, route in routes.items() if route['kind'] != 'static')}

@@ -22,7 +22,7 @@ Worker의 기존 preflight가 gate 계정 `ai-gate`를 요구한다는 사실을
 - gate의 admin, Client, Studio, switch credential은 서로 다른 고유 비밀이다. 운영자의 legacy pause는 admin 역할만 제어하고, Client·Studio·worker는 각각 `client-<32hex>`, `studio-<32hex>`, `switch-<32hex>` 자신의 hold만 획득·해제한다. Client와 worker는 legacy·startup 또는 다른 주체의 hold를 해제하지 않는다. 기존 Client gate-control은 Client 소유 hold 범위로 바꾸며 운영자의 독립 pause는 root 관리 절차에서 다룬다. Studio coordination endpoint는 gate의 모든 키와 다른 별도 자격을 쓴다.
 - Client gate-control의 hold ID는 신뢰된 Client 서비스 설정 또는 영속 상태에서 관리한다. 프로세스 재시작과 요청 응답 유실 뒤에도 같은 ID를 추적해야 하며 브라우저가 임의 ID를 지정해 다른 hold를 해제하도록 하지 않는다. 활성화 전에 기존 control 호출자·응답 계약과 회복 흐름을 M5/M6에서 검증한다.
 - 기존 origin을 유지하므로 운영자 UI가 읽는 Client 자산뿐 아니라 같은 origin의 Studio·Wiki 등에서 실행될 수 있는 자산·응답과 이를 배포하는 경로도 검토한다. 실효 Caddy 설정·관리 인터페이스와 프런트 자산의 provenance, 실행 서비스·출력 경계가 신뢰할 수 없는 상태에서는 전환을 활성화하지 않는다. 이는 독립 Wiki의 모델 호출을 gate로 옮기는 작업과 구분한다.
-- M4-02 검증기는 root 관리 manifest에 고정한 origin/listener, 전체 실효 HTTP 설정, 프로젝트별 정적 자산·backend 실행 경로 및 revision을 실제 Caddy 프로세스·namespace·파일과 대조해야 한다. 미등록 route·upstream·파일, 소유권/권한 불일치, 해시 불일치, 불명 설정 또는 관리 인터페이스 접근 권한 미확인은 모두 차단한다. Caddy 설정은 실제 적용 상태를 읽고, 단순 Caddyfile 문자열만으로 판정하지 않는다. 검사 전후 Caddy 프로세스·설정·manifest가 바뀌지 않았는지도 확인한다.
+- M4-04에서 완성할 검증기는 root 관리 manifest에 고정한 origin/listener, 전체 실효 HTTP 설정, 프로젝트별 정적 자산·backend 실행 경로 및 revision을 실제 Caddy 프로세스·namespace·파일과 대조해야 한다. 미등록 route·upstream·파일, 소유권/권한 불일치, 해시 불일치, 불명 설정 또는 관리 인터페이스 접근 권한 미확인은 모두 차단한다. Caddy 설정은 실제 적용 상태를 읽고, 단순 Caddyfile 문자열만으로 판정하지 않는다. 검사 전후 Caddy 프로세스·설정·manifest가 바뀌지 않았는지도 확인한다.
 - manifest는 untrusted SSH 사용자가 임의 내용을 root-owned 파일로 승격하는 통로가 되어서는 안 된다. M7에서 root가 검토한 기준 또는 별도 서명 권한의 릴리스만 허용하는 제한 승격 절차를 준비한다. Studio는 자기 산출물만 독립 승격할 수 있어야 하며 Client·gate 전체 재배포나 DB fence를 요구하지 않는다. Caddy 관리 인터페이스는 검증 외 임의 변경을 허용하는 일반 사용자 경로가 없도록 제한하고 실제 접근 경계를 검증한다.
 - 정적 파일 해시만으로 동적 HTML·업로드·저장된 스크립트·service worker의 same-origin 영향을 증명할 수 없다. Wiki 기능 통합 예외를 유지하되 같은 origin의 각 동적 응답·업로드를 분류하고, 신뢰하지 않는 활성 콘텐츠의 inline 제공·script 실행·상위 service-worker scope 등을 막는 정책과 검증 근거를 별도로 마련한다. 알 수 없는 동적 경로를 안전하다고 가정하지 않는다.
 - 검증기 지원 범위는 root 관리 정적 자산, 신뢰된 backend의 `application/json` API, attachment 다운로드, MIME이 제한된 이미지 응답으로 좁히고 각 경로의 `nosniff` 등 응답 정책을 강제·시험한다. HTML/SVG/JavaScript 업로드의 inline 제공과 검증되지 않은 동적 HTML 렌더러·알 수 없는 handler/upstream은 거절한다. 정적 파일 해시와 backend 코드의 신뢰성은 XSS 부재 자체를 증명하지 않으므로 렌더·업로드·service-worker 범위에 대한 별도 보안 검토와 실제 응답 회귀를 요구한다.
@@ -39,7 +39,7 @@ hold 기간에만 거절하면 **hold 이전에 모델을 조회하고 hold 해�
 
 gate 프로세스 교체 시 먼저 유입·제어 쓰기를 제한하고 기존 active 요청을 0으로 배출한다. waiting도 0이면 정상적으로 교체한다. 기존 관리자 pause 때문에 waiting이 남았다면 pause를 풀어 원래 요청을 재전송하지 않는다. pause snapshot을 영속 보존한 다음 구형 gate를 종료해 그 대기 연결을 실패로 종료하고 새 gate의 startup/legacy hold로 이어간다. 이 분기에서 active 요청이 이미 끝났고 남은 연결이 실패로 끝나는지 확인할 수 없다면 교체하지 않는다. 모델 조회는 추론 대기열과 분리해 hold 중 `ready=false`와 현재 epoch를 제공한다. 모델 ID와 epoch는 같은 세대의 snapshot으로 확인해야 하며, 조회 중 전환이 끼면 결과를 폐기한다. 작업자의 모델 검증은 gate를 우회한 loopback llama health·model ID를 사용한다. 기존 `/v1/models`와 호환되는 snapshot 전달 경로·오류 형식은 M5-02에서 Client와 gate를 함께 구현하고 통합 시험한다.
 
-현재 `gate_candidate.py`의 `Admission.enter()`는 pause 중 대기 후 원래 요청을 전달하므로 위 계약을 **아직 충족하지 않는다**. 현재 worker preflight도 protocol 2만 검사하므로 protocol 3 필수 확인으로 바꿔야 한다. M4-02/M5-02에서 gate·Studio·worker·Client를 함께 변경·검증하기 전 운영 전환 기능을 활성화하지 않는다.
+현재 `gate_candidate.py`의 `Admission.enter()`는 pause 중 대기 후 원래 요청을 전달하므로 위 계약을 **아직 충족하지 않는다**. worker 후보 preflight는 protocol 3을 요구하지만 운영 gate와 기존 후보는 이를 제공하지 않는다. M4-02/M5-02에서 gate·Studio·worker·Client를 함께 변경·검증하기 전 운영 전환 기능을 활성화하지 않는다.
 
 ## 4. 공유 잠금·journal과 복구
 
@@ -49,7 +49,7 @@ Studio는 공유 잠금 안에서 journal을 읽고 미해결·손상·부재·�
 
 worker는 단일 영속 작업 접수→GPU lock→실제 계약 preflight→이전 모델 확인→journal→자기 hold→drain→설정 원자 교체·고정 서비스 재시작→health와 모델 ID 확인 순서로 진행한다. restart 결과가 불명이면 겹치는 restart와 보류 해제를 금지한다. 실패 시 이전 모델 설정을 복원하고 이전 모델의 health·ID까지 검증한다. 검증 불능이면 journal/hold 및 `recovery_required`를 유지한다.
 
-성공·복구 정리 중 어느 지점에서 중단돼도 작업 DB·journal·gate hold가 모순되면 성공이나 안전한 해제로 추정하지 않는다. worker 재시작은 서로 대조하고 미해결이면 새 전환을 차단한다. Studio도 journal과 gate의 독립 hold를 확인해 GPU 작업을 차단해야 한다. 현재 후보는 모델 검증 후 GPU 잠금 안에서 journal을 먼저 비우고 자기 hold를 해제한다. journal 교체 후 fsync가 실패하면 hold를 유지하고 재시작 없이 복구 필요로 둔다. hold 해제 응답이 불명이면 다시 획득을 시도하되 재획득 실패 가능성도 불명으로 취급한다. **비워진 journal과 잔존 hold를 정확한 작업에 연결할 영속 근거는 현재 DB에 없으므로**, M4-03에서 상관관계 기록·검증과 안전한 root 복구를 구현하기 전 활성화하지 않는다. root 전용 조사·복구 진입에서 파일 삭제나 임의 hold 해제로 해결하지 않는다. 정리의 모든 중단 지점을 M6에서 동일 최종 후보로 시험한다.
+성공·복구 정리 중 어느 지점에서 중단돼도 작업 DB·journal·gate hold가 모순되면 성공이나 안전한 해제로 추정하지 않는다. worker 재시작은 서로 대조하고 미해결이면 새 전환을 차단한다. Studio도 journal과 gate의 독립 hold를 확인해 GPU 작업을 차단해야 한다. 현재 후보는 모델 검증 후 GPU 잠금 안에서 journal을 먼저 비우고 자기 hold를 해제한다. journal 교체 후 fsync가 실패하면 hold를 유지하고 재시작 없이 복구 필요로 둔다. hold 해제 응답이 불명이면 다시 획득을 시도하되 재획득 실패 가능성도 불명으로 취급한다. 후보 DB에 journal 기록 및 hold 획득 전 상관 hold ID를 영속 기록하지만, 빈 journal과 잔존 hold를 안전하게 복구하는 경로는 아직 완성되지 않았다. root 전용 조사·복구 진입에서 파일 삭제나 임의 hold 해제로 해결하지 않는다. 정리의 모든 중단 지점을 M6에서 동일 최종 후보로 시험한다.
 
 ## 5. 범위 내 다른 호출자
 
@@ -67,7 +67,18 @@ M7은 실제 파일·unit·credential·접근 권한, 백업 및 롤백을 포�
 
 ## 7. 후속 작업과 검증 경계
 
-- **M4-02/03:** gate 계정·경로·credential 및 실제 preflight 정합, root 전용 복구 진입과 불명 상태 처리. M2-02 문서 완료가 구현 완료는 아니다.
+- **M4-02/03:** gate 계정·경로·credential 검사와 root 전용 복구 진입의 기본 후보. **M4-04:** 동일 origin의 완전한 preflight 및 orphan·불일치의 영속 조사·안전한 종결. M2-02 문서 완료가 구현 완료는 아니다.
 - **M5-02/03:** hold와 원자적 admission 및 오래된 요청 거절, Client 재조회·초안, 벤치마크와 Studio 조율. Wiki 예외는 유지한다.
 - **M6-01/02:** 다른 주체의 hold 보존, pause 중 새 요청 거절, 대기 요청·hold 경합, 모든 정리 중단 지점, rollback 검증 및 실제 Linux peer UID·namespace·ACL·SELinux·systemd 경계 시험.
 - **M7/M8:** 동일 후보의 설치·백업·credential·CLI 전환·복구·롤백 절차와 운영 준비를 검토한 뒤 실제 UI A→B 및 B 대화를 확인한다. 과거 DB fence·유지보수 VM 시험은 재개하지 않는다.
+
+복구 후보 제한: 빈 journal과 영속 DB의 switch hold가 함께 남은 경우에는 root 조사에서 두 식별자를 확인할 수 있지만, 현재 gate API에는 독립 hold를 조건으로 자기 hold를 원자적으로 해제하는 연산이 없다. worker 후보는 아래 조건부 API를 요구하며 미지원·오류 시 `recovery_required`를 유지한다. 조건부 해제의 실제 gate 구현과 검증은 M5-02/M6 작업이다. 손상되거나 읽을 수 없는 journal은 내용을 노출하지 않는 조사 전용 상태로 기동하며 복구 실행과 새 전환은 차단한다. 복구 전용 Studio 검증 계약은 아래 후보이며 Studio 실제 구현과 통합 검증은 남은 과제다.
+
+M4-03 후보는 빈 journal 복구에서 상관 hold와 독립 hold를 확인한 뒤 gate의 원자 조건부 해제를 요구한다. switch credential로 `POST /control/holds/{switch-hold}/release-if-independent`에 `expected_epoch`, `required_independent_hold`를 전달한다. gate는 같은 직렬화·영속 경계에서 역할과 자기 hold, epoch 일치, 지정 독립 hold 존재를 검증하고 자기 hold만 해제해야 한다. 성공 응답은 `protocol=3`, `durable=true`, 동일 `epoch`, `held=false`, `paused=true`, 독립 hold가 포함되고 자기 hold가 빠진 `holds`를 반환한다. 미지원·오류·응답 유실은 성공으로 보지 않으며 자기 hold 재획득을 시도하고 작업을 복구 필요로 유지한다. 응답 유실과 재획득이 모두 실패하면 hold 보존을 보장할 수 없다. 이 API는 현재 gate에 없으며 M5-02에서 구현·통합 검증 전 활성화할 수 없다.
+
+
+복구 전용 Studio 검증 후보: worker는 GPU lock을 보유한 채 별도 credential로 `GET /internal/model-switch/recovery`를 호출한다. 이 endpoint는 GPU lock을 다시 취득하지 않는 비변경 조회여야 한다. Studio는 자신의 인증된 protocol 3 gate와 journal을 독립 확인하고, GPU 신규 작업이 차단되어 있고 Studio 자체의 미해결 GPU 작업·복구가 없을 때만 정확히 `protocol: 1`, `enabled: true`, `gpu_blocked: true`, `studio_recovery_clear: true`, `gate_verified: true`, `journal_sha256`을 반환한다. digest는 검증한 journal 객체를 ASCII JSON (`sort_keys=true`, `ensure_ascii=true`, 구분자 `,`와 `:`)으로 직렬화한 바이트의 SHA-256 소문자 hex다. 빈 객체도 같은 방식으로 계산한다. Studio는 임의 요청값을 반영하지 않고 직접 읽은 유효한 journal의 digest를 반환한다. worker는 전후 Studio·gate의 PID/시작시각, 양측 lock·journal inode, 잠긴 FD, journal 내용 및 양쪽 endpoint 인증을 확인한다. 이 조회의 성공은 hold 해제 권한이 아니며 별도 gate 조건부 해제 및 상태 검증이 필요하다. Studio endpoint와 조건부 gate API가 아직 없으므로 오류·미지원 시 복구를 허용하지 않는다. 실제 Studio의 잠금·admission 및 독립 복구 상태 검증과 endpoint 구현은 M5-03, 최종 통합 검증은 M6에 속한다.
+
+활성 journal 복구와 전환 실패 후 자동 롤백은 gate의 영속 배타 복구 예약도 요구한다. switch credential로 `PUT /control/holds/{own-hold}/recovery-reservation`을 호출하며, gate는 자기 hold 존재와 다른 `switch-*`·`studio-*` 또는 미확인 hold가 없음을 같은 직렬화·영속 경계에서 확인하고 예약한다. `startup`, `legacy`, 유효한 `admin-*`는 보존한다. 응답과 `/control` 상태는 `protocol=3`, `durable=true`, `paused=true`, `recovery_exclusive_hold=own-hold`, 32자리 hex `epoch`, 자기 hold를 포함한 허용 hold 목록을 제공해야 한다. worker는 예약 후와 모델 변경 직전에 epoch와 상태를 다시 검증한다. 상태 조회만으로는 조회 직후 다른 hold가 생기는 경합을 막을 수 없다. 따라서 gate는 예약이 존재하는 동안 다른 Studio·switch hold 진입을 원자적으로 거절하고, 예약과 자기 hold를 성공 응답 전에 영속화하며, 응답 유실·worker 종료·gate 재시작에도 예약을 보존해야 한다. 예약은 timeout으로 만료되지 않고 검증된 자기 hold 해제와 같은 원자적 경계에서만 해제되어야 한다. 실패 또는 결과 불명에서는 예약과 hold를 유지해 재조사한다. 이 예약 API는 아직 실제 gate에 구현되지 않았으므로 지원 여부 확인 실패 시 모델 변경 없이 복구 필요 상태로 남는다. 정상 전환의 초기 admission 및 전체 경합 방지는 gate 구현과 함께 M5-02/M6에서 검증해야 한다.
+
+정상 전환도 모델 변경 전에 같은 배타 예약을 취득하고 drain 후 다시 확인한다. 미지원 시 모델을 변경하지 않으며 불명인 journal/hold는 복구 대상으로 보존한다. 예약을 가진 작업의 정리에서는 해제 직전 검증한 epoch와 hold 목록을 `POST /control/holds/{own-hold}/release-recovery-reservation`에 `expected_epoch`, `expected_holds`로 전달한다. gate는 현재 목록과 epoch 및 예약 소유자를 같은 영속 경계에서 비교하고 자기 hold와 예약을 함께 제거해야 한다. 성공 응답은 `held=false`, `recovery_exclusive_hold=null`, protocol 3, durable, 같은 epoch, 다른 hold가 정확히 보존된 목록 및 목록과 일치하는 paused 상태를 포함한다. worker는 응답뿐 아니라 후속 `/control` 재조회도 같은 조건으로 검증한다. 어느 단계든 오류·응답 유실·불일치면 성공 처리하지 않고 자기 hold 재획득을 시도한다. 재획득이 성공해도 원래 예약의 복원은 보장되지 않으며 실패 시 hold 자체의 보존도 보장되지 않으므로 작업은 미해결이다. journal이 이미 비워진 뒤 상관 자기 예약이 남은 경우 독립 hold가 있을 때만 같은 예약 해제 API에 `required_independent_hold`를 함께 전달한다. gate는 이 hold의 존재까지 원자적으로 확인해야 한다. 타인의 예약 또는 예약 여부가 불명인 경우 차단한다. gate는 기존 조건부 해제에서도 예약이 없는 경우에만 실행되도록 원자적으로 보장해야 한다. 관련 API는 아직 gate에 구현되지 않았다.

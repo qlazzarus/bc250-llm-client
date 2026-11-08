@@ -89,6 +89,104 @@ class SwitchGate:
     async def release(self, hold_id):
         await self._hold(hold_id, False)
 
+    @staticmethod
+    def _recovery_reservation_state(state, hold_id, epoch=None):
+        if (not isinstance(state, dict) or type(state.get('protocol')) is not int
+                or state['protocol'] != 3 or state.get('durable') is not True
+                or state.get('paused') is not True
+                or state.get('recovery_exclusive_hold') != hold_id
+                or not isinstance(state.get('epoch'), str)
+                or not re.fullmatch(r'[0-9a-f]{32}', state['epoch'])
+                or (epoch is not None and state['epoch'] != epoch)
+                or not isinstance(state.get('holds'), list)):
+            raise RuntimeError('Exclusive recovery reservation unavailable')
+        holds = state['holds']
+        if (holds.count(hold_id) != 1 or len(holds) != len(set(holds))
+                or any(not isinstance(h, str) or not (
+                    h == hold_id or h in {'startup', 'legacy'}
+                    or re.fullmatch(r'admin-[A-Za-z0-9_.:-]{1,128}', h)
+                ) for h in holds)):
+            raise RuntimeError('Conflicting gate hold during recovery')
+        return state['epoch']
+
+    async def reserve_recovery(self, hold_id):
+        """Require a durable gate-side exclusion; never emulate it with a GET."""
+        if not isinstance(hold_id, str) or not re.fullmatch(r'switch-[0-9a-f]{32}', hold_id):
+            raise ValueError('Invalid switch hold ID')
+        async with httpx.AsyncClient(timeout=10, transport=self.transport, trust_env=False) as client:
+            response = await client.put(self.url + '/holds/' + hold_id + '/recovery-reservation',
+                                        headers={'Authorization': f'Bearer {self.key}'})
+            response.raise_for_status()
+            return self._recovery_reservation_state(response.json(), hold_id)
+
+    async def verify_recovery_reservation(self, hold_id, epoch):
+        state = await self.llm.gate('GET')
+        self._recovery_reservation_state(state, hold_id, epoch)
+        return list(state['holds'])
+
+    @staticmethod
+    def _released_recovery_state(state, hold_id, epoch, remaining):
+        if (not isinstance(state, dict) or type(state.get('protocol')) is not int
+                or state['protocol'] != 3 or state.get('durable') is not True
+                or state.get('epoch') != epoch or 'recovery_exclusive_hold' not in state
+                or state['recovery_exclusive_hold'] is not None
+                or type(state.get('paused')) is not bool
+                or state['paused'] != bool(remaining)
+                or not isinstance(state.get('holds'), list)
+                or any(not isinstance(h, str) for h in state['holds'])
+                or sorted(state['holds']) != sorted(remaining) or hold_id in state['holds']):
+            raise RuntimeError('Recovery reservation release could not be verified')
+
+    async def release_recovery_reservation(self, hold_id, epoch, holds, *, required_independent_hold=None):
+        """Atomically release only the reservation and owner with unchanged state."""
+        self._recovery_reservation_state({'protocol': 3, 'durable': True, 'paused': True,
+                                          'epoch': epoch, 'recovery_exclusive_hold': hold_id,
+                                          'holds': holds}, hold_id, epoch)
+        remaining = [h for h in holds if h != hold_id]
+        if required_independent_hold is not None and (required_independent_hold not in remaining
+                or not (required_independent_hold in {'startup', 'legacy'} or re.fullmatch(
+                    r'admin-[A-Za-z0-9_.:-]{1,128}', required_independent_hold))):
+            raise ValueError('Independent hold required')
+        payload = {'expected_epoch': epoch, 'expected_holds': holds}
+        if required_independent_hold is not None:
+            payload['required_independent_hold'] = required_independent_hold
+        async with httpx.AsyncClient(timeout=10, transport=self.transport, trust_env=False) as client:
+            response = await client.post(
+                self.url + '/holds/' + hold_id + '/release-recovery-reservation',
+                headers={'Authorization': f'Bearer {self.key}'},
+                json=payload)
+            response.raise_for_status()
+            value = response.json()
+            if not isinstance(value, dict) or value.get('held') is not False:
+                raise RuntimeError('Recovery hold release could not be verified')
+            self._released_recovery_state(value, hold_id, epoch, remaining)
+        self._released_recovery_state(await self.llm.gate('GET'), hold_id, epoch, remaining)
+
+    async def release_if_independent(self, hold_id, expected_epoch, required_independent_hold):
+        """Require gate-side atomic epoch and independent-hold checks; no fallback."""
+        if (not isinstance(hold_id, str) or not re.fullmatch(r"switch-[0-9a-f]{32}", hold_id)
+                or not isinstance(expected_epoch, str) or not re.fullmatch(r"[0-9a-f]{32}", expected_epoch)
+                or not isinstance(required_independent_hold, str) or not (
+                    required_independent_hold in {"startup", "legacy"}
+                    or re.fullmatch(r"admin-[A-Za-z0-9_.:-]{1,128}", required_independent_hold))):
+            raise ValueError("Invalid conditional release")
+        async with httpx.AsyncClient(timeout=10, transport=self.transport, trust_env=False) as client:
+            response = await client.post(
+                self.url + "/holds/" + hold_id + "/release-if-independent",
+                headers={"Authorization": f"Bearer {self.key}"},
+                json={"expected_epoch": expected_epoch, "required_independent_hold": required_independent_hold},
+            )
+            response.raise_for_status()
+            value = response.json()
+        if (not isinstance(value, dict) or value.get("protocol") != 3
+                or value.get("durable") is not True or value.get("epoch") != expected_epoch
+                or value.get("held") is not False or value.get("paused") is not True
+                or not isinstance(value.get("holds"), list)
+                or required_independent_hold not in value["holds"] or hold_id in value["holds"]
+                or any(not isinstance(h, str) for h in value["holds"])):
+            raise RuntimeError("Conditional hold release could not be verified")
+        return value
+
     async def drain(self):
         await self.llm.drain()
 

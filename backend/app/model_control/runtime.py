@@ -16,7 +16,7 @@ from .coordinator import ModelSwitch, SwitchJournal
 from .files import FileLock
 from .llm import SystemdLLM
 from .operations import SwitchOperations
-from .preflight import CoordinationPreflight
+from .preflight import CoordinationPreflight, RecoveryPreflight
 from .registry import ActiveModelWriter, ModelRegistry
 from .systemd import SystemctlClient, SystemdModelService
 from .worker import SwitchWorker
@@ -73,7 +73,6 @@ def build_worker():
     os.umask(0o077)
     validate_state_directory()
     journal = SwitchJournal(STATE / 'switch.json', secure_precreated=True)
-    journal.read()
     gate_key = credential('gate-key')
     llm_key = credential('llm-key', optional=True)
     studio_key = credential('studio-coordination-key')
@@ -86,9 +85,11 @@ def build_worker():
     gate = SwitchGate(settings.admission_url, gate_key, SystemdLLM(settings))
     lock = AsyncGPULock(GPU_LOCK)
     preflight = CoordinationPreflight(studio_key, gate_key, GPU_LOCK, STATE / 'switch.json', held_lock=lock.file_lock)
+    recovery_preflight = RecoveryPreflight(studio_key, gate_key, GPU_LOCK, STATE / 'switch.json',
+                                          held_lock=lock.file_lock, journal=journal)
     switch = ModelSwitch(journal, lock, gate, service, preflight=preflight)
     return SwitchWorker(SwitchOperations(STATE / 'operations.sqlite3'), switch,
-                        FileLock(WORKER_LOCK, secure_precreated=True))
+                        FileLock(WORKER_LOCK, secure_precreated=True), verify_studio=recovery_preflight)
 
 
 def inherited_socket():

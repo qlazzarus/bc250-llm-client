@@ -5,6 +5,7 @@ import socket
 import struct
 
 from .operations import IdempotencyConflict, OperationConflict
+from .recovery_diagnosis import classify_recovery_records
 from .worker import ReconciliationError, UnknownModel
 
 MAX_MESSAGE = 4096
@@ -27,7 +28,7 @@ class ModelControlBridge:
     def start(self):
         pending = self.worker.startup()
         self.healthy = True
-        if self.switch_enabled and pending and pending['state'] == 'queued':
+        if self.switch_enabled and not self.worker.reconciliation_error and pending and pending['state'] == 'queued':
             self.schedule(pending['id'])
 
     def schedule(self, operation_id):
@@ -45,10 +46,31 @@ class ModelControlBridge:
             await asyncio.gather(*tuple(self.tasks), return_exceptions=True)
         self.worker.close()
 
-    async def dispatch(self, request):
+    async def dispatch(self, request, *, uid=None):
         if not self.healthy or not isinstance(request, dict):
             return {'error': 'service_unavailable'}
         action = request.get('operation')
+        if action == 'inspect_recovery' and set(request) == {'operation'}:
+            if uid != 0:
+                return {'error': 'forbidden'}
+            pending = self.worker.store.unresolved()
+            hold_id = self.worker.store.hold_for(pending['id']) if pending else None
+            journal = self.worker.inspect_journal()
+            return {'operation': pending,
+                    'hold_id': hold_id,
+                    **journal,
+                    # These separate reads are only an investigative hint: they
+                    # do not inspect gate state or form an atomic snapshot and
+                    # must never authorize recovery or unblock switching.
+                    'record_diagnosis': classify_recovery_records(
+                        pending, hold_id, journal['journal'], journal['journal_error']),
+                    'diagnosis_scope': 'investigation_only_non_atomic_no_gate',
+                    'reconciliation_error': self.worker.reconciliation_error}
+        if action in {'recover', 'resolve_verified'} and set(request) == {'operation', 'id'}:
+            if uid != 0:
+                return {'error': 'forbidden'}
+            method = getattr(self.worker, action)
+            return await method(PRINCIPAL, request['id'])
         if action == 'models' and set(request) == {'operation'}:
             service = self.worker.switch.service
             models, current = await service.installed(), await service.current()
@@ -87,7 +109,21 @@ class ModelControlBridge:
                 raw = await asyncio.wait_for(reader.readline(), 5)
                 if len(raw) > MAX_MESSAGE or not raw.endswith(b'\n'):
                     raise ValueError('Invalid message')
-                result = await self.dispatch(json.loads(raw))
+                request = json.loads(raw)
+                if isinstance(request, dict) and request.get("operation") in {"recover", "resolve_verified"} and uid == 0:
+                    task = asyncio.create_task(self.dispatch(request, uid=uid))
+                    self.tasks.add(task)
+                    task.add_done_callback(self.tasks.discard)
+                    result = await asyncio.shield(task)
+                else:
+                    result = await self.dispatch(request, uid=uid)
+        except asyncio.CancelledError:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError, asyncio.TimeoutError):
+                pass
+            raise
         except UnknownModel:
             result = {'error': 'invalid_model'}
         except IdempotencyConflict:

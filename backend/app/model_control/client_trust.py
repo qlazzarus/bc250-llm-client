@@ -165,3 +165,42 @@ def verify_client_process(pid):
     if (host_cwd.st_dev, host_cwd.st_ino) != (proc_cwd.st_dev, proc_cwd.st_ino):
         raise RuntimeError('Unexpected Client working directory')
     verify_client_tree(CLIENT_ROOT, process_root=proc / 'root' / str(CLIENT_ROOT).lstrip('/'))
+
+
+def verify_runtime_trees(pid, reviewed_trees):
+    """Compare reviewed runtime trees with the target process's mount view.
+
+    The caller must supply a complete, independently reviewed manifest for
+    every runtime input (including libraries loaded later). This is a building
+    block, not proof of complete runtime provenance: it does not inspect ACLs,
+    writable mounts, process memory, loader configuration or mapped objects,
+    and does not pin the process or mounts against concurrent changes.
+    """
+    if type(pid) is not int or pid <= 0 or not isinstance(reviewed_trees, dict) or not reviewed_trees:
+        raise ValueError('Invalid runtime tree policy')
+    proc_root = Path('/proc') / str(pid) / 'root'
+    for root_text, manifest in reviewed_trees.items():
+        if (not isinstance(root_text, str) or not root_text.startswith('/')
+                or root_text == '/' or any(part in {'', '.', '..'} for part in root_text[1:].split('/'))):
+            raise ValueError('Invalid runtime tree path')
+        root = Path(root_text)
+        verify_asset_tree(root, manifest)
+        current = Path('/')
+        for part in root.parts[1:]:
+            current /= part
+            local = trusted_entry(current, directory=True)
+            remote = trusted_entry(proc_root / str(current).lstrip('/'), directory=True)
+            if (local.st_dev, local.st_ino) != (remote.st_dev, remote.st_ino):
+                raise RuntimeError('Process sees a different runtime path')
+        for directory, dirs, files in os.walk(root, followlinks=False, onerror=lambda e: (_ for _ in ()).throw(e)):
+            directory = Path(directory)
+            remote_dir = proc_root / str(directory).lstrip('/')
+            if set(os.listdir(remote_dir)) != set(dirs + files):
+                raise RuntimeError('Process sees different runtime entries')
+            for name in dirs + files:
+                path = directory / name
+                local = trusted_entry(path, directory=name in dirs)
+                remote = trusted_entry(proc_root / str(path).lstrip('/'), directory=name in dirs)
+                if (local.st_dev, local.st_ino) != (remote.st_dev, remote.st_ino):
+                    raise RuntimeError('Process sees different runtime files')
+        verify_asset_tree(root, manifest)

@@ -178,3 +178,37 @@ def test_inherited_socket_accepts_verified_activation_contract(monkeypatch):
     monkeypatch.setattr(runtime.grp, 'getgrnam', lambda _name: SimpleNamespace(gr_gid=100))
     monkeypatch.setattr(runtime.os, 'lstat', lambda _path: SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660, st_uid=0, st_gid=100))
     assert runtime.inherited_socket() is listener and listener.blocking is False
+
+
+def test_runtime_tree_compares_manifest_and_process_namespace(tmp_path, monkeypatch):
+    local_tree_checks(monkeypatch)
+    root = tmp_path / 'stdlib'; root.mkdir()
+    module = root / 'module.py'; module.write_text('trusted'); module.chmod(0o644)
+    manifest = {'module.py': hashlib.sha256(b'trusted').hexdigest()}
+    real_entry = client_trust.trusted_entry
+    real_listdir = os.listdir
+    remote_prefix = '/proc/123/root'
+    def namespace_path(path):
+        path = str(path)
+        return path[len(remote_prefix):] if path.startswith(remote_prefix + '/') else path
+    monkeypatch.setattr(client_trust, 'trusted_entry', lambda path, *, directory: real_entry(namespace_path(path), directory=directory))
+    monkeypatch.setattr(client_trust.os, 'listdir', lambda path: real_listdir(namespace_path(path)))
+    client_trust.verify_runtime_trees(123, {str(root): manifest})
+    module.write_text('tampered')
+    with pytest.raises(RuntimeError, match='digest mismatch'):
+        client_trust.verify_runtime_trees(123, {str(root): manifest})
+    module.write_text('trusted')
+    def mismatched(path, *, directory):
+        info = real_entry(namespace_path(path), directory=directory)
+        if str(path) == remote_prefix + str(module):
+            return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino + 1)
+        return info
+    monkeypatch.setattr(client_trust, 'trusted_entry', mismatched)
+    with pytest.raises(RuntimeError, match='different runtime files'):
+        client_trust.verify_runtime_trees(123, {str(root): manifest})
+
+
+@pytest.mark.parametrize('pid,trees', [(0, {'/usr/lib': {}}), (True, {'/usr/lib': {}}), (1, {}), (1, {'/usr/../lib': {}}), (1, {'/usr//lib': {}})])
+def test_runtime_tree_rejects_invalid_policy(pid, trees):
+    with pytest.raises(ValueError):
+        client_trust.verify_runtime_trees(pid, trees)

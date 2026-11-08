@@ -124,7 +124,7 @@ class ModelSwitch:
         self.journal, self.lock, self.gate, self.service = journal, lock, gate, service
         self.preflight = preflight
 
-    async def switch(self, target, *, operation_id=None, progress=None, verified=None):
+    async def switch(self, target, *, operation_id=None, progress=None, verified=None, hold_created=None):
         if not isinstance(target, str) or not MODEL_NAME.fullmatch(target):
             raise ValueError("Invalid model name")
         if operation_id is not None and (not isinstance(operation_id, str)
@@ -165,14 +165,19 @@ class ModelSwitch:
                          stage="pausing", mutation_started=False)
             if operation_id is not None:
                 state["operation_id"] = operation_id
+            if hold_created is not None:
+                hold_created(state["hold_id"])
             report("pausing")
             self.journal.write(state)
             try:
                 await self.gate.acquire(state["hold_id"])
+                epoch = await self.gate.reserve_recovery(state["hold_id"])
+                await self.gate.verify_recovery_reservation(state["hold_id"], epoch)
                 state["stage"] = "draining"
                 self.journal.write(state)
                 report("draining")
                 await self.gate.drain()
+                await self.gate.verify_recovery_reservation(state["hold_id"], epoch)
                 state.update(stage="switching", mutation_started=True)
                 self.journal.write(state)
                 report("switching")
@@ -182,7 +187,7 @@ class ModelSwitch:
                 report("verifying")
                 await self.service.healthy(target)
                 record(current=target)
-                await self._finish_verified_cleanup(state)
+                await self._finish_verified_cleanup(state, reservation_epoch=epoch)
                 return "succeeded"
             except SwitchOutcomeUnknown as error:
                 # A timed-out systemctl client does not cancel its systemd job;
@@ -191,7 +196,7 @@ class ModelSwitch:
             except Exception as original:
                 try:
                     report("rolling_back")
-                    await self._recover_locked(state)
+                    await self._recover_locked(state, require_exclusive=True)
                     record(current=old)
                 except Exception as recovery:
                     raise SwitchRecoveryRequired("Model recovery could not be verified") from recovery
@@ -201,41 +206,59 @@ class ModelSwitch:
                         "service_unavailable")
                 raise SwitchFailed("Switch failed; previous model restored", error_code=code) from original
 
-    async def recover(self):
+    async def recover(self, *, expected=None, preflight=None):
         async with self.lock:
             state = self.journal.read()
+            if expected is not None and state != expected:
+                raise SwitchRecoveryRequired("Journal changed during recovery")
+            if preflight is not None:
+                await asyncio.to_thread(preflight)
+            if self.journal.read() != state:
+                raise SwitchRecoveryRequired("Journal changed during recovery verification")
             if not state:
                 return "nothing_to_recover"
             try:
-                await self._recover_locked(state)
+                await self._recover_locked(state, require_exclusive=True)
             except Exception as error:
                 raise SwitchRecoveryRequired("Model recovery could not be verified") from error
             return "restored"
 
-    async def _recover_locked(self, state):
+    async def _recover_locked(self, state, *, require_exclusive=False):
         # Reacquire idempotently: the interrupted request may have persisted a
         # hold even if its HTTP response was lost. Preserve unrelated holds.
         await self.gate.acquire(state["hold_id"])
+        epoch = None
+        if require_exclusive:
+            epoch = await self.gate.reserve_recovery(state["hold_id"])
+            await self.gate.verify_recovery_reservation(state["hold_id"], epoch)
         await self.service.ensure_settled()
         if hasattr(self.gate, "drain_recovery"):
             await self.gate.drain_recovery()
         else:
             await self.gate.drain()
+        if require_exclusive:
+            await self.gate.verify_recovery_reservation(state["hold_id"], epoch)
         if state["mutation_started"]:
             await self.service.apply(state["old"])
         await self.service.healthy(state["old"])
-        await self._finish_verified_cleanup(state)
+        await self._finish_verified_cleanup(state, reservation_epoch=epoch)
 
-    async def _finish_verified_cleanup(self, state):
+    async def _finish_verified_cleanup(self, state, *, reservation_epoch=None):
         # Keep the durable gate hold while clearing the journal. Even a failed
         # fsync can happen after the journal was replaced, so do not mutate the
         # model again after cleanup has started.
+        holds = None
+        if reservation_epoch is not None:
+            holds = await self.gate.verify_recovery_reservation(state['hold_id'], reservation_epoch)
         try:
             self.journal.clear()
         except Exception as error:
             raise SwitchOutcomeUnknown("Journal cleanup outcome is unknown") from error
         try:
-            await self.gate.release(state["hold_id"])
+            if reservation_epoch is not None:
+                await self.gate.release_recovery_reservation(state['hold_id'], reservation_epoch, holds)
+            else:
+                await self.gate.release(state["hold_id"])
         except Exception as error:
             # A lost response may mean the hold was removed. Reacquire it when
             # possible and require reconciliation; never assume either result.

@@ -102,3 +102,88 @@ def test_static_inspection_binds_manifest_process_config_and_assets(monkeypatch)
     monkeypatch.setattr(origin, 'verify_caddy_identity', lambda **_k: next(identities))
     with pytest.raises(ValueError, match='changed'):
         policy.inspect_reviewed_static_origin('/manifest', expected_manifest_digest='c' * 64)
+
+
+def test_dynamic_backend_checks_reviewed_tree_and_stable_process(monkeypatch):
+    args = dict(unit='wiki.service', account='wiki', group='wiki', executable='/usr/bin/python3',
+                argv=['/usr/bin/python3', '/opt/wiki/main.py'], binary_digest='a' * 64,
+                tree='/opt/wiki', files={'main.py': 'b' * 64})
+    calls = []
+    monkeypatch.setattr(origin, '_verify_service_identity', lambda **kw: (123, '456', 970, 970))
+    monkeypatch.setattr(origin, 'verify_static_route_assets', lambda routes, assets, **kw: calls.append((routes, assets, kw)))
+    assert origin.inspect_dynamic_backend(**args) == (123, '456', 970, 970)
+    assert calls == [({'backend': {'kind': 'static', 'target': '/opt/wiki'}},
+                      {'backend': args['files']}, {'caddy_pid': 123})]
+    identities = iter([(123, '456', 970, 970), (124, '457', 970, 970)])
+    monkeypatch.setattr(origin, '_verify_service_identity', lambda **kw: next(identities))
+    with pytest.raises(RuntimeError, match='changed'):
+        origin.inspect_dynamic_backend(**args)
+
+
+def test_origin_backend_inventory_is_bound_to_routes_but_stays_unverified(monkeypatch):
+    from backend.app.model_control import origin_policy as policy, origin_transport
+    config = {'admin': {'listen': 'unix//run/caddy-admin/control.sock'}, 'apps': {'http': {'servers': {
+        's': {'listen': [':80'], 'routes': [
+            {'@id': 'ui', 'handle': [{'handler': 'file_server', 'root': '/opt/client/dist'}]},
+            {'@id': 'api', 'handle': [{'handler': 'reverse_proxy', 'upstreams': [{'dial': '127.0.0.1:8010'}]}]},
+        ]}}}}}
+    backend = {'kind': 'dynamic', 'target': '127.0.0.1:8010', 'unit': 'client.service', 'account': 'client',
+               'group': 'client', 'executable': '/usr/bin/python3', 'argv': ['/usr/bin/python3'],
+               'binary_digest': 'a' * 64, 'tree': '/opt/client', 'files': {'main.py': 'b' * 64}}
+    manifest = {'version': 3, 'admin_socket': '/run/caddy-admin/control.sock', 'config_digest': policy.config_digest(config),
+                'routes': {'ui': {'kind': 'static', 'target': '/opt/client/dist'}, 'api': {'kind': 'dynamic', 'target': '127.0.0.1:8010'}},
+                'static_assets': {'ui': {'index.html': 'a' * 64}}, 'backends': {'api': backend},
+                'caddy': {'unit': 'caddy.service', 'account': 'caddy', 'group': 'caddy', 'executable': '/usr/bin/caddy',
+                          'argv': ['/usr/bin/caddy'], 'binary_digest': 'b' * 64, 'admin_group': 'caddy-admin'}}
+    monkeypatch.setattr(policy, 'load_reviewed_manifest', lambda *_a, **_k: manifest)
+    monkeypatch.setattr(origin, 'verify_caddy_identity', lambda **_k: (123, '456', 970, 970))
+    monkeypatch.setattr(origin, 'verify_static_route_assets', lambda *_a, **_k: None)
+    seen = []
+    monkeypatch.setattr(origin, 'inspect_dynamic_backend', lambda **kw: (seen.append(kw), (124, '457', 971, 971))[1])
+    monkeypatch.setattr(origin, 'inspect_loopback_listener', lambda **_kw: '12345')
+    monkeypatch.setattr(origin_transport, 'verify_admin_group', lambda *_args: (995, 970, 970))
+    monkeypatch.setattr(origin_transport, 'fetch_caddy_config', lambda *_a, **_k: config)
+    assert policy.inspect_reviewed_static_origin('/manifest', expected_manifest_digest='c' * 64)['unverified_routes'] == ['api']
+    assert seen[0]['unit'] == 'client.service'
+    identities = iter([(124, '457', 971, 971), (124, '458', 971, 971)])
+    monkeypatch.setattr(origin, 'inspect_dynamic_backend', lambda **kw: next(identities))
+    with pytest.raises(ValueError, match='Backend identity changed'):
+        policy.inspect_reviewed_static_origin('/manifest', expected_manifest_digest='c' * 64)
+    backend['target'] = '127.0.0.1:9999'
+    with pytest.raises(ValueError, match='differs from route'):
+        policy.inspect_reviewed_static_origin('/manifest', expected_manifest_digest='c' * 64)
+    manifest['backends'] = {}
+    with pytest.raises(ValueError, match='inventory'):
+        policy.inspect_reviewed_static_origin('/manifest', expected_manifest_digest='c' * 64)
+
+
+def test_listener_rejects_ambiguous_owners_namespaces_and_sockets(tmp_path):
+    root = tmp_path / 'proc'; root.mkdir()
+    nsfile = tmp_path / 'netns'; nsfile.write_text('namespace')
+    for pid in ('123', '456', 'self'):
+        (root / pid / 'ns').mkdir(parents=True)
+        os.link(nsfile, root / pid / 'ns' / 'net')
+    for pid in ('123', '456'):
+        (root / pid / 'fd').mkdir()
+    (root / '123' / 'net').mkdir()
+    header = '  sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n'
+    row = '  0: 0100007F:1F4A 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12345\n'
+    tcp = root / '123' / 'net' / 'tcp'; tcp.write_text(header + row)
+    header6 = header.replace('rem_address', 'remote_address')
+    tcp6 = root / '123' / 'net' / 'tcp6'; tcp6.write_text(header6)
+    os.symlink('socket:[12345]', root / '123' / 'fd' / '5')
+    args = {'target': '127.0.0.1:8010', 'backend_pid': 123, 'caddy_pid': 456, 'proc_root': root}
+    assert origin.inspect_loopback_listener(**args) == '12345'
+    os.symlink('socket:[12345]', root / '456' / 'fd' / '8')
+    with pytest.raises(RuntimeError): origin.inspect_loopback_listener(**args)
+    (root / '456' / 'fd' / '8').unlink()
+    tcp.write_text(header + row + row.replace('12345', '12346'))
+    with pytest.raises(RuntimeError): origin.inspect_loopback_listener(**args)
+    tcp.write_text(header + row)
+    tcp6.write_text(header6 + row.replace('0100007F', '0' * 32))
+    with pytest.raises(RuntimeError): origin.inspect_loopback_listener(**args)
+    tcp6.write_text(header6)
+    (root / '456' / 'ns' / 'net').unlink()
+    (root / '456' / 'ns' / 'net').write_text('other')
+    with pytest.raises(RuntimeError, match='namespace'):
+        origin.inspect_loopback_listener(**args)

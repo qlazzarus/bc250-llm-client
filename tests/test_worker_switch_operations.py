@@ -71,3 +71,22 @@ def test_error_codes_cannot_contain_arbitrary_details(store):
     with pytest.raises(ValueError):
         store.transition(operation["id"], "failed", error_code="private diagnostic")
     assert store.get("admin", operation["id"])["state"] == "queued"
+
+
+def test_existing_database_migrates_hold_correlation(tmp_path):
+    import sqlite3
+    path = tmp_path / 'old.sqlite3'
+    db = sqlite3.connect(path)
+    db.execute('''CREATE TABLE switch_operations (
+        id TEXT PRIMARY KEY, principal TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+        model TEXT NOT NULL, state TEXT NOT NULL, error_code TEXT, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, previous_model TEXT, current_model TEXT,
+        UNIQUE(principal, idempotency_key))''')
+    db.execute('INSERT INTO switch_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+               ('a' * 32, 'admin', 'key', 'new', 'recovery_required', 'interrupted', 'now', 'now', None, None))
+    db.commit()
+    db.close()
+    store = SwitchOperations(path)
+    assert store.unresolved()['id'] == 'a' * 32
+    assert store.hold_for('a' * 32) is None
+    assert SwitchOperations(path).unresolved()['state'] == 'recovery_required'

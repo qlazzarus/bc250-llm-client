@@ -27,6 +27,18 @@ class Gate:
     async def acquire(self, hold):
         self.holds.add(hold)
 
+    async def reserve_recovery(self, hold):
+        assert hold in self.holds
+        return 'e' * 32
+
+    async def verify_recovery_reservation(self, hold, epoch):
+        assert hold in self.holds and epoch == 'e' * 32
+        return list(self.holds)
+
+    async def release_recovery_reservation(self, hold, epoch, holds):
+        assert set(holds) == self.holds
+        await self.release(hold)
+
     async def drain(self):
         pass
 
@@ -95,7 +107,7 @@ async def test_restart_reconciles_interrupted_operation_and_recovers(worker):
     assert journal.read()["operation_id"] == operation["id"]
     assert store.get("admin", operation["id"])["state"] == "switching"
     instance.close()  # Simulate process exit releasing its independent singleton lock.
-    restarted = SwitchWorker(store, instance.switch, FileLock(instance.lifetime_lock.path))
+    restarted = SwitchWorker(store, instance.switch, FileLock(instance.lifetime_lock.path), verify_studio=lambda: None)
     assert restarted.startup()["state"] == "recovery_required"
     with pytest.raises(OperationConflict):
         await restarted.submit("admin", "old", "request-2")
@@ -124,8 +136,8 @@ async def test_orphan_journal_prevents_worker_start(worker):
     instance, store, journal, _, _ = worker
     journal.write({"hold_id": "switch-" + "a" * 32, "old": "old", "target": "new",
                    "stage": "switching", "mutation_started": True})
-    with pytest.raises(ReconciliationError):
-        instance.startup()
+    instance.startup()
+    assert instance.reconciliation_error
     with pytest.raises(ReconciliationError):
         await instance.submit("admin", "new", "request-1")
     assert store.unresolved() is None
@@ -174,8 +186,8 @@ async def test_mismatched_journal_blocks_startup_and_new_requests(worker):
     journal.write({"hold_id": "switch-" + "a" * 32, "old": "old", "target": "new",
                    "stage": "switching", "mutation_started": True,
                    "operation_id": "b" * 32})
-    with pytest.raises(ReconciliationError):
-        instance.startup()
+    instance.startup()
+    assert instance.reconciliation_error
     assert store.get("admin", operation["id"])["state"] == "recovery_required"
     with pytest.raises(ReconciliationError):
         await instance.submit("admin", "old", "request-2")
@@ -258,7 +270,7 @@ async def test_resolve_without_journal_requires_verified_paused_current_model(wo
     class GateStatus:
         async def gate(self, method):
             checks.append("gate")
-            return {"protocol": 3, "durable": True, "paused": True, "epoch": "e" * 32, "holds": ["startup"]}
+            return {"protocol": 3, "recovery_exclusive_hold": None, "durable": True, "paused": True, "epoch": "e" * 32, "holds": ["startup"]}
 
     gate.llm = GateStatus()
     instance.verify_studio = lambda: checks.append("studio")
@@ -273,8 +285,8 @@ async def test_resolve_without_journal_requires_verified_paused_current_model(wo
 
 
 @pytest.mark.parametrize("status", [
-    {"protocol": 3, "durable": True, "paused": False, "holds": []},
-    {"protocol": 3, "durable": True, "paused": True, "holds": ["switch-" + "a" * 32]},
+    {"protocol": 3, "recovery_exclusive_hold": None, "durable": True, "paused": False, "holds": []},
+    {"protocol": 3, "recovery_exclusive_hold": None, "durable": True, "paused": True, "holds": ["switch-" + "a" * 32]},
     {"protocol": 1, "durable": True, "paused": True, "holds": ["startup"]},
 ])
 async def test_resolve_without_journal_preserves_uncertain_state(worker, status):
@@ -344,3 +356,171 @@ async def test_switch_rejects_uncoordinated_studio_before_creating_journal(worke
     result = await instance.run("admin", operation["id"])
     assert result["state"] == "failed" and result["error_code"] == "admission_blocked"
     assert journal.read() == {} and gate.holds == {"legacy"} and service.model == "old"
+
+async def test_hold_correlation_survives_restart_and_cannot_be_replaced(worker):
+    instance, store, journal, gate, service = worker
+    instance.startup()
+    operation, _ = await instance.submit('admin', 'new', 'hold-test')
+    service.crash = True
+    with pytest.raises(Crash):
+        await instance.run('admin', operation['id'])
+    hold = journal.read()['hold_id']
+    assert store.hold_for(operation['id']) == hold
+    with pytest.raises(OperationConflict):
+        store.record_hold(operation['id'], 'switch-' + 'f' * 32)
+    instance.close()
+    reopened = SwitchOperations(store.path)
+    assert reopened.hold_for(operation['id']) == hold
+
+
+async def test_root_recovery_actions_reject_client_uid(worker):
+    from backend.app.model_control.bridge import ModelControlBridge
+    instance, _, _, _, _ = worker
+    bridge = ModelControlBridge(instance, 1000)
+    bridge.start()
+    for action in ('recover', 'resolve_verified'):
+        assert await bridge.dispatch({'operation': action, 'id': 'a' * 32}, uid=1000) == {'error': 'forbidden'}
+    assert await bridge.dispatch({'operation': 'inspect_recovery'}, uid=1000) == {'error': 'forbidden'}
+    assert 'journal' in await bridge.dispatch({'operation': 'inspect_recovery'}, uid=0)
+    await bridge.close()
+
+
+@pytest.mark.parametrize('failure', [None, 'unsupported', 'lost_response', 'changed_hold'])
+async def test_empty_journal_uses_conditional_release_and_preserves_independent_holds(worker, failure):
+    instance, store, journal, gate, service = worker
+    own = 'switch-' + 'a' * 32
+    gate.holds = {'legacy', 'admin-maintenance', own}
+    class GateStatus:
+        async def gate(self, method):
+            return {'protocol': 3, 'recovery_exclusive_hold': None, 'durable': True, 'paused': True,
+                    'epoch': 'e' * 32, 'holds': sorted(gate.holds)}
+    gate.llm = GateStatus()
+    async def release(hold, epoch, independent):
+        assert hold == own and epoch == 'e' * 32
+        assert independent in {'legacy', 'admin-maintenance'}
+        if failure == 'unsupported':
+            raise RuntimeError('unsupported')
+        gate.holds.remove(hold)
+        if failure == 'lost_response':
+            raise RuntimeError('response lost')
+        holds = sorted(gate.holds)
+        if failure == 'changed_hold':
+            holds.remove('legacy')
+        return {'holds': holds}
+    gate.release_if_independent = release
+    instance.verify_studio = lambda: None
+    instance.startup()
+    operation, _ = await instance.submit('admin', 'new', 'conditional-test')
+    store.transition(operation['id'], 'waiting_for_gpu')
+    store.record_hold(operation['id'], own)
+    store.transition(operation['id'], 'recovery_required', error_code='interrupted')
+    if failure:
+        with pytest.raises(ReconciliationError):
+            await instance.resolve_verified('admin', operation['id'])
+        assert store.get('admin', operation['id'])['state'] == 'recovery_required'
+        assert own in gate.holds
+    else:
+        assert (await instance.resolve_verified('admin', operation['id']))['state'] == 'failed'
+        assert own not in gate.holds
+    assert {'legacy', 'admin-maintenance'} <= gate.holds
+    assert journal.read() == {} and service.model == 'old'
+
+
+@pytest.mark.parametrize('failure', ['lost_response', 'terminal_db'])
+async def test_empty_journal_failure_survives_worker_restart(worker, monkeypatch, failure):
+    instance, store, journal, gate, service = worker
+    own = 'switch-' + 'b' * 32
+    gate.holds = {'legacy', own}
+    class GateStatus:
+        async def gate(self, method):
+            return {'protocol': 3, 'recovery_exclusive_hold': None, 'durable': True, 'paused': True,
+                    'epoch': 'e' * 32, 'holds': sorted(gate.holds)}
+    gate.llm = GateStatus()
+    async def release(hold, epoch, independent):
+        gate.holds.remove(hold)
+        if failure == 'lost_response':
+            raise RuntimeError('lost response')
+        return {'holds': sorted(gate.holds)}
+    gate.release_if_independent = release
+    instance.verify_studio = lambda: None
+    instance.startup()
+    operation, _ = await instance.submit('admin', 'new', 'restart-failure')
+    store.transition(operation['id'], 'waiting_for_gpu')
+    store.record_hold(operation['id'], own)
+    store.transition(operation['id'], 'recovery_required', error_code='interrupted')
+    original = store.transition
+    def transition(*args, **kwargs):
+        if failure == 'terminal_db' and args[1] == 'failed':
+            raise RuntimeError('database unavailable')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(store, 'transition', transition)
+    with pytest.raises((ReconciliationError, RuntimeError)):
+        await instance.resolve_verified('admin', operation['id'])
+    instance.close()
+    reopened = SwitchOperations(store.path)
+    restarted = SwitchWorker(reopened, instance.switch, FileLock(instance.lifetime_lock.path), verify_studio=lambda: None)
+    restarted.startup()
+    assert reopened.get('admin', operation['id'])['state'] == 'recovery_required'
+    assert journal.read() == {} and 'legacy' in gate.holds
+    if failure == 'lost_response':
+        assert own in gate.holds
+    restarted.close()
+
+
+async def test_concurrent_recovery_requests_are_serialized(worker):
+    instance, store, journal, gate, service = worker
+    instance.verify_studio = lambda: None
+    instance.startup()
+    operation, _ = await instance.submit('admin', 'new', 'concurrent-recovery')
+    store.transition(operation['id'], 'waiting_for_gpu')
+    store.transition(operation['id'], 'recovery_required', error_code='interrupted')
+    class GateStatus:
+        async def gate(self, method):
+            await asyncio.sleep(0)
+            return {'protocol': 3, 'recovery_exclusive_hold': None, 'durable': True, 'paused': True,
+                    'epoch': 'e' * 32, 'holds': ['legacy']}
+    gate.llm = GateStatus()
+    results = await asyncio.gather(instance.resolve_verified('admin', operation['id']),
+                                   instance.resolve_verified('admin', operation['id']),
+                                   instance.recover('admin', operation['id']),
+                                   return_exceptions=True)
+    assert sum(isinstance(result, dict) and result['state'] == 'failed' for result in results) == 1
+    assert sum(isinstance(result, OperationConflict) for result in results) == 2
+    assert journal.read() == {} and gate.holds == {'legacy'}
+
+
+@pytest.mark.parametrize('failure', [None, 'lost_response', 'other_reservation'])
+async def test_empty_journal_recovers_own_reservation_with_independent_hold(worker, failure):
+    instance, store, journal, gate, service = worker
+    own = 'switch-' + 'c' * 32
+    gate.holds = {'legacy', own}
+    reservation = own if failure != 'other_reservation' else 'switch-' + 'd' * 32
+    class GateStatus:
+        async def gate(self, method):
+            return {'protocol': 3, 'durable': True, 'paused': True, 'epoch': 'e' * 32,
+                    'holds': sorted(gate.holds), 'recovery_exclusive_hold': reservation}
+    gate.llm = GateStatus()
+    calls = []
+    async def release(hold, epoch, holds, *, required_independent_hold):
+        calls.append((hold, epoch, holds, required_independent_hold))
+        assert required_independent_hold == 'legacy'
+        gate.holds.remove(hold)
+        if failure == 'lost_response':
+            raise RuntimeError('lost response')
+    gate.release_recovery_reservation = release
+    instance.verify_studio = lambda: None
+    instance.startup()
+    operation, _ = await instance.submit('admin', 'new', 'reserved-empty')
+    store.transition(operation['id'], 'waiting_for_gpu')
+    store.record_hold(operation['id'], own)
+    store.transition(operation['id'], 'recovery_required', error_code='interrupted')
+    if failure:
+        with pytest.raises(ReconciliationError):
+            await instance.resolve_verified('admin', operation['id'])
+        assert store.get('admin', operation['id'])['state'] == 'recovery_required'
+        assert own in gate.holds
+        assert bool(calls) == (failure == 'lost_response')
+    else:
+        assert (await instance.resolve_verified('admin', operation['id']))['state'] == 'failed'
+        assert len(calls) == 1 and own not in gate.holds
+    assert gate.holds >= {'legacy'} and journal.read() == {}

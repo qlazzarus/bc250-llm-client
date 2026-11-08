@@ -56,7 +56,7 @@ class SwitchOperations:
                 UNIQUE(principal, idempotency_key)
             )""")
             columns = {row[1] for row in db.execute("PRAGMA table_info(switch_operations)")}
-            for name in ("previous_model", "current_model"):
+            for name in ("previous_model", "current_model", "hold_id"):
                 if name not in columns:
                     db.execute(f"ALTER TABLE switch_operations ADD COLUMN {name} TEXT")
             # A single shared GPU permits only one unresolved switch globally.
@@ -67,6 +67,7 @@ class SwitchOperations:
 
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
+        db.execute("PRAGMA synchronous=FULL")
         db.row_factory = sqlite3.Row
         return db
 
@@ -141,6 +142,23 @@ class SwitchOperations:
             row = db.execute(f"SELECT * FROM switch_operations WHERE state IN ({placeholders})",
                              ACTIVE).fetchone()
         return self._public(row) if row else None
+
+    def record_hold(self, operation_id, hold_id):
+        if (not re.fullmatch(r"[0-9a-f]{32}", operation_id)
+                or not re.fullmatch(r"switch-[0-9a-f]{32}", hold_id)):
+            raise ValueError("Invalid hold correlation")
+        with closing(self._connect()) as db:
+            cursor = db.execute("UPDATE switch_operations SET hold_id=?, updated_at=? WHERE id=? AND hold_id IS NULL AND state='waiting_for_gpu'",
+                                (hold_id, timestamp(), operation_id))
+            if cursor.rowcount != 1:
+                raise OperationConflict("Hold correlation cannot be replaced")
+
+    def hold_for(self, operation_id):
+        if not isinstance(operation_id, str) or not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+            raise ValueError("Invalid operation ID")
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT hold_id FROM switch_operations WHERE id=?", (operation_id,)).fetchone()
+        return row[0] if row else None
 
     def record_verified(self, operation_id, *, previous=None, current=None):
         if any(value is not None and (not isinstance(value, str) or not MODEL_NAME.fullmatch(value))

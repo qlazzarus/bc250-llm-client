@@ -1,5 +1,6 @@
 """ai-model CLI; all control passes through the shared worker."""
 import argparse
+import json
 import asyncio
 import sys
 from uuid import uuid4
@@ -31,6 +32,15 @@ async def run(args, client=None):
                     result = current
                 elif current['operation']:
                     print(f"operation={current['operation']['id']} state={current['operation']['state']}")
+        elif args.command == 'inspect-recovery':
+            result = await client.request('inspect_recovery')
+            if 'error' not in result:
+                print(json.dumps(result))
+        elif args.command in {'recover', 'resolve-verified'}:
+            result = await client.request(args.command.replace('-', '_'), id=args.operation)
+            if 'error' not in result:
+                print(f"operation={result['id']} state={result['state']} error={result.get('error_code')}")
+                return 0 if result['state'] in {'failed', 'failed_rolled_back'} else 2
         else:
             key = args.key or uuid4().hex
             print(f'idempotency_key={key}', flush=True)
@@ -63,6 +73,10 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('list')
     status = commands.add_parser('status'); status.add_argument('--operation')
+    commands.add_parser('inspect-recovery')
+    for name in ('recover', 'resolve-verified'):
+        command = commands.add_parser(name)
+        command.add_argument('operation')
     switch = commands.add_parser('switch')
     switch.add_argument('model'); switch.add_argument('--key')
     return asyncio.run(run(parser.parse_args()))

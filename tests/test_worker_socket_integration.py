@@ -24,6 +24,9 @@ class Gate:
     def __init__(self): self.holds = {'admin-maintenance'}
     async def ensure_available(self): pass
     async def acquire(self, hold): self.holds.add(hold)
+    async def reserve_recovery(self, hold): return 'e' * 32
+    async def verify_recovery_reservation(self, hold, epoch): return list(self.holds)
+    async def release_recovery_reservation(self, hold, epoch, holds): await self.release(hold)
     async def release(self, hold): self.holds.remove(hold)
     async def drain(self): pass
 
