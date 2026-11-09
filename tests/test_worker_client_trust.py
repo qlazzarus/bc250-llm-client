@@ -82,26 +82,12 @@ def test_asset_manifest_rejects_invalid_paths(tmp_path, monkeypatch, entry):
         client_trust.verify_asset_tree(root, {entry: 'a' * 64})
 
 
-@pytest.mark.parametrize('uid,shell,group_gid,alias', [
-    (0, '/usr/sbin/nologin', 100, False),
-    (1001, '/bin/bash', 100, False),
-    (1001, '/usr/sbin/nologin', 101, False),
-    (1001, '/usr/sbin/nologin', 100, True),
-])
-def test_client_service_account_rejects_root_login_mismatch_and_shared_uid(monkeypatch, uid, shell, group_gid, alias):
-    account = SimpleNamespace(pw_name='ai-client', pw_uid=uid, pw_gid=100, pw_shell=shell)
-    monkeypatch.setattr(runtime.pwd, 'getpwnam', lambda _name: account)
-    monkeypatch.setattr(runtime.pwd, 'getpwall', lambda: [account] + ([SimpleNamespace(pw_name='other', pw_uid=uid)] if alias else []))
-    monkeypatch.setattr(runtime.grp, 'getgrnam', lambda _name: SimpleNamespace(gr_gid=group_gid))
-    with pytest.raises(RuntimeError): runtime.client_service_uid()
-
-
-def test_client_service_account_accepts_distinct_nologin_uid(monkeypatch):
-    account = SimpleNamespace(pw_name='ai-client', pw_uid=1100, pw_gid=1100, pw_shell='/usr/sbin/nologin')
-    monkeypatch.setattr(runtime.pwd, 'getpwnam', lambda _name: account)
-    monkeypatch.setattr(runtime.pwd, 'getpwall', lambda: [account, SimpleNamespace(pw_name='yeppyshiba', pw_uid=1000)])
-    monkeypatch.setattr(runtime.grp, 'getgrnam', lambda _name: SimpleNamespace(gr_gid=1100))
-    assert runtime.client_service_uid() == 1100
+def test_client_service_account_allows_login_user_but_rejects_root(monkeypatch):
+    monkeypatch.setattr(runtime.pwd, 'getpwnam', lambda _name: SimpleNamespace(pw_uid=1000))
+    assert runtime.client_service_uid() == 1000
+    monkeypatch.setattr(runtime.pwd, 'getpwnam', lambda _name: SimpleNamespace(pw_uid=0))
+    with pytest.raises(RuntimeError):
+        runtime.client_service_uid()
 
 
 @pytest.mark.parametrize('fault', [None, 'env', 'unit_argv', 'process_argv', 'no_new_privileges'])

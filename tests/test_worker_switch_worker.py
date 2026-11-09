@@ -388,6 +388,16 @@ async def test_root_recovery_actions_reject_client_uid(worker):
 @pytest.mark.parametrize('failure', [None, 'unsupported', 'lost_response', 'changed_hold'])
 async def test_empty_journal_uses_conditional_release_and_preserves_independent_holds(worker, failure):
     instance, store, journal, gate, service = worker
+    from contextlib import contextmanager
+    events = []
+    @contextmanager
+    def origin_lock():
+        events.append('lock')
+        try:
+            yield
+        finally:
+            events.append('unlock')
+    instance.switch.origin_lock = origin_lock
     own = 'switch-' + 'a' * 32
     gate.holds = {'legacy', 'admin-maintenance', own}
     class GateStatus:
@@ -396,6 +406,7 @@ async def test_empty_journal_uses_conditional_release_and_preserves_independent_
                     'epoch': 'e' * 32, 'holds': sorted(gate.holds)}
     gate.llm = GateStatus()
     async def release(hold, epoch, independent):
+        assert events == ['lock']
         assert hold == own and epoch == 'e' * 32
         assert independent in {'legacy', 'admin-maintenance'}
         if failure == 'unsupported':
@@ -422,6 +433,7 @@ async def test_empty_journal_uses_conditional_release_and_preserves_independent_
     else:
         assert (await instance.resolve_verified('admin', operation['id']))['state'] == 'failed'
         assert own not in gate.holds
+    assert events == ['lock', 'unlock']
     assert {'legacy', 'admin-maintenance'} <= gate.holds
     assert journal.read() == {} and service.model == 'old'
 
@@ -524,3 +536,44 @@ async def test_empty_journal_recovers_own_reservation_with_independent_hold(work
         assert (await instance.resolve_verified('admin', operation['id']))['state'] == 'failed'
         assert len(calls) == 1 and own not in gate.holds
     assert gate.holds >= {'legacy'} and journal.read() == {}
+
+async def test_manual_recovery_origin_lock_contention_preserves_records(worker):
+    from contextlib import contextmanager
+    instance, store, journal, gate, service = worker
+    instance.verify_studio = lambda: None
+    instance.startup()
+    operation, _ = await instance.submit('admin', 'new', 'origin-busy')
+    store.transition(operation['id'], 'waiting_for_gpu')
+    store.transition(operation['id'], 'recovery_required', error_code='interrupted')
+    before = store.get('admin', operation['id'])
+    holds = set(gate.holds)
+    @contextmanager
+    def busy():
+        raise RuntimeError('origin lock busy')
+        yield
+    instance.switch.origin_lock = busy
+    with pytest.raises(RuntimeError, match='origin lock busy'):
+        await instance.resolve_verified('admin', operation['id'])
+    assert store.get('admin', operation['id']) == before
+    assert journal.read() == {} and gate.holds == holds and service.model == 'old'
+
+@pytest.mark.parametrize('failure', ['enter', 'exit'])
+async def test_origin_lock_failure_classification(worker, failure):
+    from contextlib import contextmanager
+    instance, store, journal, gate, service = worker
+    @contextmanager
+    def origin_lock():
+        if failure == 'enter':
+            raise RuntimeError('origin lock busy')
+        yield
+        raise RuntimeError('origin lock changed')
+    instance.switch.origin_lock = origin_lock
+    instance.startup()
+    operation, _ = await instance.submit('admin', 'new', 'origin-lock-failure')
+    result = await instance.run('admin', operation['id'])
+    if failure == 'enter':
+        assert result['state'] == 'failed' and result['error_code'] == 'admission_blocked'
+        assert service.model == 'old' and gate.holds == {'legacy'} and journal.read() == {}
+    else:
+        assert result['state'] == 'recovery_required' and result['error_code'] == 'recovery_required'
+        assert service.model == 'new'

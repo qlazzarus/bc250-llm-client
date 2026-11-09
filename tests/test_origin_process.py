@@ -97,7 +97,14 @@ def test_static_inspection_binds_manifest_process_config_and_assets(monkeypatch)
     monkeypatch.setattr(origin_transport, 'fetch_caddy_config', lambda *_a, **_k: config)
     result = policy.inspect_reviewed_static_origin('/manifest', expected_manifest_digest='c' * 64)
     assert result == {'static_routes': ['ui'], 'unverified_routes': ['api']}
-    assert calls[0][2] == {'caddy_pid': 123}
+    assert len(calls) == 2 and all(call[2] == {'caddy_pid': 123} for call in calls)
+    def changed_assets(*_args, **_kwargs):
+        calls.append(None)
+        if len(calls) == 4:
+            raise RuntimeError('Asset changed during inspection')
+    monkeypatch.setattr(origin, 'verify_static_route_assets', changed_assets)
+    with pytest.raises(RuntimeError, match='Asset changed'):
+        policy.inspect_reviewed_static_origin('/manifest', expected_manifest_digest='c' * 64)
     identities = iter([(123, '456', 970, 970), (124, '457', 970, 970)])
     monkeypatch.setattr(origin, 'verify_caddy_identity', lambda **_k: next(identities))
     with pytest.raises(ValueError, match='changed'):
@@ -157,26 +164,29 @@ def test_origin_backend_inventory_is_bound_to_routes_but_stays_unverified(monkey
         policy.inspect_reviewed_static_origin('/manifest', expected_manifest_digest='c' * 64)
 
 
-def test_listener_rejects_ambiguous_owners_namespaces_and_sockets(tmp_path):
+def test_listener_rejects_ambiguous_owners_namespaces_and_sockets(tmp_path, monkeypatch):
     root = tmp_path / 'proc'; root.mkdir()
+    monkeypatch.setattr(origin.os, 'geteuid', lambda: 0)
     nsfile = tmp_path / 'netns'; nsfile.write_text('namespace')
     for pid in ('123', '456', 'self'):
         (root / pid / 'ns').mkdir(parents=True)
         os.link(nsfile, root / pid / 'ns' / 'net')
+        os.link(nsfile, root / pid / 'ns' / 'pid')
+    (root / 'self' / 'mountinfo').write_text(f'1 0 0:1 / {root} rw - proc proc rw\n')
     for pid in ('123', '456'):
-        (root / pid / 'fd').mkdir()
+        (root / pid / 'task' / pid / 'fd').mkdir(parents=True)
     (root / '123' / 'net').mkdir()
     header = '  sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n'
     row = '  0: 0100007F:1F4A 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12345\n'
     tcp = root / '123' / 'net' / 'tcp'; tcp.write_text(header + row)
     header6 = header.replace('rem_address', 'remote_address')
     tcp6 = root / '123' / 'net' / 'tcp6'; tcp6.write_text(header6)
-    os.symlink('socket:[12345]', root / '123' / 'fd' / '5')
+    os.symlink('socket:[12345]', root / '123' / 'task' / '123' / 'fd' / '5')
     args = {'target': '127.0.0.1:8010', 'backend_pid': 123, 'caddy_pid': 456, 'proc_root': root}
     assert origin.inspect_loopback_listener(**args) == '12345'
-    os.symlink('socket:[12345]', root / '456' / 'fd' / '8')
+    os.symlink('socket:[12345]', root / '456' / 'task' / '456' / 'fd' / '8')
     with pytest.raises(RuntimeError): origin.inspect_loopback_listener(**args)
-    (root / '456' / 'fd' / '8').unlink()
+    (root / '456' / 'task' / '456' / 'fd' / '8').unlink()
     tcp.write_text(header + row + row.replace('12345', '12346'))
     with pytest.raises(RuntimeError): origin.inspect_loopback_listener(**args)
     tcp.write_text(header + row)
@@ -187,3 +197,71 @@ def test_listener_rejects_ambiguous_owners_namespaces_and_sockets(tmp_path):
     (root / '456' / 'ns' / 'net').write_text('other')
     with pytest.raises(RuntimeError, match='namespace'):
         origin.inspect_loopback_listener(**args)
+
+
+def test_listener_checks_nonleader_task_fd(tmp_path, monkeypatch):
+    root = tmp_path / 'proc'; root.mkdir()
+    monkeypatch.setattr(origin.os, 'geteuid', lambda: 0)
+    ns = tmp_path / 'ns'; ns.touch()
+    for pid in ('123', '456', 'self'):
+        (root / pid / 'ns').mkdir(parents=True)
+        os.link(ns, root / pid / 'ns' / 'net')
+        os.link(ns, root / pid / 'ns' / 'pid')
+    (root / 'self' / 'mountinfo').write_text(f'1 0 0:1 / {root} rw - proc proc rw\n')
+    for pid in ('123', '456'):
+        (root / pid / 'task' / pid / 'fd').mkdir(parents=True)
+    (root / '456' / 'task' / '457' / 'fd').mkdir(parents=True)
+    (root / '123' / 'net').mkdir()
+    header = 'sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n'
+    row = '0: 0100007F:1F4A 00000000:0000 0A 0 0 0 0 0 12345\n'
+    (root / '123' / 'net' / 'tcp').write_text(header + row)
+    (root / '123' / 'net' / 'tcp6').write_text(header.replace('rem_address', 'remote_address'))
+    os.symlink('socket:[12345]', root / '123' / 'task' / '123' / 'fd' / '5')
+    args = dict(target='127.0.0.1:8010', backend_pid=123, caddy_pid=456, proc_root=root)
+    assert origin.inspect_loopback_listener(**args) == '12345'
+    os.symlink('socket:[12345]', root / '456' / 'task' / '457' / 'fd' / '6')
+    with pytest.raises(RuntimeError):
+        origin.inspect_loopback_listener(**args)
+
+
+def test_listener_rejects_pid_namespace_mismatch(tmp_path, monkeypatch):
+    # The mismatch is rejected before any listener table is consulted.
+    root = tmp_path / 'proc'; root.mkdir()
+    monkeypatch.setattr(origin.os, 'geteuid', lambda: 0)
+    ns = tmp_path / 'ns'; ns.touch()
+    for pid in ('123', '456', 'self'):
+        (root / pid / 'ns').mkdir(parents=True)
+        os.link(ns, root / pid / 'ns' / 'net')
+        os.link(ns, root / pid / 'ns' / 'pid')
+    (root / 'self' / 'mountinfo').write_text(f'1 0 0:1 / {root} rw - proc proc rw\n')
+    (root / '456' / 'ns' / 'pid').unlink()
+    (root / '456' / 'ns' / 'pid').touch()
+    with pytest.raises(RuntimeError, match='namespace'):
+        origin.inspect_loopback_listener('127.0.0.1:8010', backend_pid=123, caddy_pid=456, proc_root=root)
+
+
+@pytest.mark.parametrize('mount', [
+    '1 0 0:1 / {root} rw - proc proc rw,hidepid=2',
+    '1 0 0:1 / {root} rw,hidepid=1 - proc proc rw',
+    '1 0 0:1 / {root} rw - proc proc rw,subset=pid',
+    '1 0 0:1 /private {root} rw - proc proc rw',
+    '1 0 0:1 / {root} rw - tmpfs tmpfs rw',
+    '1 0 0:1 / {root} rw - proc proc rw\n2 0 0:2 / {root} rw - proc proc rw',
+    'bad mountinfo',
+])
+def test_proc_visibility_rejects_restricted_or_ambiguous_mounts(tmp_path, monkeypatch, mount):
+    root = tmp_path / 'proc'; (root / 'self').mkdir(parents=True)
+    monkeypatch.setattr(origin.os, 'geteuid', lambda: 0)
+    (root / 'self' / 'mountinfo').write_text(mount.format(root=root) + '\n')
+    with pytest.raises(RuntimeError):
+        origin._verify_proc_visibility(root)
+
+
+def test_proc_visibility_requires_root_and_accepts_unrestricted_proc(tmp_path, monkeypatch):
+    root = tmp_path / 'proc'; (root / 'self').mkdir(parents=True)
+    (root / 'self' / 'mountinfo').write_text(f'1 0 0:1 / {root} rw - proc proc rw,hidepid=0\n')
+    monkeypatch.setattr(origin.os, 'geteuid', lambda: 0)
+    origin._verify_proc_visibility(root)
+    monkeypatch.setattr(origin.os, 'geteuid', lambda: 1000)
+    with pytest.raises(RuntimeError, match='Privileged'):
+        origin._verify_proc_visibility(root)

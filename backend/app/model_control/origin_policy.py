@@ -277,5 +277,57 @@ def inspect_reviewed_static_origin(path, *, expected_manifest_digest):
         raise ValueError('Backend identity changed')
     if any(inspect_loopback_listener(**args) != inode for args, inode in backend_listeners):
         raise ValueError('Backend listener changed')
+    # Backend and listener inspection can take long enough for an asset tree
+    # to change after its initial check. Recheck it before returning; this is
+    # still a snapshot and does not replace a deployment barrier.
+    verify_static_route_assets(routes, manifest['static_assets'], caddy_pid=identity[0])
     return {'static_routes': sorted(key for key, route in routes.items() if route['kind'] == 'static'),
             'unverified_routes': sorted(key for key, route in routes.items() if route['kind'] != 'static')}
+
+
+def inspect_reviewed_route_trees(*, read_identity, read_config, read_reviewed_digest,
+                                 admin_socket, reviewed_servers):
+    """Compare authenticated Caddy snapshots with independently reviewed trees.
+
+    The readers and reviewed_servers must have independently authenticated
+    provenance. This inventory does not establish matcher semantics, handler
+    safety, asset provenance, or backend response policy. It must not enable
+    switching. Repeated reads detect some changes but are not a barrier against
+    change during or after inspection.
+    """
+    from .origin_route_tree import verify_reviewed_route_tree
+
+    if not isinstance(reviewed_servers, dict) or not reviewed_servers:
+        raise ValueError('Reviewed servers are required')
+    identity = read_identity()
+    digest = read_reviewed_digest()
+    first = read_config()
+    match_reviewed_config(first, expected_digest=digest, admin_socket=admin_socket)
+    apps = first['apps']
+    if (set(apps) != {'http'} or not isinstance(apps['http'], dict)
+            or set(apps['http']) != {'servers'}
+            or not isinstance(apps['http']['servers'], dict)
+            or not apps['http']['servers']
+            or apps['http']['servers'].keys() != reviewed_servers.keys()):
+        raise ValueError('Unsupported or unreviewed Caddy servers')
+    proxies = {}
+    for name, server in apps['http']['servers'].items():
+        reviewed = reviewed_servers[name]
+        if (not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', name)
+                or not isinstance(server, dict) or set(server) != {'listen', 'routes'}
+                or not isinstance(reviewed, dict) or set(reviewed) != {'listen', 'routes'}):
+            raise ValueError('Unsupported Caddy server')
+        listen = server['listen']
+        if (not isinstance(listen, list) or not listen
+                or any(not isinstance(item, str)
+                       or not re.fullmatch(r'(?:127\.0\.0\.1)?:[1-9][0-9]{0,4}', item)
+                       or int(item.rsplit(':', 1)[1]) > 65535 for item in listen)
+                or listen != reviewed['listen']):
+            raise ValueError('Unsupported or unreviewed listener')
+        proxies[name] = verify_reviewed_route_tree(server['routes'], reviewed['routes'])
+    second = read_config()
+    match_reviewed_config(second, expected_digest=digest, admin_socket=admin_socket)
+    if (config_digest(first) != config_digest(second) or identity != read_identity()
+            or digest != read_reviewed_digest()):
+        raise ValueError('Caddy identity, reviewed digest, or configuration changed')
+    return proxies

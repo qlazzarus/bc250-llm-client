@@ -21,7 +21,7 @@ MAX_ASSETS = 20000
 def verify_operator_frontend():
     """Do not activate while the operator UI's serving origin is unverified.
 
-    M4-02 must replace this guard with a locally tested verifier of the
+    M4-04 must replace this guard with a locally tested verifier of the
     effective reverse-proxy route and root-controlled assets. M7 provisions
     that contract. A boolean opt-in is insufficient.
     """

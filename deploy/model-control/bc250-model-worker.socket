@@ -4,7 +4,7 @@ Description=BC-250 model control socket
 [Socket]
 ListenStream=/run/bc250-model-control/control.sock
 SocketUser=root
-SocketGroup=ai-client
+SocketGroup=yeppyshiba
 SocketMode=0660
 DirectoryMode=0755
 Accept=no

@@ -294,3 +294,90 @@ async def test_switch_rejects_unsupported_reservation_before_mutation(setup):
     assert service.model == 'old'
     assert all(call[0] != 'apply' for call in service.calls)
     assert journal.read() and len(gate.holds) == 2
+
+async def test_origin_lock_covers_switch_and_rollback(setup):
+    from contextlib import contextmanager
+    switch, journal, gate, service = setup
+    events = []
+    @contextmanager
+    def origin_lock():
+        events.append('lock')
+        try:
+            yield
+        finally:
+            events.append('unlock')
+    switch.origin_lock = origin_lock
+    original_apply = service.apply
+    async def apply(model):
+        assert events == ['lock']
+        await original_apply(model)
+    service.apply = apply
+    service.fail_apply.add('new')
+    with pytest.raises(SwitchFailed):
+        await switch.switch('new')
+    assert events == ['lock', 'unlock']
+    assert journal.read() == {} and service.model == 'old'
+
+
+async def test_origin_lock_blocks_switch_and_recovery_before_mutation(setup):
+    from contextlib import contextmanager
+    switch, journal, gate, service = setup
+    @contextmanager
+    def busy():
+        raise RuntimeError('origin lock busy')
+        yield
+    switch.origin_lock = busy
+    with pytest.raises(SwitchAdmissionBlocked, match='Origin change lock unavailable'):
+        await switch.switch('new')
+    with pytest.raises(RuntimeError, match='origin lock busy'):
+        await switch.recover()
+    assert journal.read() == {} and gate.calls == [] and service.calls == []
+
+async def test_origin_lock_covers_recovery_preflight(setup):
+    from contextlib import contextmanager
+    switch, journal, gate, service = setup
+    events = []
+    @contextmanager
+    def origin_lock():
+        events.append('lock')
+        try:
+            yield
+        finally:
+            events.append('unlock')
+    switch.origin_lock = origin_lock
+    def preflight():
+        assert events == ['lock']
+        events.append('preflight')
+    assert await switch.recover(preflight=preflight) == 'nothing_to_recover'
+    assert events == ['lock', 'preflight', 'unlock']
+
+async def test_cancellation_waits_for_switch_cleanup_before_origin_unlock(setup):
+    from contextlib import contextmanager
+    switch, journal, gate, service = setup
+    events = []
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+    @contextmanager
+    def origin_lock():
+        events.append('lock')
+        try:
+            yield
+        finally:
+            events.append('unlock')
+    switch.origin_lock = origin_lock
+    apply = service.apply
+    async def delayed_apply(model):
+        entered.set()
+        await finish.wait()
+        await apply(model)
+    service.apply = delayed_apply
+    task = asyncio.create_task(switch.switch('new'))
+    await entered.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert events == ['lock'] and not task.done()
+    finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert events == ['lock', 'unlock']
+    assert service.model == 'new' and journal.read() == {} and gate.holds == {'administrator'}

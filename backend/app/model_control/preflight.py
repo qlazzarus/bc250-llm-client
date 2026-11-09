@@ -10,7 +10,6 @@ from pathlib import Path
 
 import httpx
 
-from .client_trust import verify_client_process, verify_operator_frontend
 
 
 def exact_protocol_response(value, expected):
@@ -73,11 +72,8 @@ class CoordinationPreflight:
                 raise RuntimeError('Studio sees a different coordination file')
 
     def __call__(self):
-        client_identity = self.service_identity('bc250-llm-client.service', 'ai-client')
-        verify_client_process(client_identity[0])
-        verify_operator_frontend()
         studio = self.service_identity('bc250-ai-studio.service', 'ai-studio')
-        gate = self.service_identity('bc250-llm-gate.service', 'ai-gate')
+        gate = self.service_identity('bc250-llm-gate.service', 'ai-studio')
         self.same_studio_files(studio[0])
 
         with httpx.Client(timeout=5, trust_env=False, transport=self.transport) as client:
@@ -91,12 +87,9 @@ class CoordinationPreflight:
             response.raise_for_status()
             if not exact_protocol_response(response.json(), {'protocol': 1, 'enabled': True, 'transition_clear': True}):
                 raise RuntimeError('Studio coordination unavailable')
-        if (client_identity != self.service_identity('bc250-llm-client.service', 'ai-client')
-                or studio != self.service_identity('bc250-ai-studio.service', 'ai-studio')
-                or gate != self.service_identity('bc250-llm-gate.service', 'ai-gate')):
+        if (studio != self.service_identity('bc250-ai-studio.service', 'ai-studio')
+                or gate != self.service_identity('bc250-llm-gate.service', 'ai-studio')):
             raise RuntimeError('Service identity changed during preflight')
-        verify_client_process(client_identity[0])
-        verify_operator_frontend()
         self.same_studio_files(studio[0])
 
 
@@ -112,7 +105,7 @@ class RecoveryPreflight(CoordinationPreflight):
 
     def __call__(self):
         studio = self.service_identity('bc250-ai-studio.service', 'ai-studio')
-        gate = self.service_identity('bc250-llm-gate.service', 'ai-gate')
+        gate = self.service_identity('bc250-llm-gate.service', 'ai-studio')
         self.same_studio_files(studio[0])
         state = self.journal.read()
         encoded = json.dumps(state, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
@@ -131,7 +124,7 @@ class RecoveryPreflight(CoordinationPreflight):
                                    'gate_verified': True, 'journal_sha256': digest}):
                 raise RuntimeError('Studio recovery coordination unavailable')
         if (studio != self.service_identity('bc250-ai-studio.service', 'ai-studio')
-                or gate != self.service_identity('bc250-llm-gate.service', 'ai-gate')):
+                or gate != self.service_identity('bc250-llm-gate.service', 'ai-studio')):
             raise RuntimeError('Service identity changed during recovery verification')
         self.same_studio_files(studio[0])
         if self.journal.read() != state:

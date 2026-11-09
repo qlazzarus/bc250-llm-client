@@ -208,15 +208,55 @@ M4 핵심은 **로컬 구현 및 대역 검증 완료**이나 단계 전체는 �
 
 ### M4-04 이관된 미완료 작업
 
-M4-02/03의 완료는 위에 명시한 **축소된 로컬 산출물**에만 적용한다. 기존 미완료 구현은 아래로 전부 이관하며 M4 단계 전체는 M4-04가 끝날 때까지 부분 완료다. 실제 운영 적용과 Linux 실증은 M5~M8의 별도 완료 조건을 따른다.
+**2026-11-09 가정용 단일 관리자 결정:** 아래 과거의 origin·root 자산·별도 UID·엄격한 감사 출처 검증은 이번 전환 기능의 완료 게이트에서 제외한다. 사용자는 동일 관리자 계정을 사용하고 Studio 배포 방법도 변경 가능하다고 확인했다. 앱·관리자 인증, 공용 worker, GPU lock/journal, gate admission/drain·hold 보존과 불명 상태의 안전한 복구는 계속 필수다. 해당 결정이 아래 표의 기존 보안 강화 항목과 구 체크리스트에 우선한다. M4-02/03은 축소된 로컬 범위만 완료했고 실제 gate/Studio 제공자와 Linux/운영 검증은 M5~M8에 남는다.
 
 | ID | 출처 | 구현·검증 작업 | 완료 조건 | 상태 |
 | --- | --- | --- | --- | --- |
-| M4-04-01 | M4-02 | root 신뢰 anchor·manifest 발급/검토·변경 잠금 계약 연결 | 일반 계정의 임의 승격을 막고 모든 배포자와 검사·전환 경합 시 실패를 검증; Studio 독립 배포 보존 | 미완료: 부품만 있음; 설치·승격은 M7 |
-| M4-04-02 | M4-02 | Caddy 실제 설정·동일 origin 전체 route, 정적 자산과 backend 실행본·listener·namespace 검증 | 중첩·rewrite·미등록 경로, 권한·해시·프로세스 불일치와 불명 상태를 거절; PID namespace·hidepid·task FD·FD 전달 경쟁의 보장 방식을 구현; Wiki도 동일 origin 보안 범위 포함 | 미완료: 제한적 조사만 구현; Wiki의 모델 조율/API 통합 예외는 유지 |
-| M4-04-03 | M4-02 | 동적 응답·업로드·service worker 및 OS runtime 신뢰 검증 | 검토된 응답 정책이 모든 관련 경로에 강제되고 loader·라이브러리·코드 트리·namespace 불일치와 미지원 경로를 거절; 정상 HTTP 응답의 호환성도 시험 | 미완료: 응답/런타임 부품은 전체 보증이 아님; 실제 HTTP·Linux 검증은 M6 |
-| M4-04-04 | M4-02 | 완전한 origin 검증기를 전환 preflight에 연결 | 지원 구성의 성공 경로와 변조·미확인·경합 시 차단을 로컬 시험; 모든 조건 충족 전 현재 무조건 차단 유지 | 미완료 |
-| M4-04-05 | M4-03 | root 전용 영속 조사 이벤트·증거 결속과 보호된 저장 | 원본·비밀 보호, 기록·fsync 실패 및 증거 변경 시 보존·차단, 누락·손상과 재시작을 로컬 시험 | 미완료: 조사 분류만 있음 |
-| M4-04-06 | M4-03 | orphan·불일치의 조건부 처리·종결과 재진입 상태 기계 | 소유권·독립 hold를 증명한 경우만 원자 조건부 처리; 불충분 증거·응답 유실·모든 중단 지점에서 원본·타 hold 보존 및 미해결 유지 | 미완료: gate/Studio 외부 계약은 M5, 최종 통합은 M6, 운영 증거·절차는 M7 |
+| M4-04-01 | M4-02 | 전환·배포의 운영 조율 | 전환 중 배포/restart가 겹치지 않도록 운영 절차를 정하고 미해결 전환은 보존 | 범위 조정: root 검토 anchor·모든 배포자의 provenance 강제 제외; 실제 설치·운영 절차는 M7 |
+| M4-04-02 | M4-02 | Client·Studio 접속과 모델 API 경로 | 기존 `/llm` 및 Studio 연동 동작, 관리 API 인증과 오류 처리 확인 | 범위 조정: Caddy 전체 route·자산 서명 및 별도 UID 강제 제외; 최종 UI/API 검증은 M6/M8 |
+| M4-04-03 | M4-02 | 실제 서비스·공유 GPU 파일 상태 확인 | Studio·worker가 같은 GPU lock/journal을 사용하고 실패·부재 시 전환 거절 | 진행 중: 기존 런타임 계정 허용; 실제 gate/Studio 계약과 Linux 검증은 M5-02/03·M6 |
+| M4-04-04 | M4-02 | 기능 중심 전환 preflight | 인증된 gate/Studio 기능 계약과 공용 GPU lock을 확인; 미지원·불일치 시 변경 전에 거절 | 진행 중: origin 자산·응답의 무조건 차단 제거, protocol 3 등 실제 제공자 구현 필요 |
+| M4-04-05 | M4-03 | 작업 상태 기록과 root 조사 | 기존 작업 DB·journal·hold 상관관계를 보존하고 불명 결과를 표시 | 범위 조정: 별도 서명·검토자 인증·불변 archive 강제 제외; 민감정보를 기록하지 않음 |
+| M4-04-06 | M4-03 | 중단·불일치 복구 | 일치 작업은 기능 검사를 거쳐 복구하고 소유권 불명·타 hold는 보존; 실패·응답 유실을 시험 | 진행 중: 복구 검사 연결 및 실제 gate/Studio 계약 필요. 자동 orphan 종결은 요구하지 않고 불명 상태를 관리자에게 표시 |
 
 M4-04 검증기·복구 구현이 완료돼도 M5의 실제 gate·Studio 지원, M6의 최종 후보/Linux 시험, M7의 배포·복구 준비와 M8 운영 확인 전에는 전환을 활성화하지 않는다. Studio DB 차단이나 과거 유지보수 VM 시험은 다시 시작하지 않는다.
+
+#### 과거 M4-04 보안 강화 체크리스트 — 이번 필수 범위에서 제외
+
+아래 항목은 이전 설계와 조사 이력이다. 사용자 결정에 따라 동일 origin 보안·별도 UID·불변 감사 체계는 이번 기능의 완료 조건이 아니며, 현행 실행 기준은 위 표와 통합 계획이다. 개별 기능의 작동 여부를 주장하는 표가 아니다.
+
+| 세부 ID | 선행 | 실행 작업 및 완료 기준 | 현재 상태 / 후속 이관 |
+| --- | --- | --- | --- |
+| 01-a | M4-02/03 | root 검토 anchor·manifest 및 배포 잠금의 취득·실패·취소 계약을 구현하고 경합 대역 시험 | 부분 구현; 모든 변경자 참여와 root 승격은 M7, Linux 권한은 M6 |
+| 01-b | 01-a | journal·작업 DB·gate hold/예약 상태를 대조하는 배포 차단을 구현하고 timeout·WAL 손상·불명 상태를 거절 | journal/DB 및 gate 전후 상태의 진단 추가; gate 인증·동시성은 미입증이어서 실제 가드는 무조건 차단. 실제 gate 계약은 M5-02, 배포자 설치와 WAL 운영 절차는 M7 |
+| 02-a | 01-a | 전체 Caddy 실효 설정의 listener·중첩 route·matcher·rewrite·순서를 독립 검토 정책과 비교하고 알려지지 않은 입력 거절 | 전체 설정 digest·Unix admin·서버/listener·중첩 트리 전후 대조의 진단 연결. peer 인증과 독립 정책의 신뢰 공급은 호출자 책임이며 동적 경로는 미검증 |
+| 02-b | 02-a | 모든 정적 자산·backend 실행본·listener·namespace를 검토 정책에 결속하고 미등록·변경·권한 오류 거절 | 조사 부품만 있음; Linux proc·ACL/SELinux 경계와 실제 경합은 M6 |
+| 03-a | 02-a | 동적 응답·업로드·service worker 범위를 분류하고 모든 관련 route에 정책을 강제하며 정상·악성 응답 회귀 확인 | route별 응답 생산자와 profile·표본 결속 진단 추가. 표본 통과는 전체 응답 강제의 증거가 아님; Studio 실제 변경은 M5-03, 실 HTTP 검증은 M6 |
+| 03-b | 02-b | loader·라이브러리·실행 코드 및 동적 로딩 신뢰 모델을 완성하고 불명 런타임 거절 | maps 진단에 공유 쓰기 매핑 거절 추가; 실행 메모리 무결성은 디스크 hash만으로 증명 불가, Linux 검증은 M6 |
+| 04-a | 01-a/01-b, 02-a/02-b, 03-a/03-b | origin 검증을 preflight에 연결하고 안전한 지원 구성의 성공과 변조·경합·미지원 차단을 시험 | 선행 미완료; 현재 무조건 차단 유지 |
+| 05-a | M4-03 | root 조사 증거를 출처·서비스 세대·gate 상태에 결속하고 검토자 인증 및 보호 저장/백업을 구현 | root-private 증거 archive와 digest·typed 기록·pinned review 진단 결합 후보 추가. archive는 전달된 bytes를 그대로 저장하므로 비밀 제외를 보장하지 않으며 허용 스키마·redaction 수집기 미구현; digest는 검토자 인증이 아니고 출처·신선도·독립 백업 미검증. root 권한 및 배포/백업은 M6/M7 |
+| 05-b | 05-a | 이벤트·checkpoint 중단, fsync 실패, 기록 손상·누락·동시 rollback을 재시작 후 감지하고 실패 시 복구 차단 | 단일 파일 실패 대역만 일부 있음; 독립 신뢰 근거와 실제 Linux는 M6/M7 |
+| 06-a | 05-a/05-b | 충분한 독립 소유권 증거가 있는 제한된 불일치만 조건부 처리하는 영속 상태 기계 구현 | 판정 부품만 있음; gate/Studio 원자 계약은 M5-02/03 |
+| 06-b | 06-a | 응답 유실·각 중단 지점·재진입 및 증거 부족 시 기록과 다른 hold 보존을 검증 | 미완료; 최종 후보 통합은 M6, 운영자 조사·복구 절차는 M7 |
+
+위 과거 체크리스트의 01~03→04 및 엄격한 05 선행 관계는 현재 필수 조건이 아니다. 다만 증거 부족 orphan은 여전히 임의 연결이나 삭제 대신 미해결로 보존한다.
+
+2026-11-09 중간 검증: 전환·복구 origin 잠금 경합과 취소, proc 경계, 제한적 응답 검사, 감사 기록·체크포인트·재진입 판정 부품을 추가한 뒤 전체 로컬 회귀 482개 통과·1개 건너뜀. 소유권 및 Linux 경계 일부는 대역이며 실제 운영 검증이 아니다. 서버 Caddy handler 읽기 전용 확인은 SSH 연결 시간 초과로 수행하지 못했다.
+
+후속 읽기 전용 조사: 외부 주소 `yeppyshiba.iptime.org:2222`에서 기존 BC-250 SSH 키로 접속해 `fedora`를 확인했다. Caddy `srv0`의 실효 HTTP 설정에는 `encode`, `subroute`, `rewrite`, `vars`, `file_server`, `reverse_proxy`, `static_response`가 있으며, `/llm/api/*`→8010, `/wiki/*`→8020, `/api/*`→8090, `/llm/*` 및 기본 Studio 정적 자산 순서의 중첩 경로가 존재한다. file matcher는 요청 경로 다음 `/index.html`을 시도한다. 이 정보는 설정의 일부만 요약한 것이며 헤더나 전체 보안 정책의 검증 증거가 아니다. Caddy 서비스는 `NoNewPrivileges=no`, Client와 Wiki는 `yeppyshiba`로 실행되며 Client dist와 Wiki app 디렉터리는 그 계정에서 쓰기 가능하다. 현재 운영 구성은 후보 보안 계약을 만족한다고 판단하지 않는다. 설정·키·서비스는 변경하지 않았다.
+
+사용자 root 읽기 전용 조회: Caddy·Client·Studio·Wiki의 PID namespace는 모두 `pid:[4026531836]`, 네트워크 namespace는 `net:[4026531833]`이나 mount namespace는 각각 `mnt:[4026532706]`, `mnt:[4026532703]`, `mnt:[4026532633]`, `mnt:[4026532705]`다. Caddy PID 1413이 `127.0.0.1:2019` TCP admin을 수신한다. Client dist와 Wiki app은 UID/GID 1000, Studio dist는 1001, 모두 mode 0755의 기본 ACL이며 각 소유자 쓰기가 허용된다. Caddyfile은 root 소유 0644의 기본 ACL이다. 각 디렉터리는 SELinux `usr_t`, Caddyfile은 `httpd_config_t`로 표시됐다. 서로 다른 mount namespace가 같은 inode를 본다는 근거는 아니고 TCP admin의 변경 권한은 시험하지 않았다. 이 결과는 M4-04-01~03과 M6/M7의 보안·권한 이관 근거로 사용하며 운영 변경은 하지 않았다.
+
+추가 root 조회에서 두 정적 자산 디렉터리 자체는 host와 Caddy PID 1413의 namespace가 같은 device·inode를 보았다. Client dist는 `(35, 329753)`, Studio dist는 `(35, 351608)`이고 소유권과 mode도 양쪽 관점에서 각각 UID/GID 1000·0755, UID/GID 1001·0755로 일치했다. 이는 해당 시점의 디렉터리 inode 확인이며 내부 전체 파일·상위 경로·향후 교체까지 검증한 것은 아니다.
+
+추가 로컬 회귀: 중첩 route 트리, runtime mapping, 조사 기록과 journal/DB 배포 가드 후보 및 손상 WAL 차단, typed 로그의 스냅샷 연속성 보완을 포함해 **564개 통과·1개 건너뜀**. 실제 운영 Caddy의 302/Location 형태를 제한적으로 비교할 뿐 실제 리다이렉트 의미와 동적 응답 보안성은 미검증이다. 가드는 내용이 있는 WAL을 무조건 거절하므로 실제 운영에 적용하기 전 M7에서 안전한 checkpoint·점검 절차가 필요하다. 각 부품은 여전히 preflight/복구 승인에 연결되지 않았으며 실제 Linux·gate·Studio 통합 증거가 아니다.
+
+실행 체크리스트 추가 후 진단 변경을 포함한 전체 로컬 회귀는 **605개 통과·1개 건너뜀**이다. gate 상태 진단과 pinned review 대조가 성공해도 인증·동시성 및 검토자의 실제 승인 증거가 없으므로 각각 배포나 복구를 승인하지 않는다. 서버 설정·파일·서비스는 변경하지 않았다.
+
+외부 SSH 재확인: Caddy·llama-server·Client·gate·Studio·Wiki는 모두 active/running이다. Client·Wiki는 `yeppyshiba`, gate·Studio는 `ai-studio`, Caddy는 `caddy`로 실행되며 Caddy의 `NoNewPrivileges=no`다. 같은 origin의 `HEAD /`와 `HEAD /llm/`는 HTML 200, `HEAD /wiki/`는 JSON 405였고 세 응답에서 CSP·`X-Content-Type-Options`·`Service-Worker-Allowed` 헤더가 관찰되지 않았다. 이는 세 HEAD 응답만의 관찰이며 GET·업로드·다른 오류 경로 전체의 정책 증거는 아니다. 운영 변경은 하지 않았다.
+
+사용자 root 읽기 전용 배포 권한 확인: `sudo -l -U yeppyshiba`에는 일반 `(ALL) ALL` 권한과 Client 서비스 재시작 및 `/usr/local/sbin/bc250-ai-studio-deploy`에 대한 별도 NOPASSWD 허용이 표시됐다. 일반 `(ALL) ALL`의 인증 여부를 NOPASSWD라고 추정하지 않는다. Client 루트·backend·frontend 및 Wiki 루트는 UID/GID 1000·0755, Studio 루트와 `/etc/caddy`는 root·0755이며 조사한 상위 경로의 ACL은 기본 owner/group/other 항목이다. Studio NOPASSWD 배포 명령의 구현과 신뢰 경계, sudo 인증 정책, 모든 관리자 경로의 잠금 참여는 아직 확인하지 않았다. M4-04-01의 신뢰 모델 및 M7 root 승격·배포 절차에 반영하며, 조회 과정에서 설정·서비스는 변경하지 않았다.
+
+Studio 배포 wrapper는 현재 root 소유 0755의 일반 파일이며 `yeppyshiba`가 쓸 수 없다. 일반 계정의 읽기 전용 문자열 분류상 staging·lock·systemctl 관련 코드가 있으나, 이 사실만으로 입력 검증·자산 승격·공용 잠금 참여를 증명할 수 없다. 신뢰된 root 운영자를 전제로 일반 서비스 계정과 운영자 권한을 분리하고, Client restart와 Studio NOPASSWD 경로의 실행 코드·의존성·입력 승격 경계를 검증해야 한다. 실제 배포 구성과 독립 Studio 승격은 M7에서 처리한다.
+
+후속 로컬 검사: route별 응답 profile 진단, runtime 공유 쓰기 매핑 거절, 조사 증거 archive·review 결속 및 FIFO 거절을 포함한 전체 회귀는 **637개 통과·1개 건너뜀**이다. archive는 원본 bytes를 보관하며 비밀 redaction이나 출처 인증을 제공하지 않고 운영 복구에 연결하지 않았다. 기존 `main` push 배포는 Client 서비스 재시작과 일반 계정 쓰기 경로 갱신을 수행하고 model worker/root runtime을 설치하지 않으므로, 이번 진단 부품을 검증하기 위한 운영 배포는 수행하지 않았다.

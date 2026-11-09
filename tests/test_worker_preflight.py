@@ -20,10 +20,11 @@ def test_preflight_checks_identities_and_authenticated_protocol(tmp_path, monkey
         return httpx.Response(200, json={'protocol': 1, 'enabled': True, 'transition_clear': True})
     pre = CoordinationPreflight('studio-key', 'gate-key', lock, journal,
                                 held_lock=SimpleNamespace(handle=handle), transport=httpx.MockTransport(response))
-    monkeypatch.setattr(pre, 'service_identity', lambda unit, account: (os.getpid(), 'start'))
-    client_checks = []
-    monkeypatch.setattr('backend.app.model_control.preflight.verify_client_process', lambda pid: client_checks.append(pid))
-    monkeypatch.setattr('backend.app.model_control.preflight.verify_operator_frontend', lambda: None)
+    identities = []
+    def identity(unit, account):
+        identities.append((unit, account))
+        return os.getpid(), 'start'
+    monkeypatch.setattr(pre, 'service_identity', identity)
     # /proc is Linux-only; compare against this process's paths through a test proxy.
     original_stat = os.stat
     def stat(path, **kwargs):
@@ -34,7 +35,8 @@ def test_preflight_checks_identities_and_authenticated_protocol(tmp_path, monkey
     monkeypatch.setattr('backend.app.model_control.preflight.os.stat', stat)
     try:
         pre()
-        assert client_checks == [os.getpid(), os.getpid()]
+        assert identities == [('bc250-ai-studio.service', 'ai-studio'),
+                              ('bc250-llm-gate.service', 'ai-studio')] * 2
         assert [r.headers['authorization'] for r in requests] == ['Bearer gate-key', 'Bearer studio-key']
         lock.unlink(); lock.write_text('replaced')
         with pytest.raises(RuntimeError, match='inode changed'):
@@ -59,35 +61,12 @@ def test_preflight_rejects_untrusted_contract(tmp_path, monkeypatch, bad):
             return (1, str(len(calls)) if bad == 'pid' else 'start')
         monkeypatch.setattr(pre, 'service_identity', identity)
         monkeypatch.setattr(pre, 'same_studio_files', lambda _pid: None)
-        monkeypatch.setattr('backend.app.model_control.preflight.verify_client_process', lambda _pid: None)
-        monkeypatch.setattr('backend.app.model_control.preflight.verify_operator_frontend', lambda: None)
         with pytest.raises(RuntimeError): pre()
 
 
 def test_preflight_requires_both_credentials(tmp_path):
     with pytest.raises(ValueError):
         CoordinationPreflight('', 'key', tmp_path / 'lock', tmp_path / 'journal', held_lock=None)
-
-
-def test_preflight_rejects_untrusted_client_before_gate_or_studio_calls(tmp_path, monkeypatch):
-    requests = []
-    pre = CoordinationPreflight('studio', 'gate', tmp_path / 'lock', tmp_path / 'journal',
-                                held_lock=None, transport=httpx.MockTransport(lambda request: requests.append(request)))
-    monkeypatch.setattr(pre, 'service_identity', lambda unit, account: (123, 'start'))
-    def reject(_pid):
-        raise RuntimeError('Untrusted Client installation')
-    monkeypatch.setattr('backend.app.model_control.preflight.verify_client_process', reject)
-    with pytest.raises(RuntimeError, match='Untrusted Client'):
-        pre()
-    assert requests == []
-
-
-def test_frontend_provenance_absence_blocks_switch_preflight(tmp_path, monkeypatch):
-    pre = CoordinationPreflight('studio', 'gate', tmp_path / 'lock', tmp_path / 'journal', held_lock=None)
-    monkeypatch.setattr(pre, 'service_identity', lambda unit, account: (123, 'start'))
-    monkeypatch.setattr('backend.app.model_control.preflight.verify_client_process', lambda _pid: None)
-    with pytest.raises(RuntimeError, match='frontend provenance'):
-        pre()
 
 
 @pytest.mark.parametrize('fault', [None, 'unit_uid', 'process_uid', 'process_gid', 'process_privileges'])

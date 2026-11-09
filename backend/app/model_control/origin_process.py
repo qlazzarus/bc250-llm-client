@@ -106,13 +106,41 @@ def inspect_dynamic_backend(*, unit, account, group, executable, argv, binary_di
     return identity
 
 
+def _verify_proc_visibility(root):
+    """Reject known restricted proc mounts; this cannot establish host visibility."""
+    if os.geteuid() != 0:
+        raise RuntimeError('Privileged proc inspection required')
+    mountpoint = str(root)
+    # An escaped mount point is deliberately unsupported instead of being guessed.
+    if not mountpoint.startswith('/') or any(c in mountpoint for c in ' \t\n\\'):
+        raise RuntimeError('Unsupported proc mount path')
+    matches = []
+    for line in (root / 'self' / 'mountinfo').read_text().splitlines():
+        fields = line.split()
+        if '-' not in fields:
+            raise RuntimeError('Invalid mountinfo')
+        separator = fields.index('-')
+        if separator < 6 or len(fields) < separator + 4:
+            raise RuntimeError('Invalid mountinfo')
+        if fields[4] == mountpoint:
+            matches.append((fields, separator))
+    if len(matches) != 1:
+        raise RuntimeError('Proc mount is missing or ambiguous')
+    fields, separator = matches[0]
+    options = set(fields[5].split(',')) | set(fields[separator + 3].split(','))
+    if (fields[3] != '/' or fields[separator + 1] != 'proc'
+            or any(option.startswith('hidepid=') and option != 'hidepid=0' for option in options)
+            or 'hidepid' in options or any(option.startswith('subset=') for option in options)):
+        raise RuntimeError('Restricted proc mount')
+
+
 def inspect_loopback_listener(target, *, backend_pid, caddy_pid, proc_root=Path('/proc')):
     """Check one Linux TCP listener and its sole visible process owner.
 
     Requires a complete, privileged /proc view; inaccessible entries and
-    observed changes fail closed, but FD transfers and other races may escape
-    detection. PID namespace and hidepid visibility and separate task FD
-    tables are not established, so this does not prove exclusive ownership.
+    observed changes fail closed, and separate task FD tables are inspected.
+    PID namespace and hidepid visibility remain unproven; FD transfers and
+    other races may escape detection, so this does not prove exclusive ownership.
     The snapshot cannot prevent later changes, authenticate HTTP responses,
     or establish the safety of a network namespace or runtime.
     """
@@ -123,9 +151,10 @@ def inspect_loopback_listener(target, *, backend_pid, caddy_pid, proc_root=Path(
         raise ValueError('Invalid listener policy')
     root = Path(proc_root)
     port = int(target.split(':')[1])
+    _verify_proc_visibility(root)
 
-    def namespace(pid):
-        info = os.stat(root / str(pid) / 'ns/net')
+    def namespace(pid, kind='net'):
+        info = os.stat(root / str(pid) / 'ns' / kind)
         return info.st_dev, info.st_ino
 
     def listeners():
@@ -150,19 +179,38 @@ def inspect_loopback_listener(target, *, backend_pid, caddy_pid, proc_root=Path(
         return found[0]
 
     ns = namespace(backend_pid)
-    if namespace(caddy_pid) != ns or namespace('self') != ns:
+    pid_ns = namespace('self', 'pid')
+    if (namespace(backend_pid, 'pid') != pid_ns or namespace(caddy_pid, 'pid') != pid_ns
+            or namespace(caddy_pid) != ns or namespace('self') != ns):
         raise RuntimeError('Listener network namespace mismatch')
     inode = listeners()
-    pids_before = {entry.name for entry in os.scandir(root) if entry.name.isdigit()}
-    owners = set()
-    for pid in pids_before:
-        with os.scandir(root / pid / 'fd') as entries:
-            for entry in entries:
-                if os.readlink(entry.path) == f'socket:[{inode}]':
-                    owners.add(int(pid))
-    pids_after = {entry.name for entry in os.scandir(root) if entry.name.isdigit()}
-    if (pids_before != pids_after or owners != {backend_pid} or listeners() != inode
-            or namespace(backend_pid) != ns or namespace(caddy_pid) != ns or namespace('self') != ns):
+    def snapshot_owners():
+        pids = {entry.name for entry in os.scandir(root) if entry.name.isdigit()}
+        owners = set()
+        tasks = {}
+        for pid in pids:
+            task_dir = root / pid / 'task'
+            tids = {entry.name for entry in os.scandir(task_dir) if entry.name.isdigit()}
+            if pid not in tids:
+                raise RuntimeError('Process leader task is missing')
+            tasks[pid] = tids
+            for tid in tids:
+                with os.scandir(task_dir / tid / 'fd') as entries:
+                    for entry in entries:
+                        if os.readlink(entry.path) == f'socket:[{inode}]':
+                            owners.add(int(pid))
+            if tids != {entry.name for entry in os.scandir(task_dir) if entry.name.isdigit()}:
+                raise RuntimeError('Task inventory changed')
+        if pids != {entry.name for entry in os.scandir(root) if entry.name.isdigit()}:
+            raise RuntimeError('Process inventory changed')
+        return pids, tasks, owners
+
+    first = snapshot_owners()
+    second = snapshot_owners()
+    _verify_proc_visibility(root)
+    if (first != second or first[2] != {backend_pid} or listeners() != inode
+            or namespace(backend_pid) != ns or namespace(caddy_pid) != ns or namespace('self') != ns
+            or any(namespace(pid, 'pid') != pid_ns for pid in (backend_pid, caddy_pid, 'self'))):
         raise RuntimeError('Listener owner or namespace is unstable or untrusted')
     return inode
 

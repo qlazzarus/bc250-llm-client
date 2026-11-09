@@ -5,6 +5,7 @@ on deployment validation and recovery testing.
 """
 
 import asyncio
+from contextlib import ExitStack, nullcontext
 import json
 import os
 import stat
@@ -119,12 +120,47 @@ class SwitchJournal:
         self.write({})
 
 
+async def finish_before_cancelling(awaitable):
+    """Keep critical work alive until it releases its locks, even if cancelled."""
+    task = asyncio.create_task(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        # Retrieve any exception before propagating cancellation to the caller.
+        if not task.cancelled():
+            task.exception()
+        raise
+
+
 class ModelSwitch:
-    def __init__(self, journal, lock, gate, service, *, preflight=None):
+    def __init__(self, journal, lock, gate, service, *, preflight=None, origin_lock=nullcontext):
         self.journal, self.lock, self.gate, self.service = journal, lock, gate, service
         self.preflight = preflight
+        self.origin_lock = origin_lock
 
     async def switch(self, target, *, operation_id=None, progress=None, verified=None, hold_created=None):
+        return await finish_before_cancelling(self._switch_guarded(target, operation_id=operation_id,
+            progress=progress, verified=verified, hold_created=hold_created))
+
+    async def _switch_guarded(self, target, *, operation_id=None, progress=None, verified=None, hold_created=None):
+        # Keep the origin stable through preflight, mutation, and rollback.
+        stack = ExitStack()
+        try:
+            stack.enter_context(self.origin_lock())
+        except Exception as error:
+            raise SwitchAdmissionBlocked("Origin change lock unavailable") from error
+        with stack:
+            return await self._switch_with_origin_lock(target, operation_id=operation_id,
+                progress=progress, verified=verified, hold_created=hold_created)
+
+    async def _switch_with_origin_lock(self, target, *, operation_id=None, progress=None, verified=None, hold_created=None):
         if not isinstance(target, str) or not MODEL_NAME.fullmatch(target):
             raise ValueError("Invalid model name")
         if operation_id is not None and (not isinstance(operation_id, str)
@@ -207,6 +243,13 @@ class ModelSwitch:
                 raise SwitchFailed("Switch failed; previous model restored", error_code=code) from original
 
     async def recover(self, *, expected=None, preflight=None):
+        return await finish_before_cancelling(self._recover_guarded(expected=expected, preflight=preflight))
+
+    async def _recover_guarded(self, *, expected=None, preflight=None):
+        with self.origin_lock():
+            return await self._recover_with_origin_lock(expected=expected, preflight=preflight)
+
+    async def _recover_with_origin_lock(self, *, expected=None, preflight=None):
         async with self.lock:
             state = self.journal.read()
             if expected is not None and state != expected:

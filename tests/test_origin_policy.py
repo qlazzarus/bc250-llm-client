@@ -190,3 +190,17 @@ def test_listener_and_matcher_reject_ambiguous_expressions(field, value):
     else: server['routes'][0]['match'] = [{field: value}]
     expected = {'ui': {'kind': 'static', 'target': '/opt/client/dist'}, 'api': {'kind': 'dynamic', 'target': '127.0.0.1:8010'}}
     with pytest.raises(ValueError): enumerate_supported_routes(config, expected)
+
+
+@pytest.mark.parametrize('handler', [
+    {'handler': 'subroute', 'routes': [{'handle': [{'handler': 'static_response', 'body': 'unsafe'}]}]},
+    {'handler': 'rewrite', 'uri': '/admin'},
+])
+def test_inventory_rejects_uninspected_nested_routes_and_rewrites(handler):
+    from backend.app.model_control.origin_policy import enumerate_supported_routes
+    config = sample_routes()
+    config['apps']['http']['servers']['srv']['routes'][0]['handle'] = [handler]
+    expected = {'ui': {'kind': 'static', 'target': '/opt/client/dist'},
+                'api': {'kind': 'dynamic', 'target': '127.0.0.1:8010'}}
+    with pytest.raises(ValueError):
+        enumerate_supported_routes(config, expected)

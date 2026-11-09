@@ -8,7 +8,7 @@ import asyncio
 import os
 import re
 
-from .coordinator import SwitchAdmissionBlocked, SwitchFailed
+from .coordinator import SwitchAdmissionBlocked, SwitchFailed, finish_before_cancelling
 from .barrier import SwitchRecoveryRequired
 from .operations import OperationConflict
 
@@ -155,9 +155,13 @@ class SwitchWorker:
         self.inflight += 1
         try:
             async with self.recovery_lock:
-                return await self._resolve_verified(principal, operation_id)
+                return await finish_before_cancelling(self._resolve_guarded(principal, operation_id))
         finally:
             self.inflight -= 1
+
+    async def _resolve_guarded(self, principal, operation_id):
+        with self.switch.origin_lock():
+            return await self._resolve_verified(principal, operation_id)
 
     async def _resolve_verified(self, principal, operation_id):
             if self.verify_studio is None or self.reconciliation_error:

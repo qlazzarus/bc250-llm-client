@@ -25,7 +25,7 @@ STATE = Path('/var/lib/bc250-model-control')
 GPU_LOCK = Path('/run/bc250-gpu/gpu.lock')
 WORKER_LOCK = Path('/run/bc250-gpu/model-worker.lock')
 SOCKET = '/run/bc250-model-control/control.sock'
-CLIENT_USER = 'ai-client'
+CLIENT_USER = 'yeppyshiba'
 
 
 def credential(name, *, optional=False):
@@ -56,14 +56,10 @@ def validate_state_directory():
 
 
 def client_service_uid():
-    """Permit only a distinct non-login account, never the SSH operator UID."""
+    """Authorize the configured Client process UID on the worker socket."""
     account = pwd.getpwnam(CLIENT_USER)
-    group = grp.getgrnam(CLIENT_USER)
-    if (account.pw_uid == 0 or account.pw_gid != group.gr_gid
-            or account.pw_shell not in {'/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false'}):
+    if account.pw_uid == 0:
         raise RuntimeError('Unsafe Client service account')
-    if any(entry.pw_uid == account.pw_uid and entry.pw_name != CLIENT_USER for entry in pwd.getpwall()):
-        raise RuntimeError('Client service UID is shared')
     return account.pw_uid
 
 
@@ -85,9 +81,9 @@ def build_worker():
     gate = SwitchGate(settings.admission_url, gate_key, SystemdLLM(settings))
     lock = AsyncGPULock(GPU_LOCK)
     preflight = CoordinationPreflight(studio_key, gate_key, GPU_LOCK, STATE / 'switch.json', held_lock=lock.file_lock)
-    recovery_preflight = RecoveryPreflight(studio_key, gate_key, GPU_LOCK, STATE / 'switch.json',
-                                          held_lock=lock.file_lock, journal=journal)
     switch = ModelSwitch(journal, lock, gate, service, preflight=preflight)
+    recovery_preflight = RecoveryPreflight(studio_key, gate_key, GPU_LOCK, STATE / 'switch.json',
+                                           held_lock=lock.file_lock, journal=journal)
     return SwitchWorker(SwitchOperations(STATE / 'operations.sqlite3'), switch,
                         FileLock(WORKER_LOCK, secure_precreated=True), verify_studio=recovery_preflight)
 
