@@ -115,6 +115,12 @@ class Admission:
         async with self.condition:
             self.active -= 1; self.condition.notify_all()
 
+    async def close_uncertain(self):
+        """Do not report a drained gate when an upstream close failed."""
+        async with self.condition:
+            self.failed = True
+            self.condition.notify_all()
+
     async def mutate(self, operation, hold, body=None, *, exclusive=False, expected_generation=None):
         async with self.condition:
             self._check(); body = body or {}; holds = self.holds.copy(); reservation = self.reservation; epoch = self.epoch; generation = self.generation
@@ -169,8 +175,10 @@ class UpstreamResponse(StreamingResponse):
             async def cleanup():
                 try:
                     await self.upstream.aclose()
-                finally:
-                    await self.admission.leave()
+                except BaseException:
+                    await self.admission.close_uncertain()
+                    raise
+                await self.admission.leave()
             task = asyncio.create_task(cleanup())
             cancelled = False
             while not task.done():
@@ -253,6 +261,7 @@ def create_app(state_path, upstream_url, *, admin_key, studio_key, switch_key, u
     async def proxy(path: str, request: Request, x_model_epoch: str | None = Header(None)):
         if path == 'control' or path.startswith('control/'): raise HTTPException(404)
         await app.state.gate.enter(x_model_epoch)
+        forwarding = False
         try:
             headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
             authorization = headers.get('authorization', '')
@@ -262,12 +271,21 @@ def create_app(state_path, upstream_url, *, admin_key, studio_key, switch_key, u
             upstream_request = app.state.client.build_request(
                 request.method, upstream_url.rstrip('/') + '/' + path,
                 params=request.query_params, headers=headers, content=await request.body())
+            # A timeout or cancellation after sending starts does not prove that
+            # the upstream stopped processing the request.
+            forwarding = True
             upstream = await app.state.client.send(upstream_request, stream=True)
             return UpstreamResponse(upstream, app.state.gate)
         except httpx.HTTPError:
-            await app.state.gate.leave()
+            if forwarding:
+                await app.state.gate.close_uncertain()
+            else:
+                await app.state.gate.leave()
             return Response(status_code=503, content=b'LLM upstream unavailable')
         except BaseException:
-            await app.state.gate.leave()
+            if forwarding:
+                await app.state.gate.close_uncertain()
+            else:
+                await app.state.gate.leave()
             raise
     return app

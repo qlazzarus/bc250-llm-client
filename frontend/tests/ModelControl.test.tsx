@@ -214,3 +214,22 @@ describe('model control UI', () => {
     expect(posts).toBe(1);
   }, 15000);
 });
+
+
+it('notifies the parent only after a successful operation and model snapshot', async () => {
+  const notify = vi.fn();
+  sessionStorage.setItem('model-switch-operation', opId);
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith('/current')) return response({ operation: null });
+    if (url.endsWith(opId)) return response({ id: opId, model: 'beta', state: 'succeeded' });
+    if (url.endsWith('/llm/models')) return response(models('beta'));
+    throw new Error(url);
+  }));
+  render(<ModelControl onSwitchSucceeded={notify} />);
+  await authorizeAndLoad();
+  await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole('button', { name: '상태 조회' }));
+  await screen.findByText(/로드된 모델: beta/);
+  expect(notify).toHaveBeenCalledTimes(1);
+});

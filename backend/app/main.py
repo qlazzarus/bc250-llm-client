@@ -353,21 +353,62 @@ def begin_generation(conversation_id: str, body: MessageCreate, settings: Settin
     return conversation, dict(generation), history, None
 
 
-async def resolve_gate_model(settings: Settings) -> str:
+class GateModel(str):
+    def __new__(cls, model_id: str, epoch: str | None = None):
+        value = super().__new__(cls, model_id)
+        value.epoch = epoch
+        return value
+
+
+def gate_headers(settings: Settings, model: str) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {settings.llm_gate_api_key}"}
+    epoch = getattr(model, "epoch", None)
+    if epoch is not None:
+        headers["X-Model-Epoch"] = epoch
+    return headers
+
+
+def epoch_mismatch():
+    return fail("model_epoch_mismatch", "모델이 변경되었거나 전환 중입니다. 다시 시도해 주세요.", 409)
+
+
+async def gate_model_snapshot(settings: Settings) -> tuple[dict, str | None]:
     try:
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-            response = await client.get(f"{settings.llm_gate_url}/v1/models", headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
-            response.raise_for_status()
-            model_ids = [item.get("id") for item in response.json().get("data", []) if isinstance(item, dict) and isinstance(item.get("id"), str)]
-    except httpx.HTTPError:
+            headers = {"Authorization": f"Bearer {settings.llm_gate_api_key}"}
+            response = await client.get(f"{settings.llm_gate_url}/model-snapshot", headers=headers)
+            if response.status_code == 404 and not settings.model_control_enabled:
+                response = await client.get(f"{settings.llm_gate_url}/v1/models", headers=headers)
+                response.raise_for_status()
+                models, epoch = response.json(), None
+            else:
+                if response.status_code == 409:
+                    raise epoch_mismatch()
+                response.raise_for_status()
+                snapshot = response.json()
+                if (not isinstance(snapshot, dict) or snapshot.get("ready") is not True
+                    or not isinstance(snapshot.get("epoch"), str)
+                    or not re.fullmatch(r"[0-9a-f]{32}", snapshot["epoch"])
+                    or not isinstance(snapshot.get("models"), dict)):
+                    raise ValueError("invalid model snapshot")
+                models, epoch = snapshot["models"], snapshot["epoch"]
+            if not isinstance(models, dict) or not isinstance(models.get("data"), list):
+                raise ValueError("invalid model list")
+            return models, epoch
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
         raise fail("gate_unavailable", "모델 정보를 지금 조회할 수 없습니다.", 503)
+
+
+async def resolve_gate_model(settings: Settings) -> str:
+    models, epoch = await gate_model_snapshot(settings)
+    model_ids = [item.get("id") for item in models["data"] if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()]
     if not model_ids:
         raise fail("no_model_available", "LLM gate에서 사용할 수 있는 모델을 찾지 못했습니다.", 503)
     if settings.llm_model_id:
         if settings.llm_model_id not in model_ids:
             raise fail("configured_model_unavailable", "서버에 설정된 모델을 LLM gate에서 찾지 못했습니다.", 503)
-        return settings.llm_model_id
-    return model_ids[0]
+        return GateModel(settings.llm_model_id, epoch)
+    return GateModel(model_ids[0], epoch)
 
 
 def mark_generation_terminal(settings: Settings, generation_id: str, status_value: Literal["failed", "cancelled"], error_code: str | None = None, error_message: str | None = None, finish_reason: str | None = None) -> None:
@@ -437,7 +478,7 @@ async def generate_conversation_title(settings: Settings, conversation_id: str, 
         async with app.state.generation_limiter:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
                 response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
-                                             headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+                                             headers=gate_headers(settings, model_id))
                 response.raise_for_status()
                 result = response.json()
         raw = (((result.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
@@ -560,13 +601,13 @@ async def run_summary_job(settings: Settings, job_id: str) -> None:
         async with app.state.generation_limiter:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
                 response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
-                                             headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+                                             headers=gate_headers(settings, model_id))
                 response.raise_for_status()
                 result = response.json()
         content = (((result.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         if not content:
             raise ValueError("요약 결과가 비어 있습니다.")
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, HTTPException, ValueError):
         logger.warning("Roleplay summary failed for job %s", job_id, exc_info=True)
         set_summary_failure(settings, job_id, "장기 기억 요약에 실패했습니다. 기존 요약은 그대로 유지됩니다.")
         return
@@ -646,7 +687,7 @@ async def run_wiki_memory_job(settings: Settings, generation_id: str) -> None:
                 raise ValueError("memory context too large")
             async with app.state.generation_limiter:
                 async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                    response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+                    response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers=gate_headers(settings, model))
                     response.raise_for_status()
                     result = response.json()
             decision = parse_decision(result["choices"][0]["message"]["content"], source, candidates, [item["content"] for item in context if item["role"] == "user"] if explicit else None)
@@ -755,13 +796,17 @@ async def wiki_draft(body: WikiDraftRequest, settings: Settings = Depends(get_se
     try:
         async with app.state.generation_limiter:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+                response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers=gate_headers(settings, model))
                 response.raise_for_status()
                 result = response.json()
         content = result["choices"][0]["message"].get("content") or ""
         if not content.strip():
             raise ValueError("empty draft")
         return {"content": content.strip()}
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 409:
+            raise epoch_mismatch()
+        raise fail("wiki_draft_failed", "Wiki 초안을 생성하지 못했습니다.", 503) from exc
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         raise fail("wiki_draft_failed", "Wiki 초안을 생성하지 못했습니다.", 503) from exc
 
@@ -836,7 +881,7 @@ async def analyze_image_intent(body: ImageIntentRequest, settings: Settings = De
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
                 for attempt in range(2):
                     response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
-                                                 headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+                                                 headers=gate_headers(settings, model_id))
                     response.raise_for_status()
                     try:
                         result = response.json()
@@ -851,6 +896,8 @@ async def analyze_image_intent(body: ImageIntentRequest, settings: Settings = De
     except httpx.TimeoutException:
         raise fail("generation_timeout", "이미지 요청 분석 시간이 초과되었습니다.", 504)
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 409:
+            raise epoch_mismatch()
         if exc.response.status_code in (400, 422):
             raise fail("image_intent_schema_unsupported", "LLM gate가 이미지 의도 분석 스키마를 지원하지 않습니다.", 502)
         raise fail("gate_unavailable", "LLM gate에 연결할 수 없습니다.", 503)
@@ -861,13 +908,8 @@ async def analyze_image_intent(body: ImageIntentRequest, settings: Settings = De
 
 @app.get("/api/v1/models", dependencies=[Depends(require_key)])
 async def models(settings: Settings = Depends(get_settings)):
-    try:
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-            response = await client.get(f"{settings.llm_gate_url}/v1/models", headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
-            response.raise_for_status()
-            return response.json()
-    except httpx.HTTPError:
-        raise fail("gate_unavailable", "모델 정보를 지금 조회할 수 없습니다.", 503)
+    models_data, _ = await gate_model_snapshot(settings)
+    return models_data
 
 
 @app.get("/api/v1/conversations", dependencies=[Depends(require_key)])
@@ -1462,7 +1504,7 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
                     mark_generation_started(settings, generation["id"])
                     async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
                         async with client.stream("POST", f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
-                                                 headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"}) as response:
+                                                 headers=gate_headers(settings, model_id)) as response:
                             response.raise_for_status()
                             async for raw_line in response.aiter_lines():
                                 if generation["id"] in app.state.cancelled_generations or await request.is_disconnected():
@@ -1514,6 +1556,14 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
             except httpx.TimeoutException:
                 mark_generation_terminal(settings, generation["id"], "failed", "generation_timeout", "응답 생성 시간이 초과되었습니다. 다시 시도해 주세요.")
                 yield event("error", {"code": "generation_timeout", "message": "응답 생성 시간이 초과되었습니다. 다시 시도해 주세요."})
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 409:
+                    error = epoch_mismatch().detail
+                    mark_generation_terminal(settings, generation["id"], "failed", error["code"], error["message"])
+                    yield event("error", error)
+                    return
+                mark_generation_terminal(settings, generation["id"], "failed", "gate_unavailable", "LLM gate에 연결할 수 없습니다.")
+                yield event("error", {"code": "gate_unavailable", "message": "LLM gate에 연결할 수 없습니다."})
             except httpx.HTTPError:
                 mark_generation_terminal(settings, generation["id"], "failed", "gate_unavailable", "LLM gate에 연결할 수 없습니다. 대기열 또는 일시중지 상태일 수 있습니다.")
                 yield event("error", {"code": "gate_unavailable", "message": "LLM gate에 연결할 수 없습니다. 대기열 또는 일시중지 상태일 수 있습니다."})
@@ -1531,7 +1581,7 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
                     if generation["id"] in app.state.cancelled_generations or await request.is_disconnected():
                         mark_generation_terminal(settings, generation["id"], "cancelled", "cancelled", "사용자가 요청을 취소했습니다.")
                         raise fail("cancelled", "요청이 취소되었습니다.", 499)
-                    response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+                    response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers=gate_headers(settings, model_id))
                     response.raise_for_status()
                     try:
                         if is_image_prompt:
@@ -1563,6 +1613,10 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
         raise fail("generation_timeout", "응답 생성 시간이 초과되었습니다. 다시 시도해 주세요.", 504)
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
+        if status_code == 409:
+            error = epoch_mismatch()
+            mark_generation_terminal(settings, generation["id"], "failed", error.detail["code"], error.detail["message"])
+            raise error
         if is_image_prompt and status_code in {400, 422}:
             message = "LLM gate가 이미지 프롬프트용 구조화된 출력을 지원하지 않습니다. gate 설정을 확인해 주세요."
             mark_generation_terminal(settings, generation["id"], "failed", "image_prompt_schema_unsupported", message)
@@ -1609,10 +1663,20 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
 async def gate_status(settings: Settings = Depends(get_settings)):
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(f"{settings.llm_gate_url}/health", headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+            headers = {"Authorization": f"Bearer {settings.llm_gate_api_key}"}
+            snapshot = await client.get(f"{settings.llm_gate_url}/model-snapshot", headers=headers)
+            if snapshot.status_code == 404 and not settings.model_control_enabled:
+                path = "/health"
+            elif snapshot.status_code in (200, 409):
+                path = "/control"
+            else:
+                snapshot.raise_for_status()
+                raise ValueError("unexpected snapshot status")
+            response = await client.get(f"{settings.llm_gate_url}{path}", headers=headers)
             response.raise_for_status()
             return response.json()
-    except httpx.HTTPError: raise fail("gate_unavailable", "LLM gate 상태를 조회할 수 없습니다.", 503)
+    except (httpx.HTTPError, ValueError):
+        raise fail("gate_unavailable", "LLM gate 상태를 조회할 수 없습니다.", 503)
 
 
 @app.put("/api/v1/admin/gate-control", dependencies=[Depends(require_operator)])

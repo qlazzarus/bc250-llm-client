@@ -17,7 +17,7 @@ function readPending(): PendingRequest | null {
   } catch { return null; }
 }
 
-export function ModelControl() {
+export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => void } = {}) {
   const [key, setKey] = useState('');
   const [models, setModels] = useState<Models | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
@@ -64,14 +64,17 @@ export function ModelControl() {
       if (generation.current !== version) return;
       if (value) sessionStorage.setItem(operationStorage, value.id);
       setOperation(value); setModels(list); setStatusVerified(true); setError('');
-      if (value && terminal.has(value.state)) terminalRefreshed.current = value.id;
+      if (value && terminal.has(value.state)) {
+        if (value.state === 'succeeded' && terminalRefreshed.current !== value.id) onSwitchSucceeded?.();
+        terminalRefreshed.current = value.id;
+      }
     } catch {
       if (generation.current === version) setError('일부 상태를 확인하지 못했습니다. 다시 조회해 주세요.');
     } finally {
       window.clearTimeout(timeout); refreshing.current = false;
       if (refreshController.current === controller) refreshController.current = null;
     }
-  }, [key, headers, operation, pending]);
+  }, [key, headers, operation, pending, onSwitchSucceeded]);
 
   useEffect(() => {
     if (!key || !operation || terminal.has(operation.state)) return;

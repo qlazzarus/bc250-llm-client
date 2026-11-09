@@ -13,8 +13,9 @@ from backend.app.db import connect, initialize
 
 
 class FakeModelsResponse:
+    status_code = 200
     def raise_for_status(self): pass
-    def json(self): return {"data": [{"id": "gate-selected-model"}]}
+    def json(self): return {"ready": True, "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "models": {"data": [{"id": "gate-selected-model"}]}}
 
 
 @pytest.fixture
@@ -1995,5 +1996,156 @@ def test_local_mode_requires_browser_marker_and_allowed_host(monkeypatch):
             assert client.post(path, headers={**headers, "origin": "https://evil.example"}, json={}).status_code == 403
             assert client.get(path, headers={**headers, "sec-fetch-site": "cross-site"}).status_code == 403
             assert client.get(path, headers={**headers, "origin": "http://testserver"}).status_code == 200
+    finally:
+        directory.cleanup()
+
+
+def test_snapshot_binds_model_and_epoch_and_never_falls_back_on_conflict(monkeypatch):
+    import asyncio
+    calls = []
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, url, **kwargs):
+            calls.append((url, kwargs['headers']))
+            return main.httpx.Response(200, request=main.httpx.Request('GET', url), json={'ready': True, 'epoch': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'models': {'data': [{'id': 'model-a'}]}})
+    monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kwargs: FakeHTTP())
+    model = asyncio.run(main.resolve_gate_model(main.get_settings()))
+    assert model == 'model-a'
+    assert main.gate_headers(main.get_settings(), model) == {'Authorization': 'Bearer gate-key', 'X-Model-Epoch': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
+    assert len(calls) == 1 and calls[0][0].endswith('/model-snapshot')
+
+    async def conflict(self, url, **kwargs):
+        calls.append((url, kwargs['headers']))
+        return main.httpx.Response(409)
+    monkeypatch.setattr(FakeHTTP, 'get', conflict)
+    with pytest.raises(main.HTTPException) as exc:
+        asyncio.run(main.resolve_gate_model(main.get_settings()))
+    assert exc.value.status_code == 409 and exc.value.detail['code'] == 'model_epoch_mismatch'
+    assert len(calls) == 2
+
+
+def test_legacy_fallback_only_on_missing_snapshot(monkeypatch):
+    import asyncio
+    calls = []
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, url, **kwargs):
+            calls.append(url)
+            request = main.httpx.Request('GET', url)
+            return main.httpx.Response(404, request=request) if url.endswith('/model-snapshot') else main.httpx.Response(200, request=request, json={'data': [{'id': 'legacy'}]})
+    monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kwargs: FakeHTTP())
+    model = asyncio.run(main.resolve_gate_model(main.get_settings()))
+    assert model == 'legacy' and 'X-Model-Epoch' not in main.gate_headers(main.get_settings(), model)
+    assert len(calls) == 2
+
+
+def test_stale_epoch_fails_stream_without_retry(monkeypatch, isolate_title_generation):
+    client, directory = make_client(monkeypatch)
+    calls = []
+    class Stream:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def raise_for_status(self):
+            raise main.httpx.HTTPStatusError('conflict', request=main.httpx.Request('POST', 'http://gate'), response=main.httpx.Response(409))
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, *args, **kwargs): return FakeModelsResponse()
+        def stream(self, *args, **kwargs):
+            calls.append(kwargs['headers'])
+            return Stream()
+    monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kwargs: FakeHTTP())
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers, json={'content': '질문', 'stream': True})
+            assert response.status_code == 200
+            assert 'model_epoch_mismatch' in response.text
+            assert len(calls) == 1 and calls[0]['X-Model-Epoch'] == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            assert not any(message['role'] == 'assistant' for message in conversation_messages(client, cid, headers))
+    finally:
+        directory.cleanup()
+
+
+@pytest.mark.parametrize('snapshot_status', [200, 404, 409])
+def test_models_endpoint_snapshot_legacy_and_paused(monkeypatch, snapshot_status):
+    client, directory = make_client(monkeypatch)
+    calls = []
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, url, **kwargs):
+            calls.append(url)
+            request = main.httpx.Request('GET', url)
+            if url.endswith('/model-snapshot'):
+                return main.httpx.Response(snapshot_status, request=request, json={'ready': True, 'epoch': 'a' * 32, 'models': {'data': [{'id': 'snapshot'}]}})
+            return main.httpx.Response(200, request=request, json={'data': [{'id': 'legacy'}]})
+    monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kwargs: FakeHTTP())
+    try:
+        with client:
+            result = client.get('/api/v1/models', headers={'Authorization': 'Bearer client-key'})
+            assert result.status_code == (409 if snapshot_status == 409 else 200)
+            if snapshot_status != 409:
+                assert result.json()['data'][0]['id'] == ('legacy' if snapshot_status == 404 else 'snapshot')
+            assert len(calls) == (2 if snapshot_status == 404 else 1)
+    finally:
+        directory.cleanup()
+
+
+@pytest.mark.parametrize('snapshot_status,expected_path', [(200, '/control'), (409, '/control'), (404, '/health')])
+def test_gate_status_uses_control_or_legacy_health(monkeypatch, snapshot_status, expected_path):
+    client, directory = make_client(monkeypatch)
+    calls = []
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, url, **kwargs):
+            calls.append((url, kwargs['headers']))
+            request = main.httpx.Request('GET', url)
+            return main.httpx.Response(snapshot_status if url.endswith('/model-snapshot') else 200, request=request, json={'paused': snapshot_status == 409})
+    monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kwargs: FakeHTTP())
+    try:
+        with client:
+            response = client.get('/api/v1/admin/gate-status', headers={'Authorization': 'Bearer client-key'})
+            assert response.status_code == 200
+            assert calls[-1][0].endswith(expected_path)
+            assert calls[-1][1]['Authorization'] == 'Bearer gate-key'
+    finally:
+        directory.cleanup()
+
+
+def test_invalid_snapshot_epoch_is_rejected(monkeypatch):
+    import asyncio
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, url, **kwargs):
+            return main.httpx.Response(200, request=main.httpx.Request('GET', url), json={'ready': True, 'epoch': 'bad', 'models': {'data': [{'id': 'm'}]}})
+    monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kwargs: FakeHTTP())
+    with pytest.raises(main.HTTPException) as exc:
+        asyncio.run(main.resolve_gate_model(main.get_settings()))
+    assert exc.value.status_code == 503
+
+
+def test_switching_enabled_rejects_missing_snapshot_without_legacy_fallback(monkeypatch):
+    client, directory = make_client(monkeypatch)
+    monkeypatch.setattr(main.get_settings(), 'model_control_enabled', True)
+    calls = []
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, url, **kwargs):
+            calls.append(url)
+            return main.httpx.Response(404, request=main.httpx.Request('GET', url))
+    monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kwargs: FakeHTTP())
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            assert client.get('/api/v1/models', headers=headers).status_code == 503
+            assert client.get('/api/v1/admin/gate-status', headers=headers).status_code == 503
+            assert len(calls) == 2 and all(url.endswith('/model-snapshot') for url in calls)
     finally:
         directory.cleanup()

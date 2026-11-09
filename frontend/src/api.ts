@@ -61,14 +61,14 @@ export function newRequestId(): string {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string, public code?: string) { super(message); }
 }
 
 export const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
   const response = await fetch(`${API}${path}`, { ...init, headers: { 'Content-Type': 'application/json', 'X-BC250-Client': '1', ...init.headers } });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new ApiError(response.status, body?.error?.message || '요청에 실패했습니다.');
+    throw new ApiError(response.status, body?.error?.message || '요청에 실패했습니다.', body?.error?.code);
   }
   return response.status === 204 ? undefined as T : response.json();
 };
@@ -93,7 +93,7 @@ export const streamRequest = async (
   });
   if (!response.ok || !response.body) {
     const error = await response.json().catch(() => null);
-    throw new Error(error?.error?.message || '요청에 실패했습니다.');
+    throw new ApiError(response.status, error?.error?.message || '요청에 실패했습니다.', error?.error?.code);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

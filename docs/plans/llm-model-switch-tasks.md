@@ -210,6 +210,14 @@ M4 핵심은 **로컬 구현 및 대역 검증 완료**이나 단계 전체는 �
 
 **2026-11-09 가정용 단일 관리자 결정:** 아래 과거의 origin·root 자산·별도 UID·엄격한 감사 출처 검증은 이번 전환 기능의 완료 게이트에서 제외한다. 사용자는 동일 관리자 계정을 사용하고 Studio 배포 방법도 변경 가능하다고 확인했다. 앱·관리자 인증, 공용 worker, GPU lock/journal, gate admission/drain·hold 보존과 불명 상태의 안전한 복구는 계속 필수다. 해당 결정이 아래 표의 기존 보안 강화 항목과 구 체크리스트에 우선한다. M4-02/03은 축소된 로컬 범위만 완료했고 실제 gate/Studio 제공자와 Linux/운영 검증은 M5~M8에 남는다.
 
+로컬 변경: 전환 preflight는 더 이상 UI/Caddy 자산 출처나 Client 전용 UID를 필수로 요구하지 않는다. 현재 서버의 `yeppyshiba` Client와 `ai-studio` gate/Studio 계정, socket 그룹을 반영했고 기능 검사와 공유 GPU lock·journal 대조 및 복구 preflight는 유지한다. 별도의 앱·운영자 인증도 유지한다. 실제 운영의 gate는 protocol 3이 아니므로 후보를 배포·연결했다고 주장하지 않는다.
+
+gate protocol 3의 owned hold·epoch·예약·streaming 및 Studio recovery endpoint 패치를 handoff 기반 로컬 후보로 추가했다. gate는 재시작 때 startup hold를 영속 추가하고, 응답 streaming이 끝날 때까지 active 요청을 유지한다. Studio 후보는 공유 GPU 잠금을 다시 취득하지 않고 journal digest와 root 소유 잠금·자체 복구 상태를 확인한다. 당시 Client snapshot 연동은 미구현이었고, 기존 gate 상태 이전·실제 Studio 패치 적용·Linux 서비스 간 검증은 여전히 필요하다. 당시 전체 로컬 회귀 **651개 통과·1개 건너뜀**; Studio 전체 원본 테스트는 `sqlalchemy` 미설치로 실행하지 못했다. 서버 설정과 서비스는 변경하지 않았다.
+
+후속 후보 검증: Client의 추론 경로는 같은 모델 snapshot의 epoch를 전달하고 전환 활성 상태에서 구형 gate fallback을 거절한다. gate/Client ASGI 통합에서 정상 streaming·일반 응답 및 전환 사이의 stale 409를 확인했다. UI는 409 시 초안을 보존하며 모델 목록을 재조회하고, 전환 성공 시 활성 모델도 갱신한다. 현재 전체 백엔드 로컬 회귀 **669개 통과·1개 건너뜀**, 프런트 lint·13개 테스트·build 통과다. 이 결과는 실제 gate 상태 이전이나 Studio/Linux 종단 검증을 대신하지 않는다.
+
+M5-01 부분 구현: `MODEL_CONTROL_ENABLED=true`와 고정 `LLM_MODEL_ID`의 조합을 설정 단계에서 거절하며 전환 비활성 시 기존 고정 모델 설정은 유지한다. 현재 로드된 운영 모델의 읽기 전용 `/props` 및 `/slots`는 context 16384를 보고했다. 다른 모델의 실제 slot context·기능과 모델별 요청 예산은 아직 확인·구현하지 않았으며 추정하지 않는다. 이 변경까지 포함한 백엔드 전체 회귀는 **672개 통과·1개 건너뜀**이다.
+
 | ID | 출처 | 구현·검증 작업 | 완료 조건 | 상태 |
 | --- | --- | --- | --- | --- |
 | M4-04-01 | M4-02 | 전환·배포의 운영 조율 | 전환 중 배포/restart가 겹치지 않도록 운영 절차를 정하고 미해결 전환은 보존 | 범위 조정: root 검토 anchor·모든 배포자의 provenance 강제 제외; 실제 설치·운영 절차는 M7 |

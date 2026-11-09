@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength } from './api';
+import { ApiError, newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength } from './api';
 import { MessageList } from './components/MessageList';
 import { ModelControl } from './components/ModelControl';
 import './image-prompt.css';
@@ -8,7 +8,7 @@ import './style.css';
 import './scroll.css';
 
 type Detail = Conversation & { messages: Message[]; nextBefore: string | null; hasMore: boolean };
-type RetryInfo = { conversationId: string; content: string; requestId: string; message: string; promptMode?: PromptMode; imageModelId?: string };
+type RetryInfo = { conversationId: string; content: string; requestId: string; message: string; promptMode?: PromptMode; imageModelId?: string; epochMismatch?: boolean };
 type InFlightGeneration = { conversationId: string; requestId: string; controller: AbortController };
 export type ImageDraftEditor = Pick<ImageDraft, 'prompt' | 'width' | 'height' | 'generation_config' | 'revision' | 'preset_name'> & { persisted: boolean; dirty: boolean };
 
@@ -96,10 +96,11 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
   </form></Modal>;
 }
 
-function App() {
+export function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [active, setActive] = useState<Detail>();
   const [models, setModels] = useState<string[]>([]);
+  const [modelsUnavailable, setModelsUnavailable] = useState(false);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -146,6 +147,20 @@ function App() {
     setModels(modelResponse.data.map(model => model.id));
     setImageCapabilities(capabilities);
   };
+
+  const refreshModels = useCallback(async () => {
+    try {
+      const result = await request<{ data: { id: string }[] }>('/models');
+      setModels(result.data.map(model => model.id));
+      setModelsUnavailable(false);
+    } catch { setModels([]); setModelsUnavailable(true); }
+  }, []);
+
+  useEffect(() => {
+    if (!modelsUnavailable) return;
+    const timer = window.setInterval(() => void refreshModels(), 5000);
+    return () => window.clearInterval(timer);
+  }, [modelsUnavailable, refreshModels]);
 
   const ensureImageDraft = useCallback(async (conversationId: string, messageId: string, config: { prompt: string; width: number; height: number; preset_name?: ImagePresetName | null }) => {
     if (imageDraftsRef.current[messageId] || imageDraftLoadingRef.current.has(messageId)) return;
@@ -313,7 +328,12 @@ function App() {
       await refresh();
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : '이미지 프롬프트 작성에 실패했습니다.';
-      if ((caught as DOMException).name !== 'AbortError') setRetryInfo({ conversationId, content, requestId, message, promptMode: selectedMode, imageModelId: selectedModel });
+      const epochMismatch = caught instanceof ApiError && caught.code === 'model_epoch_mismatch';
+      if ((caught as DOMException).name !== 'AbortError') setRetryInfo({ conversationId, content, requestId, message, promptMode: selectedMode, imageModelId: selectedModel, epochMismatch });
+      if (epochMismatch) {
+        if (activeIdRef.current === conversationId) setInput(current => current || content);
+        await refreshModels();
+      }
       if (activeIdRef.current === conversationId) {
         setNotice((caught as DOMException).name === 'AbortError' ? '생성 취소를 요청했습니다.' : message);
         await loadConversation(conversationId);
@@ -363,13 +383,18 @@ function App() {
             setNotice((data.generation as Generation | undefined)?.finish_reason === 'length' ? '답변 길이 제한에 도달했습니다.' : '');
           }
         }
-        if (name === 'error') throw new Error(String(data.message || '생성에 실패했습니다.'));
+        if (name === 'error') throw new ApiError(0, String(data.message || '생성에 실패했습니다.'), typeof data.code === 'string' ? data.code : undefined);
       }, controller.signal);
       if (activeIdRef.current === conversationId) await loadConversation(conversationId);
       await refresh();
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : '생성에 실패했습니다.';
-      if ((caught as DOMException).name !== 'AbortError') setRetryInfo({ conversationId, content, requestId, message });
+      const epochMismatch = caught instanceof ApiError && caught.code === 'model_epoch_mismatch';
+      if ((caught as DOMException).name !== 'AbortError') setRetryInfo({ conversationId, content, requestId, message, epochMismatch });
+      if (epochMismatch) {
+        if (!generated && activeIdRef.current === conversationId) setInput(current => current || content);
+        await refreshModels();
+      }
       if (activeIdRef.current === conversationId) {
         setNotice((caught as DOMException).name === 'AbortError' ? '생성 취소를 요청했습니다.' : message);
         await loadConversation(conversationId);
@@ -386,10 +411,12 @@ function App() {
     }
   };
   const send = async () => {
-    if (!active || !input.trim() || busy || (active.mode === 'image_prompt' && promptMode === 'original' ? !imageModelId : !models.length)) return;
+    if (!active || !input.trim() || busy || inFlightRef.current || (active.mode === 'image_prompt' && promptMode === 'original' ? !imageModelId : !models.length)) return;
     const content = input.trim();
+    const saved = retryInfo?.epochMismatch && retryInfo.conversationId === active.id && retryInfo.content === content
+      && (active.mode !== 'image_prompt' || (retryInfo.promptMode === promptMode && retryInfo.imageModelId === imageModelId)) ? retryInfo : undefined;
     setInput('');
-    await runGeneration(active, content);
+    await runGeneration(active, content, saved?.requestId, Boolean(saved));
   };
   const cancel = async () => {
     const inFlight = inFlightRef.current;
@@ -401,7 +428,8 @@ function App() {
     }
   };
   const retry = async () => {
-    if (!retryInfo) return;
+    if (!retryInfo || busy || inFlightRef.current) return;
+    if (retryInfo.epochMismatch && activeIdRef.current === retryInfo.conversationId) setInput(current => current.trim() === retryInfo.content ? '' : current);
     let target = active;
     if (activeIdRef.current !== retryInfo.conversationId) {
       activeIdRef.current = retryInfo.conversationId;
@@ -429,7 +457,7 @@ function App() {
       <button onClick={() => { setMenuOpen(false); void showSystem(); }}>시스템 상태</button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
     </aside>
     <section className="chat">
-      {systemView ? <section className="system-panel"><h2>BC-250 시스템 상태</h2><p>이미지 작업이 진행 중이면 image_priority 정책에 따라 LLM이 대기할 수 있습니다.</p><h3>사용 가능 모델</h3><ul>{models.map(model => <li key={model}>{model}</li>)}</ul><ModelControl /><h3>LLM Gate</h3><pre>{JSON.stringify(gate, null, 2)}</pre><button onClick={showSystem}>새로고침</button></section>
+      {systemView ? <section className="system-panel"><h2>BC-250 시스템 상태</h2><p>이미지 작업이 진행 중이면 image_priority 정책에 따라 LLM이 대기할 수 있습니다.</p><h3>사용 가능 모델</h3><ul>{models.map(model => <li key={model}>{model}</li>)}</ul><ModelControl onSwitchSucceeded={refreshModels} /><h3>LLM Gate</h3><pre>{JSON.stringify(gate, null, 2)}</pre><button onClick={showSystem}>새로고침</button></section>
       : active ? <><header><div><h2>{active.title}</h2><p className="muted">{MODE_META[active.mode].label} · {active.mode === 'image_prompt' ? '영어 JSON 설정 · 매 요청 독립 작성' : `${LENGTH_LABEL[active.response_length]} · ${active.context_policy === 'none' ? '이전 대화 미포함' : '최근 대화 포함'}`}</p></div><button onClick={() => setSettingsDialog(true)} disabled={busy}>설정</button><button className="danger" disabled={busy} onClick={() => void deleteConversation(active)}>삭제</button></header>
         {active.mode !== 'image_prompt' && <div className="mode-banner" role="status">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다. <button className="plain" onClick={() => setSettingsDialog(true)} disabled={busy}>기억 확인</button></div>}
         {active.mode === 'image_prompt' && <div className="mode-banner">매 요청은 독립적으로 작성됩니다. 결과 카드에서 모델·프리셋·프롬프트·세부 옵션을 확인·수정한 뒤, 원할 때만 이미지 생성 요청을 누르세요.</div>}
@@ -460,7 +488,7 @@ function App() {
           </div></details>}
           <div className="composer"><textarea aria-label={active.mode === 'image_prompt' ? '이미지 장면 입력' : '메시지 입력'} value={input} disabled={busy} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} placeholder={active.mode === 'image_prompt' ? '원하는 이미지 장면을 전체 문장으로 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)' : '메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)'} /><button disabled={busy || !input.trim() || (active.mode === 'image_prompt' && promptMode === 'original' ? !imageModelId : !models.length)} onClick={() => void send()}>{busy ? (active.mode === 'image_prompt' ? '작성 중' : '생성 중') : (active.mode === 'image_prompt' ? '프롬프트 작성' : '전송')}</button>{busy && inFlightRef.current?.conversationId === active.id && <button className="plain" onClick={() => void cancel()}>취소</button>}</div>
         </div>
-        {notice && <div className="notice">{notice}{retryInfo && <button className="plain" onClick={() => void retry()}>재시도</button>}</div>}
+        {(notice || modelsUnavailable) && <div className="notice">{notice}{modelsUnavailable && <> 모델 목록을 확인하지 못했습니다. 자동으로 다시 확인합니다. <button className="plain" onClick={() => void refreshModels()}>모델 다시 조회</button></>}{retryInfo && <button className="plain" disabled={busy || modelsUnavailable} onClick={() => void retry()}>재시도</button>}</div>}
       </> : <div className="empty"><h2>새 대화를 시작하세요</h2><button onClick={() => setNewDialog(true)}>대화 만들기</button></div>}
     </section>
     {newDialog && <NewConversationDialog onClose={() => setNewDialog(false)} onCreate={createConversation} />}
@@ -468,4 +496,5 @@ function App() {
   </main>;
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+const root = document.getElementById('root');
+if (root) createRoot(root).render(<App />);

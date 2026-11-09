@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_token_settings(self) -> "Settings":
+        if self.model_control_enabled and self.llm_model_id:
+            raise ValueError("LLM_MODEL_ID must be empty when MODEL_CONTROL_ENABLED=true")
         if self.app_auth_mode == "key" and not self.app_api_key:
             raise ValueError("APP_API_KEY is required in key mode")
         if self.app_auth_mode == "local" and self.cors_origins.strip():

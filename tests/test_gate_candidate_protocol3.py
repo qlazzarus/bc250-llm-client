@@ -5,10 +5,71 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from gate_candidate.gate import Admission, create_app, provision
+from gate_candidate.gate import Admission, UpstreamResponse, create_app, provision
 
 OWN = 'switch-' + 'a' * 32
 STUDIO = 'studio-' + 'b' * 32
+
+
+@pytest.mark.asyncio
+async def test_failed_upstream_close_keeps_gate_unavailable(tmp_path):
+    path = tmp_path / 'state'
+    provision(path)
+    gate = Admission(path)
+    try:
+        await gate.mutate('release', 'startup')
+        epoch = (await gate.status())['epoch']
+        await gate.enter(epoch)
+
+        class Upstream:
+            status_code = 200
+            headers = {}
+
+            async def aiter_raw(self):
+                yield b'data'
+
+            async def aclose(self):
+                raise OSError('upstream close failed')
+
+        async def receive():
+            return {'type': 'http.request', 'body': b'', 'more_body': False}
+
+        async def send(_message):
+            pass
+
+        response = UpstreamResponse(Upstream(), gate)
+        with pytest.raises(OSError, match='close failed'):
+            await response({'type': 'http', 'asgi': {'spec_version': '2.4'}}, receive, send)
+        assert gate.active == 1
+        with pytest.raises(HTTPException) as error:
+            await gate.status()
+        assert error.value.status_code == 503
+    finally:
+        gate.close()
+
+
+@pytest.mark.asyncio
+async def test_uncertain_forward_keeps_gate_unavailable(tmp_path):
+    path = tmp_path / 'state'
+    provision(path)
+
+    def upstream(request):
+        raise httpx.ReadTimeout('upstream result unknown', request=request)
+
+    app = create_app(path, 'http://localhost:8080', admin_key='admin',
+                     studio_key='studio', switch_key='switch',
+                     transport=httpx.MockTransport(upstream))
+    async with app.router.lifespan_context(app):
+        gate = app.state.gate
+        await gate.mutate('release', 'startup')
+        epoch = (await gate.status())['epoch']
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://gate') as client:
+            response = await client.post('/v1/chat/completions', headers={'X-Model-Epoch': epoch})
+            assert response.status_code == 503
+        assert gate.active == 1
+        with pytest.raises(HTTPException) as error:
+            await gate.status()
+        assert error.value.status_code == 503
 
 @pytest.mark.asyncio
 async def test_epoch_admission_reservation_and_restart(tmp_path):
