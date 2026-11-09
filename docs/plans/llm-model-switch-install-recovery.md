@@ -65,6 +65,8 @@ sudo ai-model status --operation <operation-id>
 
 새 요청과 배포를 중단하고 실행 중 systemd 작업, worker DB의 미해결 작업, journal과 switch hold/예약을 확인한다. 하나라도 불명이면 롤백 대신 §3으로 분기한다. 안전한 상태가 확인된 경우에만 새 worker/CLI 진입을 중단하고, 기존 CLI·Studio·gate·Client의 **서로 호환되는 백업 세트**를 복원한다. 기존 관리자 pause와 독립 hold는 보존한다. 구형 gate는 protocol 3 상태를 이해하지 못하므로 미해결 예약이나 switch hold가 있는 상태에서 구형 gate로 단순 교체하지 않는다. 이후 기존 모델 health·ID, Studio 이미지 경로, Client 추론 및 원래 pause를 확인한다.
 
+로컬 `legacy_pause_for_rollback`은 active/waiting 0, 예약·deployment generation 부재 및 `startup`/`legacy` 외 hold가 없는 상태만 구형 pause 값으로 변환한다. 이는 다른 저장소의 미해결 기록이나 동시 작업을 검사하지 않는다. 특히 구형 gate는 재기동 시 unpaused이므로 원래 pause가 있었다면 외부 유입을 차단한 상태에서 기존 pause를 복원할 방법을 검증하기 전에는 롤백하지 않는다.
+
 ## 5. 적용 전에 해결할 항목
 
 - gate 기존 pause/대기 연결과 protocol 3 durable state를 안전하게 이전하는 실제 명령 및 역방향 롤백.

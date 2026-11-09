@@ -259,6 +259,12 @@ M7-01 준비: [설치·복구 절차 초안](llm-model-switch-install-recovery.m
 
 후속 Studio 기준 정정: 운영 세 파일의 hash는 `imagegen-closeout-20261107` 보존본과 일치한다. 이 기준으로 fuzz 없이 적용되는 별도 patch를 생성하고 운영 원문 임시 복사본에 dry-run했다. 패치된 closeout 후보의 Studio GPU/journal 시험 36개와 Client·Studio/worker socket 시험 5개 통과. 운영 서버 적용이나 실제 GPU 검증은 아니다. Linux 실제 socketpair에서 SO_PEERCRED도 확인했다.
 
+Studio CI 대상 후속: 실제 저장소 `qlazzarus/bc250-ai-studio`의 main `47f7dc5`에서 protocol 3 변경과 복구 endpoint 회귀를 [초안 PR #1](https://github.com/qlazzarus/bc250-ai-studio/pull/1)로 준비했다. main push는 자동 배포되므로 미병합 상태다. 기존 Studio 릴리스 백엔드 129개, 새 endpoint 1개 및 Ruff가 로컬에서 통과했다. 현재 workflow는 PR에서 실행되지 않아 GitHub CI 통과 증거는 없다. 운영 서버에서는 사용자 소유 일회성 systemd service에서 worker 격리 import, 임시 socket/service에서 실제 socket activation을 확인했다. root 소유 unit·credential·실제 worker/gate 설치, 운영 상태 이전 및 롤백 종단 시험은 수행하지 않았다.
+
+Studio PR #1은 사용자 보고 및 GitHub에서 merge commit `448bcd3375b8` 병합을 확인했고, 운영 Studio 코드 해시가 이전 버전에서 변경됐다. Client·Studio·기존 gate·llama는 조회 시 active였으며 worker socket은 미설치였다. 실제 배포 설정과 GPU 동작은 별도 확인이 필요하다.
+
+gate 이전/롤백 로컬 보완: 구형 pause 양쪽을 protocol 3로 이전해 gate 재시작과 startup hold 해제 후 원래 pause가 보존되는지 확인했다. protocol 3 상태를 구형 bool로 표현할 수 있는지 검사하는 순수 판정도 추가했다. 다른 hold·예약·진행 중 요청·불명 상태는 롤백 판정을 거절한다. 관련 gate·worker 시험 52개 통과. 판정만으로 worker journal/DB가 안전하거나 구형 gate 재기동의 pause 공백이 해결된 것은 아니며, 실제 Linux 서비스 설치·상태 이전 및 롤백은 미완료다.
+
 2026-11-09 사용자 판단: 단일 사용자·관리자 환경에서 UI로 모델을 쉽게 바꾸는 것이 목표다. 기존 conf 형식이나 서비스 구성을 유지하는 일 자체는 필수 조건이 아니며 필요하면 변경할 수 있다. 다만 전환과 실제 로드 모델의 일치, GPU 공유 잠금, journal, gate drain·다른 hold 보존, 불명 결과의 복구 및 기존 인증은 유지한다. 설정 변경 방식은 실제 통합에서 기능과 복구를 검증해 결정한다.
 
 #### 과거 M4-04 보안 강화 체크리스트 — 이번 필수 범위에서 제외
