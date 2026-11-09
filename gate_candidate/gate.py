@@ -21,13 +21,16 @@ HEX = re.compile(r'[0-9a-f]{32}\Z')
 HOP = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'x-model-epoch'}
 
 
-def provision(path):
-    """Create a new paused state exclusively. Never overwrite existing evidence."""
+def provision(path, *, legacy_paused=False):
+    """Create startup-held state exclusively, optionally preserving legacy pause."""
+    if type(legacy_paused) is not bool:
+        raise ValueError('Invalid legacy pause')
     path = Path(path)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, 'w') as f:
-            json.dump({'holds': ['startup'], 'epoch': secrets.token_hex(16), 'recovery_exclusive_hold': None, 'deployment_generation': None}, f)
+            holds = ['legacy', 'startup'] if legacy_paused else ['startup']
+            json.dump({'holds': holds, 'epoch': secrets.token_hex(16), 'recovery_exclusive_hold': None, 'deployment_generation': None}, f)
             f.flush(); os.fsync(f.fileno())
         d = os.open(path.parent, os.O_RDONLY)
         try: os.fsync(d)

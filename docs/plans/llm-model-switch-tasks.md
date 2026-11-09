@@ -218,16 +218,48 @@ gate protocol 3의 owned hold·epoch·예약·streaming 및 Studio recovery endp
 
 M5-01 부분 구현: `MODEL_CONTROL_ENABLED=true`와 고정 `LLM_MODEL_ID`의 조합을 설정 단계에서 거절하며 전환 비활성 시 기존 고정 모델 설정은 유지한다. 현재 로드된 운영 모델의 읽기 전용 `/props` 및 `/slots`는 context 16384를 보고했다. 다른 모델의 실제 slot context·기능과 모델별 요청 예산은 아직 확인·구현하지 않았으며 추정하지 않는다. 이 변경까지 포함한 백엔드 전체 회귀는 **672개 통과·1개 건너뜀**이다.
 
+2026-11-09 후속 읽기 전용 확인: 운영 `bc250-llm-gate`, `bc250-ai-studio`, `bc250-llm-client`, `llama-server`는 active이고 `bc250-model-worker.socket`은 설치되지 않았다. gate와 Studio는 `/opt/bc250-ai-studio`의 `ai-studio` 계정 서비스이며 Client는 `yeppyshiba` 계정으로 실행된다. `/usr/local/bin/ai-model`은 기존 `/opt/ai/scripts/ai-model`을 가리킨다. Client 자동 배포 스크립트는 backend와 frontend 정적 산출물만 교체하고 Client를 재시작하며 gate·Studio·worker를 설치하지 않는다. 이 조회는 서버 상태를 변경하지 않았으며 protocol 3 이전이나 실제 전환 준비를 증명하지 않는다.
+
+M4-04 후속 로컬 검증: worker의 gate 사전 검사가 protocol 3 응답의 미지·중복 hold 및 누락되거나 활성인 복구 예약을 거절하도록 보완했다. 실제 로컬 gate ASGI 후보와 worker adapter를 연결하여 예약 중 Studio hold 거절, gate 재시작 후 예약·관리자 hold 보존, 이전 epoch 거절 및 조건부 해제를 확인했다. 관련 기존 시험 129개, 변경 후 gate·예약 통합 시험 33개 및 preflight·복구 관련 시험 104개가 각각 통과했다(일부 중복). 서비스 신원과 Studio endpoint는 이 통합 시험에 포함되지 않으며 실제 Linux·운영 검증은 남는다. 전체 테스트 재실행은 완료되지 않아 통과로 기록하지 않는다.
+
 | ID | 출처 | 구현·검증 작업 | 완료 조건 | 상태 |
 | --- | --- | --- | --- | --- |
-| M4-04-01 | M4-02 | 전환·배포의 운영 조율 | 전환 중 배포/restart가 겹치지 않도록 운영 절차를 정하고 미해결 전환은 보존 | 범위 조정: root 검토 anchor·모든 배포자의 provenance 강제 제외; 실제 설치·운영 절차는 M7 |
-| M4-04-02 | M4-02 | Client·Studio 접속과 모델 API 경로 | 기존 `/llm` 및 Studio 연동 동작, 관리 API 인증과 오류 처리 확인 | 범위 조정: Caddy 전체 route·자산 서명 및 별도 UID 강제 제외; 최종 UI/API 검증은 M6/M8 |
-| M4-04-03 | M4-02 | 실제 서비스·공유 GPU 파일 상태 확인 | Studio·worker가 같은 GPU lock/journal을 사용하고 실패·부재 시 전환 거절 | 진행 중: 기존 런타임 계정 허용; 실제 gate/Studio 계약과 Linux 검증은 M5-02/03·M6 |
-| M4-04-04 | M4-02 | 기능 중심 전환 preflight | 인증된 gate/Studio 기능 계약과 공용 GPU lock을 확인; 미지원·불일치 시 변경 전에 거절 | 진행 중: origin 자산·응답의 무조건 차단 제거, protocol 3 등 실제 제공자 구현 필요 |
-| M4-04-05 | M4-03 | 작업 상태 기록과 root 조사 | 기존 작업 DB·journal·hold 상관관계를 보존하고 불명 결과를 표시 | 범위 조정: 별도 서명·검토자 인증·불변 archive 강제 제외; 민감정보를 기록하지 않음 |
-| M4-04-06 | M4-03 | 중단·불일치 복구 | 일치 작업은 기능 검사를 거쳐 복구하고 소유권 불명·타 hold는 보존; 실패·응답 유실을 시험 | 진행 중: 복구 검사 연결 및 실제 gate/Studio 계약 필요. 자동 orphan 종결은 요구하지 않고 불명 상태를 관리자에게 표시 |
+| M4-04-01 | M4-02 | 전환·배포의 운영 조율 | 전환 중 배포/restart가 겹치지 않도록 운영 절차를 정하고 미해결 전환은 보존 | 로컬 절차 완료: 단일 관리자의 push·배포·restart와 전환 간 수동 조율을 설치 후보 README에 명시. 자동 강제는 없으며 실제 확인 명령·설치·복구는 M7 |
+| M4-04-02 | M4-02 | Client·Studio 접속과 모델 API 경로 | 기존 `/llm` 및 Studio 연동 동작, 관리 API 인증과 오류 처리 확인 | 로컬 완료: API 인증·오류 회귀 및 실제 Studio 후보의 fake 엔진과 Client 이미지 경로 통과. 실제 `/llm` 라우팅과 운영 UI/API는 M6/M8 |
+| M4-04-03 | M4-02 | 실제 서비스·공유 GPU 파일 상태 확인 | Studio·worker가 같은 GPU lock/journal을 사용하고 실패·부재 시 전환 거절 | 로컬 완료: Linux 별도 프로세스의 `/proc/PID/root`와 실제 flock·inode 비교, 잠금 교체·journal 부재 거절 검증. 실제 Studio 서비스 namespace와 설치 파일 검증은 M6/M7 |
+| M4-04-04 | M4-02 | 기능 중심 전환 preflight | 인증된 gate/Studio 기능 계약과 공용 GPU lock을 확인; 미지원·불일치 시 변경 전에 거절 | 로컬 완료: 패치된 Studio 앱과 protocol 3 gate 앱, 실제 flock·procfs를 worker preflight에 연결해 성공·Studio 사용 중·gate 인증 실패를 검증. 서비스 신원·Studio 파일 경로 활성 여부는 대역이며 실제 프로세스와 전체 전환은 M6/M7 |
+| M4-04-05 | M4-03 | 작업 상태 기록과 root 조사 | 기존 작업 DB·journal·hold 상관관계를 보존하고 불명 결과를 표시 | 로컬 완료: 작업 DB에 hold ID를 저장하고 root 조사에서 불일치를 분류. worker·실제 gate 후보 결합 시험에서 결과 불명과 상관 journal/hold를 재시작까지 보존. 별도 서명·검토자 인증·불변 archive는 제외; 실제 Linux·운영 검증은 M6/M8 |
+| M4-04-06 | M4-03 | 중단·불일치 복구 | 일치 작업은 기능 검사를 거쳐 복구하고 소유권 불명·타 hold는 보존; 실패·응답 유실을 시험 | 로컬 완료: gate 후보 재시작·worker 재시작 후 복구, 해제 응답 유실과 독립 hold 보존 검증. 실제 Studio와 worker의 종단 복구·중단점 검증은 M6/M7. 자동 orphan 종결은 요구하지 않음 |
 
 M4-04 검증기·복구 구현이 완료돼도 M5의 실제 gate·Studio 지원, M6의 최종 후보/Linux 시험, M7의 배포·복구 준비와 M8 운영 확인 전에는 전환을 활성화하지 않는다. Studio DB 차단이나 과거 유지보수 VM 시험은 다시 시작하지 않는다.
+
+후속 계약 시험: 패치된 Studio recovery endpoint의 실제 응답과 gate 후보의 인증 응답을 worker recovery preflight에 연결해 정상 journal digest, 잠금 미확인 및 Studio 인증 실패를 확인했다. 관련 gate·Studio·preflight·예약 시험 53개 통과. Studio endpoint는 handoff 코드에서 추출했고 서비스 신원·잠금 소유·Studio의 gate identity 확인은 대역이므로 실제 프로세스 종단 검증은 아니다. 따라서 위 세부 항목을 완료로 변경하지 않는다.
+
+추가 worker 통합: 실제 작업 DB·journal·worker 및 gate ASGI 후보를 연결하여 재시작 결과 불명 후 `recovery_required`와 상관 hold를 보존하고, worker 재시작 후 이전 모델 복구 및 독립 `legacy` hold 보존을 확인했다. 모델 서비스·Studio 검증·drain은 대역이며 이후 실제 thread로 재실행해 통과했다. 관련 시험 109개 통과. M4-04-05의 로컬 완료는 실제 서비스나 운영 성공을 의미하지 않는다.
+
+Studio 원본 검증: handoff 아카이브를 임시 디렉터리에 풀고 recovery 패치를 적용했으며 의존성을 설치했다. 샌드박스에서 TestClient의 스레드 간 호출이 대기했으나 제한 밖의 동일 후보에서 GPU·journal 관련 36개 시험이 통과했다. Client·Studio fake 엔진 종단 시험은 오래된 gate 대역을 snapshot 계약으로 수정한 뒤 통과했다. Client 전체 회귀는 678개 통과·1개 건너뜀. 실제 GPU·운영 프로세스 검증이 아니며 운영 Studio는 변경하지 않았다.
+
+추가 Linux·실패 통합: 별도 프로세스의 실제 procfs 경로와 flock을 이용해 공유 inode 확인, 충돌, lock 교체 및 journal 부재 거절을 확인했다. 실제 worker·gate 후보에서 restart 결과 불명과 gate 해제 응답 유실 두 경로를 재시작 후 복구하고 다른 관리자 hold가 보존되는 것을 확인했다. 관련 시험 15개 통과. 프로세스는 실제 Studio 서비스가 아니며 Studio preflight·모델 서비스·drain은 대역이다.
+
+정상 preflight도 handoff Studio coordination endpoint의 실제 함수를 사용해 정상 응답과 Studio 작업 중 거절을 확인했다. gate identity·서비스 신원·파일 검사는 해당 시험에서 대역이다. 관련 Studio·preflight·worker/gate 시험 22개 통과.
+
+후속 로컬 앱 통합: 패치된 Studio 앱과 protocol 3 gate 앱의 실제 endpoint, worker 정상 preflight 및 실제 flock·procfs 파일 비교를 연결해 정상·Studio 사용 중·gate 인증 실패를 시험했다. Studio의 canonical 경로 활성 여부와 systemd 서비스 신원은 대역이고 모델 변경은 수행하지 않았다. Client·Studio 후보 통합 2개 통과. M4-04 완료는 로컬 구현과 계약 검증의 완료이며 M5~M8 실제 통합·배포·GPU 확인을 대신하지 않는다.
+
+최종 로컬 백엔드 회귀 681개 통과·2개 건너뜀(Studio 후보 연동 2개는 별도 실행해 통과). 프런트 lint는 통과했지만 기존 node_modules에 Vitest가 없어 테스트·빌드를 완료하지 못했고 `npm ci` 복원도 완료되지 않았다. 운영 Client 설정 파일은 일반 계정에서 읽을 수 없어 전환 활성 여부를 직접 확인하지 못했다. 따라서 현재 Client 자동 배포의 운영 준비가 검증됐다고 판단하지 않는다. 자동 배포는 worker·gate·Studio를 설치하지 않으며 전환 기능 시험을 대신하지 않는다.
+
+사용자 root 읽기 전용 확인: Client env의 `MODEL_CONTROL_ENABLED`는 `unset-or-other`, `LLM_MODEL_ID`는 `empty-or-unset`으로 보고됐다. 전자는 미설정과 다른 표기를 구별하지 않으므로 실제 유효값을 단정하지 않는다. 공유 GPU lock·switch journal·신규 switch gate/Studio 조율 credential 경로는 모두 부재했다. 운영 gate는 Studio venv의 구형 factory로 실행 중이다. protocol 3용 systemd credential 기반 factory와 unit 후보를 추가했고 관련 gate·worker 시험 22개가 통과했다. 로컬 `systemd-analyze verify`는 대상 서버에만 있는 Studio venv 경로가 없어 실행 파일을 확인하지 못했다. 이 결과는 대상 설치나 서비스 동작 검증이 아니다. 서버에서 비밀값을 생성·보관하는 방향이며 GitHub에 서비스 키를 등록할 필요는 아직 확인되지 않았다.
+
+M7-01 준비: [설치·복구 절차 초안](llm-model-switch-install-recovery.md)에 구성·credential, 백업, gate 상태 이전, 비활성 worker 설치, root 조사·복구 및 롤백 순서를 정리했다. 기존 gate 상태 이전 명령, worker 의존성 패키징, 실제 Studio 배포 설정 및 비밀 비노출 상태 확인 등은 미완료이므로 실행 승인용 최종 runbook이나 M7 완료가 아니다.
+
+후속 작업: 운영 gate 원문은 영속 hold가 없는 메모리 `paused`·active·waiting 계약임을 확인했다. 로컬 이전 후보는 인증된 구형 상태의 active/waiting이 모두 0일 때만 신규 상태를 독점 생성하고, pause는 `legacy` hold로 보존하며 `startup` hold를 추가한다. 기존 파일 덮어쓰기 및 잘못된 snapshot은 거절한다. 후보는 서비스 정지나 동시 제어 배제를 스스로 증명하지 못하므로 실제 이전 절차·역방향 복구는 미완료다. 관련 gate·worker 시험 30개 통과. gate는 Studio 배포와 분리된 Client 관리 코드·venv를 사용하도록 unit 후보를 수정했다. Studio의 이미지 기능과 공용 GPU 조율은 유지하며 실제 설치는 하지 않았다.
+
+사용자 읽기 전용 조회: gate PID 1014, `paused=false`, active/waiting 모두 0, 조회 전후 PID 동일; Client·Studio·gate·llama 모두 active였다. 이 값은 당시 순간 상태이며 적용 시 재확인이 필요하다. 비밀을 출력하지 않는 재조회 후보 `scripts/legacy_gate_status.py`는 systemd 상태와 PID/시작 시각을 전후로 확인한다. 이전·pause·정지는 실행하지 않으며 해당 status·이전·runtime 시험 14개 통과.
+
+설치 후보 후속: 운영 Studio 세 파일은 handoff와 hash가 다르지만 현재 패치는 운영 원문 복사본에 dry-run 적용 성공(GPU hunk fuzz 1); 실제 배포 원본에 대한 정식 적용·전체 테스트는 미완료다. 서버 Python은 3.14다. 별도 worker 의존성 staging 빌더와 고정 버전 목록을 추가하고 로컬 및 서버 임시 경로에서 `-I -S` import를 확인했다. 기존 gate venv가 worker bootstrap 검사 트리 안에 있으면 symlink/bytecode 검사로 실패하는 충돌을 발견해 gate를 `/opt/bc250-llm-gate`로 분리했다. 서비스 설치·동작이나 root 권한·SELinux 검증을 뜻하지 않는다.
+
+후속 Studio 기준 정정: 운영 세 파일의 hash는 `imagegen-closeout-20261107` 보존본과 일치한다. 이 기준으로 fuzz 없이 적용되는 별도 patch를 생성하고 운영 원문 임시 복사본에 dry-run했다. 패치된 closeout 후보의 Studio GPU/journal 시험 36개와 Client·Studio/worker socket 시험 5개 통과. 운영 서버 적용이나 실제 GPU 검증은 아니다. Linux 실제 socketpair에서 SO_PEERCRED도 확인했다.
+
+2026-11-09 사용자 판단: 단일 사용자·관리자 환경에서 UI로 모델을 쉽게 바꾸는 것이 목표다. 기존 conf 형식이나 서비스 구성을 유지하는 일 자체는 필수 조건이 아니며 필요하면 변경할 수 있다. 다만 전환과 실제 로드 모델의 일치, GPU 공유 잠금, journal, gate drain·다른 hold 보존, 불명 결과의 복구 및 기존 인증은 유지한다. 설정 변경 방식은 실제 통합에서 기능과 복구를 검증해 결정한다.
 
 #### 과거 M4-04 보안 강화 체크리스트 — 이번 필수 범위에서 제외
 

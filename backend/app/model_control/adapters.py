@@ -54,12 +54,17 @@ class SwitchGate:
         except (httpx.HTTPError, ValueError) as error:
             # This check runs before journal creation or service mutation.
             raise SwitchAdmissionBlocked("Cannot verify admission state") from error
-        if (not isinstance(state, dict) or state.get("protocol") != 3
+        if (not isinstance(state, dict) or type(state.get("protocol")) is not int or state.get("protocol") != 3
                 or state.get("durable") is not True
                 or not isinstance(state.get("epoch"), str)
                 or not re.fullmatch(r"[0-9a-f]{32}", state["epoch"])
                 or not isinstance(state.get("holds"), list)
-                or any(not isinstance(hold, str) for hold in state["holds"])
+                or any(not isinstance(hold, str) or not re.fullmatch(
+                    r"(?:startup|legacy|admin-[A-Za-z0-9_.:-]{1,128}|(?:studio|switch)-[0-9a-f]{32})", hold)
+                       for hold in state["holds"])
+                or len(set(state["holds"])) != len(state["holds"])
+                or "recovery_exclusive_hold" not in state
+                or state["recovery_exclusive_hold"] is not None
                 or type(state.get("paused")) is not bool
                 or state["paused"] != bool(state["holds"])):
             raise SwitchAdmissionBlocked("Owned durable gate protocol required")

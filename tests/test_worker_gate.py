@@ -10,7 +10,7 @@ async def test_owned_gate_contract_preserves_independent_hold():
     def response(request):
         assert request.headers['authorization'] == 'Bearer secret'
         if request.url.path == '/control':
-            return httpx.Response(200, json={'protocol': 3, 'durable': True, 'epoch': 'e' * 32, 'holds': sorted(holds), 'paused': bool(holds)})
+            return httpx.Response(200, json={'protocol': 3, 'durable': True, 'epoch': 'e' * 32, 'holds': sorted(holds), 'paused': bool(holds), 'recovery_exclusive_hold': None})
         hold = request.url.path.rsplit('/', 1)[1]
         if request.method == 'PUT': holds.add(hold)
         else: holds.remove(hold)
@@ -32,6 +32,21 @@ async def test_owned_gate_rejects_legacy_or_unresolved_hold(status):
     gate = SwitchGate('http://127.0.0.1:8081/control', 'secret', object(),
                       transport=httpx.MockTransport(lambda _req: httpx.Response(200, json=status)))
     with pytest.raises(SwitchAdmissionBlocked): await gate.ensure_available()
+
+
+@pytest.mark.parametrize('changes', [
+    {'holds': ['unknown'], 'paused': True},
+    {'holds': ['legacy', 'legacy'], 'paused': True},
+    {'recovery_exclusive_hold': 'switch-' + 'a' * 32},
+])
+async def test_owned_gate_rejects_inconsistent_protocol3_state(changes):
+    state = {'protocol': 3, 'durable': True, 'epoch': 'e' * 32,
+             'holds': [], 'paused': False, 'recovery_exclusive_hold': None}
+    state.update(changes)
+    gate = SwitchGate('http://127.0.0.1:8081/control', 'secret', object(),
+                      transport=httpx.MockTransport(lambda _req: httpx.Response(200, json=state)))
+    with pytest.raises(SwitchAdmissionBlocked):
+        await gate.ensure_available()
 
 async def test_conditional_release_requires_atomic_gate_contract():
     import json

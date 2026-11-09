@@ -1,0 +1,123 @@
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -1,4 +1,6 @@
+ import hmac
++import hashlib
++import json
+ import os
+ from contextlib import asynccontextmanager
+ 
+@@ -92,6 +94,43 @@
+                             and not s.db.get_state("transition", {}))
+         return {"protocol": 1, "enabled": bool(enabled), "transition_clear": bool(transition_clear)}
+ 
++    @app.get("/internal/model-switch/recovery", include_in_schema=False)
++    async def switch_recovery(authorization: str | None = Header(default=None)):
++        key = settings.coordination_key
++        supplied = authorization.removeprefix("Bearer ") if authorization else ""
++        if (not key or not authorization or not authorization.startswith("Bearer ")
++                or not hmac.compare_digest(supplied.encode(), key.encode())):
++            return JSONResponse({"code": "invalid_credential"}, status_code=401)
++        s = app.state
++        enabled = s.gpu.model_switch_coordination_enabled()
++        gate_verified = False
++        if enabled:
++            try:
++                gate_verified = await s.gpu.llm.owned_control_identity()
++            except Exception:
++                pass
++        # The switch worker holds the shared lock; attempting to acquire it here
++        # would deadlock/fail the recovery check. Normal Studio acquire and
++        # recover paths check this same journal while holding that lock.
++        state = None
++        if enabled:
++            try:
++                state = s.gpu.switch_barrier.read()
++            except Exception:
++                pass
++        gpu_blocked = state is not None and s.gpu.shared_lock_held_by_root()
++        digest = ""
++        if state is not None:
++            encoded = json.dumps(state, sort_keys=True, separators=(",", ":"),
++                                 ensure_ascii=True).encode("ascii")
++            digest = hashlib.sha256(encoded).hexdigest()
++        clear = (not s.gpu.blocked and not s.gpu.leased
++                 and not s.db.get_state("transition", {})
++                 and not s.db.get_state("recovery", {}))
++        return {"protocol": 1, "enabled": bool(enabled), "gpu_blocked": gpu_blocked,
++                "studio_recovery_clear": bool(clear), "gate_verified": bool(gate_verified),
++                "journal_sha256": digest}
++
+     @app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(authenticate)])
+     async def schema():
+         return JSONResponse(app.openapi())
+--- a/backend/app/services/llm.py
++++ b/backend/app/services/llm.py
+@@ -140,7 +140,10 @@
+     async def ensure_image_admission(self):
+         status = await self.gate("GET")
+         holds = status.get("holds")
+-        if (status.get("protocol") != 2 or status.get("durable") is not True
++        if (type(status.get("protocol")) is not int or status["protocol"] != 3
++                or status.get("durable") is not True
++                or "recovery_exclusive_hold" not in status
++                or status["recovery_exclusive_hold"] is not None
+                 or not isinstance(holds, list) or any(not isinstance(x, str) for x in holds)):
+             raise RuntimeError("Owned durable admission control is unavailable")
+         if any(hold == "startup" or hold.startswith(("studio-", "switch-")) for hold in holds):
+@@ -151,7 +154,10 @@
+         async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+             response = await client.get(self.s.admission_url.rstrip("/") + "/identity", headers=headers)
+             response.raise_for_status()
+-            return response.json() == {"role": "studio", "protocol": 2}
++            value = response.json()
++            return (isinstance(value, dict) and value.keys() == {"role", "protocol"}
++                    and value["role"] == "studio" and type(value["protocol"]) is int
++                    and value["protocol"] == 3)
+ 
+     async def resume_owned(self, hold_id):
+         await self._owned_hold(hold_id, False)
+--- a/backend/app/services/gpu.py
++++ b/backend/app/services/gpu.py
+@@ -1,4 +1,6 @@
+ import asyncio
++import os
++from pathlib import Path
+ from uuid import uuid4
+ 
+ from app.core.studio_files import FileLock, LockBusyError
+@@ -38,6 +40,34 @@
+             and self.switch_barrier is not None
+             and str(self.switch_barrier.path) == "/var/lib/bc250-model-control/switch.json"
+         )
++
++    def shared_lock_held_by_root(self):
++        """Observe the kernel lock table without acquiring or releasing the lock.
++
++        The requesting worker separately proves its own lock and file identity;
++        a root-owned exclusive flock is necessary here, not proof of that worker.
++        If procfs is unavailable or filtered, fail closed.
++        """
++        try:
++            with self.file_lock._open_secure() as handle:
++                info = os.fstat(handle.fileno())
++                for line in Path("/proc/locks").read_text().splitlines():
++                    parts = line.split()
++                    if len(parts) != 8 or parts[1:4] != ["FLOCK", "ADVISORY", "WRITE"]:
++                        continue
++                    device = parts[5].split(":")
++                    if (len(device) != 3 or int(device[0], 16) != os.major(info.st_dev)
++                            or int(device[1], 16) != os.minor(info.st_dev)
++                            or int(device[2]) != info.st_ino or not parts[4].isdigit()):
++                        continue
++                    status = Path(f"/proc/{parts[4]}/status").read_text()
++                    uid = next((row.split()[1:] for row in status.splitlines()
++                                if row.startswith("Uid:")), [])
++                    if uid == ["0", "0", "0", "0"]:
++                        return True
++        except (OSError, ValueError, RuntimeError):
++            pass
++        return False
+ 
+     def journal(self, stage, **details):
+         self.transition = {**self.transition, **details, "stage": stage, "at": now()}

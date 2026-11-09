@@ -177,7 +177,14 @@ def test_runtime_tree_compares_manifest_and_process_namespace(tmp_path, monkeypa
     def namespace_path(path):
         path = str(path)
         return path[len(remote_prefix):] if path.startswith(remote_prefix + '/') else path
-    monkeypatch.setattr(client_trust, 'trusted_entry', lambda path, *, directory: real_entry(namespace_path(path), directory=directory))
+    def test_entry(path, *, directory):
+        path = namespace_path(path)
+        # The test fixture is under the system temporary directory, whose
+        # writable parent is not part of the runtime tree being tested.
+        if directory and Path(path) in tmp_path.parents:
+            return os.lstat(path)
+        return real_entry(path, directory=directory)
+    monkeypatch.setattr(client_trust, 'trusted_entry', test_entry)
     monkeypatch.setattr(client_trust.os, 'listdir', lambda path: real_listdir(namespace_path(path)))
     client_trust.verify_runtime_trees(123, {str(root): manifest})
     module.write_text('tampered')
@@ -185,7 +192,7 @@ def test_runtime_tree_compares_manifest_and_process_namespace(tmp_path, monkeypa
         client_trust.verify_runtime_trees(123, {str(root): manifest})
     module.write_text('trusted')
     def mismatched(path, *, directory):
-        info = real_entry(namespace_path(path), directory=directory)
+        info = test_entry(path, directory=directory)
         if str(path) == remote_prefix + str(module):
             return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino + 1)
         return info

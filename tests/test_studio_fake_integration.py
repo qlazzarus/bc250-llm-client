@@ -1,6 +1,7 @@
 """Optional in-process integration against a local AI Studio checkout, using its fake CPU engine."""
 
 import asyncio
+import importlib
 import json
 import os
 import time
@@ -15,7 +16,8 @@ def test_studio_fake_queue_end_to_end(monkeypatch, tmp_path):
         pytest.skip('Set BC250_STUDIO_SOURCE to an AI Studio checkout and use its Python environment')
     pytest.importorskip('sqlalchemy')
     monkeypatch.syspath_prepend(str(Path(studio_path) / 'backend'))
-    from app.core.config import Settings as StudioSettings
+    config_module = 'app.core.studio_config' if (Path(studio_path) / 'backend/app/core/studio_config.py').is_file() else 'app.core.config'
+    StudioSettings = importlib.import_module(config_module).Settings
     from app.main import create_app as create_studio
     from fastapi.testclient import TestClient
 
@@ -90,6 +92,7 @@ def test_studio_fake_queue_end_to_end(monkeypatch, tmp_path):
                   'lighting': None, 'composition': None, 'required_elements': ['red umbrella'], 'forbidden_elements': [],
                   'exact_text': ['OPEN'], 'preferred_model': None, 'aspect_ratio': None}
         class GateResponse:
+            status_code = 200
             def __init__(self, value): self.value = value
             def raise_for_status(self): pass
             def json(self): return self.value
@@ -97,7 +100,9 @@ def test_studio_fake_queue_end_to_end(monkeypatch, tmp_path):
             def __init__(self, **_kwargs): pass
             async def __aenter__(self): return self
             async def __aexit__(self, *_args): pass
-            async def get(self, *_args, **_kwargs): return GateResponse({'data': [{'id': 'test-llm'}]})
+            async def get(self, *_args, **_kwargs):
+                return GateResponse({'ready': True, 'epoch': 'a' * 32,
+                                     'models': {'data': [{'id': 'test-llm'}]}})
             async def post(self, *_args, **kwargs):
                 payload = kwargs['json']
                 name = payload['response_format']['json_schema']['name']
@@ -130,3 +135,59 @@ def test_studio_fake_queue_end_to_end(monkeypatch, tmp_path):
         record = client.get(f'/api/v1/image-jobs/{job_id}/comparison-record', headers=headers).json()
         assert record['simulated'] and record['prompt_mode'] == 'ai_optimized'
         assert record['original_request'] == '서울의 빨간 우산과 OPEN 간판'
+
+
+def test_candidate_preflight_with_studio_and_gate_apps(monkeypatch, tmp_path):
+    """Exercise both candidate HTTP endpoints and real local lock/file checks."""
+    studio_path = os.environ.get('BC250_STUDIO_SOURCE')
+    if not studio_path or not (Path(studio_path) / 'backend/app/main.py').is_file():
+        pytest.skip('Set BC250_STUDIO_SOURCE to the patched Studio candidate')
+    pytest.importorskip('sqlalchemy')
+    import httpx
+    from fastapi.testclient import TestClient
+    from backend.app.model_control.files import FileLock
+    from backend.app.model_control.preflight import CoordinationPreflight
+    from gate_candidate.gate import create_app as create_gate, provision
+
+    monkeypatch.syspath_prepend(str(Path(studio_path) / 'backend'))
+    config_module = 'app.core.studio_config' if (Path(studio_path) / 'backend/app/core/studio_config.py').is_file() else 'app.core.config'
+    StudioSettings = importlib.import_module(config_module).Settings
+    from app.main import create_app as create_studio
+
+    lock_path, journal_path = tmp_path / 'gpu.lock', tmp_path / 'switch.json'
+    lock_path.touch()
+    journal_path.write_text('{}')
+    state_path = tmp_path / 'gate.json'
+    provision(state_path)
+    settings = StudioSettings(data_dir=tmp_path / 'data', registry_path=Path(studio_path) / 'config/models.yaml',
+                              api_key='studio-api-key-for-integration', admin_key='studio-admin-key-for-integration',
+                              coordination_key='coordination-secret-for-test', engine='fake', poll_interval=0.01)
+    gate_app = create_gate(state_path, 'http://127.0.0.1:8080', admin_key='admin',
+                           studio_key='studio', switch_key='switch')
+    lock = FileLock(lock_path)
+    lock.acquire()
+    try:
+        with TestClient(gate_app) as gate, TestClient(create_studio(settings)) as studio:
+            gpu = studio.app.state.gpu
+            monkeypatch.setattr(gpu, 'model_switch_coordination_enabled', lambda: True)
+            async def gate_identity():
+                response = await asyncio.to_thread(gate.get, '/control/identity', headers={'Authorization': 'Bearer studio'})
+                return response.status_code == 200 and response.json() == {'protocol': 3, 'role': 'studio'}
+            monkeypatch.setattr(gpu.llm, 'owned_control_identity', gate_identity, raising=False)
+            def route(request):
+                target = gate if request.url.port == 8081 else studio
+                response = target.get(request.url.path, headers={'Authorization': request.headers['authorization']})
+                return httpx.Response(response.status_code, json=response.json())
+            pre = CoordinationPreflight('coordination-secret-for-test', 'switch', lock_path, journal_path,
+                                        held_lock=lock, transport=httpx.MockTransport(route))
+            monkeypatch.setattr(pre, 'service_identity', lambda *_: (os.getpid(), 'test'))
+            pre()
+            gpu.leased = True
+            with pytest.raises(RuntimeError, match='Studio coordination unavailable'):
+                pre()
+            gpu.leased = False
+            pre.gate_key = 'wrong'
+            with pytest.raises(httpx.HTTPStatusError):
+                pre()
+    finally:
+        lock.release()

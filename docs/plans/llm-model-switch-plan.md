@@ -127,8 +127,8 @@ UI는 현재 모델, 설치 모델 선택, 전환 버튼, 전역 변경 안내, 
 | M1 명령·환경 계약 | 완료 | M1-01~03에서 운영 구성과 알려진 범위 내 호출자 확인, 명시된 Wiki 예외 및 조사 한계 기록. 실제 조율 구현·검증은 M2/M4~M7 |
 | M2 구현·공용 변경 설계 | 설계 완료 | M2-01~03의 로컬 계약·운영 조율·모델 정책 확정. 실제 조율 구현과 모델별 추론 검증은 M4~M6 |
 | M3 Client 사용자 흐름 | 로컬 완료 | M3-01~02의 API 및 가짜 작업자 기반 브라우저 흐름 검증. 최종 후보·운영 연동은 M6/M8 |
-| M4 공용 제어 실행부 | 부분 완료 | M4-01~04의 구현·로컬 검증 완료. Linux·운영 경계의 최종 검증은 M6~M8 |
-| M5 전환 후 Client 호환 | 미착수 | M5-01~03에서 모델 추종·요청 경합·다른 호출자 조율 |
+| M4 공용 제어 실행부 | 로컬 완료 | M4-01~04의 구현·로컬 검증 완료. Linux·운영 경계의 최종 검증은 M6~M8 |
+| M5 전환 후 Client 호환 | 부분 구현 | M5-01~03에서 모델 추종·요청 경합·다른 호출자 조율 |
 | M6 최종 통합 검증 | 부분 근거만 있음 | M6-01~02에서 같은 최종 후보의 기능·Linux 경계 검증 |
 | M7 배포·복구 준비 | 템플릿만 있음 | M7-01~02에서 설치·복구 절차와 준비 판정 완료 |
 | M8 운영 기능 확인·정리 | 미착수 | M8-01~03에서 실제 전환·후속 대화와 정리 완료 |
@@ -149,7 +149,7 @@ UI는 현재 모델, 설치 모델 선택, 전환 버튼, 전역 변경 안내, 
 | M4-01 | M2-01 | 영속 DB·coordinator·registry/systemd·worker·Unix·CLI 핵심 | 단일 작업·복구·연결 유실을 대역 및 로컬 socket에서 검증 | 로컬 완료: [핵심 재검증](llm-model-switch-tasks.md#m4-01-핵심-재검증--2026-11-08). journal 정리 실패 및 비활성 중 기존 키 조회 보완; 전체 229 통과·1 건너뜀. Linux·운영 별도 |
 | M4-02 | M2-02, M4-01 | preflight·bootstrap·unit/socket 기본 경계 | protocol 검사·설치 템플릿 및 관련 로컬 대역 검증 | **범위 조정 후 로컬 완료**: [사전 검사·설치 경계](llm-model-switch-tasks.md#m4-02-사전-검사설치-경계-진행--2026-11-08). 과거 origin 검증과 전용 계정 강제는 사용자 결정으로 이번 완료 조건에서 제외 |
 | M4-03 | M2-02, M4-01 | root 복구 진입·상관관계·안전 차단의 기본 구현 | root 조사·복구 후보, hold ID 영속 연결, 일치·빈 journal 대역 시험 및 불일치·손상 시 보존·차단 | **범위 조정 후 로컬 완료**: [복구·조사](llm-model-switch-tasks.md#m4-03-root-복구조사-진행). 기존 orphan·불일치 후속 처리·종결 구현은 M4-04로 이관; 실제 gate·Studio 구현과 통합은 M5/M6 |
-| M4-04 | M4-02, M4-03 | 가정용 환경의 공용 전환·복구 경로 완성 | 기존 관리자 계정과 실제 서비스 구성을 지원하고, 공유 GPU 잠금·journal·gate/Studio 인증·상태 확인 및 안전한 복구 진입을 로컬 검증. 소유권 불명 hold는 자동 해제하지 않음. [상세 추적](llm-model-switch-tasks.md#m4-04-이관된-미완료-작업) 참조 | 진행 중: 과도한 origin/배포 provenance 및 별도 UID 필수 조건을 범위에서 제외. 실제 gate·Studio 계약 구현은 M5-02/03, 실제 Linux·최종 후보는 M6, 배포·복구 절차는 M7 |
+| M4-04 | M4-02, M4-03 | 가정용 환경의 공용 전환·복구 경로 완성 | 기존 관리자 계정과 실제 서비스 구성을 지원하고, 공유 GPU 잠금·journal·gate/Studio 인증·상태 확인 및 안전한 복구 진입을 로컬 검증. 소유권 불명 hold는 자동 해제하지 않음. [상세 추적](llm-model-switch-tasks.md#m4-04-이관된-미완료-작업) 참조 | 로컬 완료: 일부 서비스 신원·모델·Studio 경로 검사는 대역. 실제 gate·Studio 통합은 M5-02/03, Linux 최종 후보는 M6, 배포·복구 절차는 M7 |
 | M5-01 | M2-03, M4-01 | 공통 모델 해석과 active-follow, 모델별 옵션 | 채팅·요약·제목·이미지 의도/프롬프트가 실제 모델에 맞는 예산을 사용하고 호환 회귀 통과 | 부분 구현: 전환 활성 상태의 고정 LLM_MODEL_ID를 설정 검증에서 거절. 모델별 실제 context·기능과 최종 payload 예산 처리는 미완료 |
 | M5-02 | M2-02, M3-01 | Client admission과 gate의 stale 요청 처리 | 신규 요청 409·초안 보존, 모델 snapshot epoch 검증, 기존 요청 drain, 백그라운드 보류 및 동시 진입 경합 검증. 복구용 배타 예약과 독립 hold·epoch 조건부 자기 hold 해제의 원자적 영속 처리 | 부분 구현: [gate_candidate](../../gate_candidate/README.md) protocol 3·streaming·hold·reservation 및 Client snapshot/epoch 로컬 후보 연결. stale 409·초안 및 모델 재조회 대역 검증. 실제 gate 이전·Studio 통합 및 Linux 중단 검증은 미완료 |
 | M5-03 | M1-03, M2-02 | 범위 내 다른 LLM/GPU 호출자 및 gate/Studio 최소 연동 | 독립 Wiki를 제외한 자동 경로가 공용 잠금·journal·owned hold를 따르거나 명확히 차단됨. Studio 복구 전용 인증 조회와 journal·GPU·독립 복구 상태 계약 구현 | 부분 구현: handoff Studio에 적용할 복구 endpoint·protocol 3 [후보 패치](../../deploy/ai-studio-model-switch-recovery.md)와 로컬 시험 추가. 운영 Studio 적용·실제 gate 통합과 벤치마크 직접 제어 정리는 미완료; Wiki 통합은 후속 예외 |

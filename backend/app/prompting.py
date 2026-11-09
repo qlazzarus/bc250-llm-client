@@ -25,7 +25,7 @@ class SummaryCandidate:
 
 
 def estimate_tokens(text: str) -> int:
-    """A conservative fallback until gate-backed token counting is available."""
+    """Estimate token usage; this heuristic does not guarantee an upper bound."""
     return max(1, ceil(len(text.encode("utf-8")) / 2))
 
 

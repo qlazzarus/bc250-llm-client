@@ -14,6 +14,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE = ROOT / 'docs/handoff/imagegen-20261107/source.tar.gz'
 PATCH = ROOT / 'deploy/ai-studio-model-switch-recovery.patch'
+CLOSEOUT = ROOT / 'docs/handoff/imagegen-closeout-20261107/source.tar.gz'
+CLOSEOUT_PATCH = ROOT / 'deploy/ai-studio-closeout-model-switch-recovery.patch'
+
+
+def test_closeout_patch_applies_without_fuzz(tmp_path):
+    with tarfile.open(CLOSEOUT) as archive:
+        for name in ('backend/app/main.py', 'backend/app/services/llm.py', 'backend/app/services/gpu.py'):
+            target = tmp_path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(archive.extractfile(name).read())
+    subprocess.run(['patch', '--fuzz=0', '-p1', '-i', str(CLOSEOUT_PATCH)],
+                   cwd=tmp_path, check=True, capture_output=True)
 
 
 @pytest.fixture
@@ -58,6 +70,82 @@ def test_recovery_reports_bound_journal_without_acquiring_lock(endpoint):
     assert result == {'protocol': 1, 'enabled': True, 'gpu_blocked': True, 'studio_recovery_clear': True, 'gate_verified': True, 'journal_sha256': digest}
     assert call(fn, 'Bearer wrong').status_code == 401
     assert call(fn, None).status_code == 401
+
+
+def test_worker_recovery_preflight_consumes_patched_studio_and_gate(endpoint, tmp_path, monkeypatch):
+    """Check the actual response contracts together, with service identities stubbed."""
+    import httpx
+    from backend.app.model_control.preflight import RecoveryPreflight
+    from gate_candidate.gate import create_app, provision
+
+    fn, gpu, _, barrier = endpoint
+    state_path = tmp_path / 'gate-state'
+    provision(state_path)
+    app = create_app(state_path, 'http://127.0.0.1:8080', admin_key='admin',
+                     studio_key='studio', switch_key='switch')
+    async def gate_identity(authorization):
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://gate') as gate:
+                return await gate.get('/control/identity', headers={'Authorization': authorization})
+
+    def respond(request):
+        if request.url.path == '/control/identity':
+            response = asyncio.run(gate_identity(request.headers['Authorization']))
+            return httpx.Response(response.status_code, json=response.json())
+        result = call(fn, request.headers.get('Authorization'))
+        if isinstance(result, dict):
+            return httpx.Response(200, json=result)
+        return httpx.Response(result.status_code, json=result.content)
+
+    pre = RecoveryPreflight('secret', 'switch', tmp_path / 'lock', tmp_path / 'journal',
+                            held_lock=None, journal=barrier, transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(pre, 'service_identity', lambda *_: (1, 'start'))
+    monkeypatch.setattr(pre, 'same_studio_files', lambda _: None)
+    pre()
+    gpu.shared_lock_held_by_root = lambda: False
+    with pytest.raises(RuntimeError, match='Studio recovery coordination unavailable'):
+        pre()
+    gpu.shared_lock_held_by_root = lambda: True
+    pre.studio_key = 'wrong'
+    with pytest.raises(httpx.HTTPStatusError):
+        pre()
+
+
+def test_normal_preflight_consumes_studio_coordination_candidate(tmp_path, monkeypatch):
+    import httpx
+    from backend.app.model_control.preflight import CoordinationPreflight
+
+    with tarfile.open(ARCHIVE) as archive:
+        for name in ('backend/app/main.py', 'backend/app/services/llm.py', 'backend/app/services/gpu.py'):
+            target = tmp_path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(archive.extractfile(name).read())
+    subprocess.run(['patch', '-p1', '-i', str(PATCH)], cwd=tmp_path, check=True, capture_output=True)
+    tree = ast.parse((tmp_path / 'backend/app/main.py').read_text())
+    create = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'create_app')
+    fn = next(n for n in create.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'coordination')
+    fn.decorator_list = []
+    fn.args.defaults = [ast.Constant(None)]
+    module = ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[]))
+    async def identity(): return True
+    gpu = SimpleNamespace(model_switch_coordination_enabled=lambda: True,
+                          llm=SimpleNamespace(owned_control_identity=identity), blocked=False, leased=False)
+    db = SimpleNamespace(get_state=lambda key, default: default)
+    namespace = {'settings': SimpleNamespace(coordination_key='secret'),
+                 'app': SimpleNamespace(state=SimpleNamespace(gpu=gpu, db=db)), 'hmac': hmac}
+    exec(compile(module, '<studio coordination candidate>', 'exec'), namespace)
+    def respond(request):
+        if request.url.path == '/control/identity':
+            return httpx.Response(200, json={'protocol': 3, 'role': 'switch'})
+        return httpx.Response(200, json=asyncio.run(namespace['coordination'](request.headers['authorization'])))
+    pre = CoordinationPreflight('secret', 'switch', tmp_path / 'lock', tmp_path / 'journal',
+                                held_lock=None, transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(pre, 'service_identity', lambda *_: (1, 'start'))
+    monkeypatch.setattr(pre, 'same_studio_files', lambda _: None)
+    pre()
+    gpu.leased = True
+    with pytest.raises(RuntimeError, match='Studio coordination unavailable'):
+        pre()
 
 
 def test_recovery_fails_closed_for_unsafe_states(endpoint):

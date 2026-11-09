@@ -1,7 +1,12 @@
 # Studio model-switch recovery candidate
 
 `ai-studio-model-switch-recovery.patch` applies to the Studio source in
-`docs/handoff/imagegen-20261107/source.tar.gz`. It retains that candidate's
+`docs/handoff/imagegen-20261107/source.tar.gz`. It also applies to the
+`docs/handoff/imagegen-closeout-20261107/source.tar.gz` Studio candidate, whose
+three affected source files matched the operating files at the last read-only
+check. `ai-studio-closeout-model-switch-recovery.patch` is generated against
+that closeout source and applies to those operating source copies without fuzz;
+verify the exact release again before deployment. It retains that candidate's
 GPU admission and Studio recovery paths: both acquire the shared GPU lock and
 check the root-controlled switch journal before proceeding. The authenticated
 recovery endpoint does not acquire the lock: the switch worker already holds it.

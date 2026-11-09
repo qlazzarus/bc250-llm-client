@@ -41,7 +41,7 @@ hold 기간에만 거절하면 **hold 이전에 모델을 조회하고 hold 해�
 
 gate 프로세스 교체 시 먼저 유입·제어 쓰기를 제한하고 기존 active 요청을 0으로 배출한다. waiting도 0이면 정상적으로 교체한다. 기존 관리자 pause 때문에 waiting이 남았다면 pause를 풀어 원래 요청을 재전송하지 않는다. pause snapshot을 영속 보존한 다음 구형 gate를 종료해 그 대기 연결을 실패로 종료하고 새 gate의 startup/legacy hold로 이어간다. 이 분기에서 active 요청이 이미 끝났고 남은 연결이 실패로 끝나는지 확인할 수 없다면 교체하지 않는다. 모델 조회는 추론 대기열과 분리해 hold 중 `ready=false`와 현재 epoch를 제공한다. 모델 ID와 epoch는 같은 세대의 snapshot으로 확인해야 하며, 조회 중 전환이 끼면 결과를 폐기한다. 작업자의 모델 검증은 gate를 우회한 loopback llama health·model ID를 사용한다. 기존 `/v1/models`와 호환되는 snapshot 전달 경로·오류 형식은 M5-02에서 Client와 gate를 함께 구현하고 통합 시험한다.
 
-현재 `gate_candidate.py`의 `Admission.enter()`는 pause 중 대기 후 원래 요청을 전달하므로 위 계약을 **아직 충족하지 않는다**. worker 후보 preflight는 protocol 3을 요구하지만 운영 gate와 기존 후보는 이를 제공하지 않는다. M4-02/M5-02에서 gate·Studio·worker·Client를 함께 변경·검증하기 전 운영 전환 기능을 활성화하지 않는다.
+현재 로컬 `gate_candidate/gate.py`는 protocol 3 admission과 epoch를 구현하고 Client 후보도 snapshot의 epoch를 전달한다. 이는 운영 gate 이전이나 Studio와의 실제 통합 검증을 뜻하지 않는다. worker 후보 preflight는 protocol 3을 요구하므로 운영 gate·Studio·worker·Client를 함께 적용하고 검증하기 전 전환 기능을 활성화하지 않는다.
 
 ## 4. 공유 잠금·journal과 복구
 

@@ -2,6 +2,8 @@
 
 이 디렉터리는 검토용 후보이며 운영에 그대로 설치하지 않는다. 구체적 포장·마이그레이션·백업·복구와 실제 Linux 검증은 M7/M6에서 완성한다.
 
+검토 중인 순서와 남은 차단 조건은 [설치·복구 절차 초안](../../docs/plans/llm-model-switch-install-recovery.md)을 따른다.
+
 - 현재 서버의 Client UID와 socket 그룹은 `yeppyshiba`를 사용한다. socket은 root 소유·`yeppyshiba` 그룹 `0660`, 상위 디렉터리는 root 소유 `0755`다. Client UID는 socket peer 검사에도 사용되며 같은 UID를 쓰는 프로세스는 동일하게 신뢰한다. 다른 서버에 맞게 변경하려면 runtime의 `CLIENT_USER`, socket unit과 필요 시 Client unit의 계정·그룹을 함께 변경해야 한다. 추후 설정 가능하게 일반화할 수 있다.
 - 가정용 단일 관리자 전제에서 기존 `/opt/bc250-llm-client`와 `yeppyshiba` 배포를 사용할 수 있다. `bc250-llm-client.service.d/identity.conf` 및 별도 root 관리 Client runtime은 과거 강화안의 **선택적 예시**이며 필수 설치 대상이 아니다. 기존 배포는 worker·공유 lock·gate/Studio 계약을 설치하지 않으므로 M7에서 필요한 설치와 롤백을 별도로 준비한다.
 - 기존 `/llm` 주소와 origin을 사용한다. 동일 origin 전체의 asset provenance·CSP·서명 manifest는 이번 모델 전환의 필수 선행 조건이 아니다. 앱과 운영자 인증은 유지하며, Wiki의 모델 조율 및 Client 통합은 사용자 지정 후속 예외다.
@@ -9,3 +11,7 @@
 - `/run/bc250-gpu/gpu.lock`과 `/var/lib/bc250-model-control/switch.json`은 root가 사전 준비한 공유 파일이어야 한다. ACL·SELinux·group 접근과 양쪽 namespace의 inode를 M6에서 실제 확인한다. 운영 Studio의 기존 lock 경로를 지금 바꾸거나 파일을 생성하지 않는다.
 
 - [origin-review-contract.md](origin-review-contract.md)는 과거 강화안의 참고 자료다. 해당 승격·잠금 체계가 활성화 전 필수라는 뜻은 아니다. 전환 중 배포/restart 경합을 피하는 운영 절차와 미해결 전환 보존은 M7에서 준비한다.
+
+## 단일 관리자 운영 절차
+
+자동 Client 배포가 시작되는 main push를 포함해 Client·gate·Studio·worker 또는 llama를 배포하거나 재시작하기 전, 관리자는 모델 전환 요청을 중단하고 실행 중 작업이 terminal 상태인지 확인한다. `recovery_required`, 결과 불명, journal/hold 불일치 또는 응답 실패가 있으면 배포와 새 전환을 중단하고 기록과 hold를 보존해 조사한다. 전환이 진행되는 동안 push·수동 배포·서비스 재시작을 하지 않는다. 배포 중에도 전환을 요청하지 않으며, 서비스가 정상 복귀하고 조율 상태를 확인한 뒤 재개한다. 이 절차는 단일 관리자의 수동 조율이며 자동 배포와 worker 사이의 강제 잠금은 아니다. M7에서 실제 설치 상태에 맞는 확인 명령과 복구·롤백 절차를 확정한다.

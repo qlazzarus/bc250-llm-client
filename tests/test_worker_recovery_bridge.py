@@ -3,6 +3,8 @@ import asyncio
 import json
 import socket
 import struct
+import os
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +19,17 @@ class Peer:
     def getsockopt(self, level, option, size):
         assert (level, option, size) == (socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
         return struct.pack('3i', 123, self.uid, 456)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux SO_PEERCRED')
+def test_peer_uid_reads_actual_linux_socket_credentials():
+    left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        assert peer_uid(left) == os.geteuid()
+        assert peer_uid(right) == os.geteuid()
+    finally:
+        left.close()
+        right.close()
 
 
 class Writer:

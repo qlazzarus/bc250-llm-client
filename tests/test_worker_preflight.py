@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -6,6 +8,35 @@ import httpx
 import pytest
 
 from backend.app.model_control.preflight import CoordinationPreflight
+from backend.app.model_control.files import FileLock, LockBusyError
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux procfs contract')
+def test_shared_files_match_live_process_and_locked_inode(tmp_path):
+    lock_path, journal = tmp_path / 'gpu.lock', tmp_path / 'switch.json'
+    lock_path.touch()
+    journal.write_text('{}')
+    child = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE)
+    lock = FileLock(lock_path)
+    try:
+        lock.acquire()
+        pre = CoordinationPreflight('studio', 'gate', lock_path, journal, held_lock=lock)
+        pre.same_studio_files(child.pid)
+        with pytest.raises(LockBusyError):
+            FileLock(lock_path).acquire()
+        lock_path.unlink()
+        lock_path.touch()
+        with pytest.raises(RuntimeError, match='inode changed'):
+            pre.same_studio_files(child.pid)
+        lock.release()
+        lock.acquire()
+        journal.unlink()
+        with pytest.raises(OSError):
+            pre.same_studio_files(child.pid)
+    finally:
+        lock.release()
+        child.stdin.close()
+        child.wait(timeout=5)
 
 
 def test_preflight_checks_identities_and_authenticated_protocol(tmp_path, monkeypatch):
