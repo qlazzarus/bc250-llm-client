@@ -58,6 +58,8 @@ def test_unknown_write_result_is_not_retried(tmp_path, monkeypatch):
         raise main.fail('wiki_unavailable', 'timeout', 503)
     async def model(_settings): return 'model'
     class Response:
+        status_code = 200
+        headers = {}
         def raise_for_status(self): pass
         def json(self): return {'choices': [{'message': {'content': json.dumps({'action': 'create', 'source_text': '녹차를 좋아해', 'title': '차 선호', 'document_id': None, 'old_text': None})}}]}
     class Client:

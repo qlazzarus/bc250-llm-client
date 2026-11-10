@@ -18,7 +18,7 @@ ID = re.compile(r'(?:startup|legacy|admin-[A-Za-z0-9_.:-]{1,128}|(?:client|studi
 SWITCH = re.compile(r'switch-[0-9a-f]{32}\Z')
 INDEPENDENT = re.compile(r'(?:startup|legacy|admin-[A-Za-z0-9_.:-]{1,128})\Z')
 HEX = re.compile(r'[0-9a-f]{32}\Z')
-HOP = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'x-model-epoch'}
+HOP = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'x-model-epoch', 'x-bc250-admission'}
 
 
 def provision(path, *, legacy_paused=False):
@@ -289,7 +289,15 @@ def create_app(state_path, upstream_url, *, admin_key, studio_key, switch_key, c
     @app.api_route('/{path:path}', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'])
     async def proxy(path: str, request: Request, x_model_epoch: str | None = Header(None)):
         if path == 'control' or path.startswith('control/'): raise HTTPException(404)
-        await app.state.gate.enter(x_model_epoch)
+        try:
+            await app.state.gate.enter(x_model_epoch)
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                # This response is generated before any upstream request. The
+                # header is stripped from upstream responses and requests.
+                return JSONResponse({'detail': exc.detail}, status_code=409,
+                                    headers={'X-BC250-Admission': 'rejected'})
+            raise
         forwarding = False
         try:
             headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}

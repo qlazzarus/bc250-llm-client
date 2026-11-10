@@ -16,7 +16,7 @@ def supported_test_features(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['none', 'too_large', 'stale', 'missing', 'summary_changed'])
+@pytest.mark.parametrize('failure', ['none', 'too_large', 'stale', 'missing', 'summary_changed', 'completion_conflict', 'gate_rejection'])
 async def test_summary_selects_whole_turns_and_preserves_cursor_on_failure(tmp_path, monkeypatch, failure):
     settings = Settings(_env_file=None, model_control_enabled=True, database_path=str(tmp_path / 'db'),
                         llm_gate_url='http://gate', llm_context_tokens=600,
@@ -27,7 +27,11 @@ async def test_summary_selects_whole_turns_and_preserves_cursor_on_failure(tmp_p
         for i, (role, content) in enumerate([('user','one'), ('assistant','answer one'), ('user','two'), ('assistant','answer two')]):
             db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?)', (f'm{i}', 'c', role, content, str(i)))
         db.execute("INSERT INTO summary_jobs VALUES ('job','c',NULL,'m3','pending',NULL,'t','t')")
-    async def resolve(_settings): return main.GateModel('model', 'a' * 32, 600)
+    attempts = []
+    async def resolve(_settings):
+        attempts.append(1)
+        return main.GateModel('model', ('b' if failure in {'stale', 'gate_rejection'} and len(attempts) > 1 else 'a') * 32, 600)
+    monkeypatch.setattr(main, 'BACKGROUND_MODEL_RECHECK_SECONDS', 0)
     monkeypatch.setattr(main, 'resolve_gate_model', resolve)
     main.app.state.generation_limiter = asyncio.Semaphore(1)
     requests = []
@@ -36,10 +40,13 @@ async def test_summary_selects_whole_turns_and_preserves_cursor_on_failure(tmp_p
         body = json.loads(request.content)
         requests.append((request.url.path, body, request.headers.get('x-model-epoch')))
         if request.url.path.endswith('input_tokens'):
-            if failure == 'stale': return httpx.Response(409, json={})
+            if failure == 'stale' and len(attempts) == 1: return httpx.Response(409, json={})
             if failure == 'missing': return httpx.Response(404, json={})
             count = 600 if failure == 'too_large' or 'answer two' in body['messages'][1]['content'] else 100
             return httpx.Response(200, json={'input_tokens': count})
+        if failure == 'completion_conflict': return httpx.Response(409, json={})
+        if failure == 'gate_rejection' and len(attempts) == 1:
+            return httpx.Response(409, json={}, headers={'X-BC250-Admission': 'rejected'})
         if failure == 'summary_changed':
             with connect(settings.database_path) as db:
                 db.execute("UPDATE conversations SET summary='edited' WHERE id='c'")
@@ -50,13 +57,20 @@ async def test_summary_selects_whole_turns_and_preserves_cursor_on_failure(tmp_p
     with connect(settings.database_path) as db:
         conversation = db.execute("SELECT * FROM conversations WHERE id='c'").fetchone()
         job = db.execute("SELECT * FROM summary_jobs WHERE id='job'").fetchone()
-    assert all(epoch == 'a' * 32 for _, _, epoch in requests)
-    if failure == 'none':
+    if failure in {'stale', 'gate_rejection'}:
+        first_new = next(i for i, (_, _, epoch) in enumerate(requests) if epoch == 'b' * 32)
+        assert all(epoch == 'a' * 32 for _, _, epoch in requests[:first_new])
+        assert all(epoch == 'b' * 32 for _, _, epoch in requests[first_new:])
+    else:
+        assert all(epoch == 'a' * 32 for _, _, epoch in requests)
+    if failure in {'none', 'stale', 'gate_rejection'}:
         assert conversation['summary'] == 'new summary' and conversation['summary_up_to_message_id'] == 'm1'
         assert job['status'] == 'completed' and job['through_message_id'] == 'm1'
         sent = [body for path, body, _ in requests if path.endswith('/v1/chat/completions')]
-        assert len(sent) == 1 and 'answer one' in sent[0]['messages'][1]['content'] and 'answer two' not in sent[0]['messages'][1]['content']
+        assert len(sent) == (2 if failure == 'gate_rejection' else 1)
+        assert 'answer one' in sent[-1]['messages'][1]['content'] and 'answer two' not in sent[-1]['messages'][1]['content']
     else:
         assert conversation['summary'] == ('edited' if failure == 'summary_changed' else 'old')
         assert conversation['summary_up_to_message_id'] is None and job['status'] == 'failed'
-        if failure != 'summary_changed': assert all(path.endswith('/input_tokens') for path, _, _ in requests)
+        if failure not in {'summary_changed', 'completion_conflict'}: assert all(path.endswith('/input_tokens') for path, _, _ in requests)
+        if failure == 'completion_conflict': assert len([path for path, _, _ in requests if path.endswith('/v1/chat/completions')]) == 1

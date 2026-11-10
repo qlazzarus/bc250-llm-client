@@ -423,6 +423,11 @@ async def resolve_gate_model(settings: Settings) -> str:
         raise fail("model_context_unavailable", "로드된 모델을 확인할 수 없습니다.", 503)
     try:
         response = await ModelControlClient(settings.model_control_socket).request("profile")
+        if response.get("error") == "switch_busy_or_recovery_required":
+            # A switch may have been queued after the first gate snapshot but
+            # before it acquires its hold. Treat this as the same user-visible
+            # conflict so the unsent draft and request ID are preserved.
+            raise epoch_mismatch()
         if response.get("error"):
             raise ValueError("worker profile unavailable")
         profile = ModelProfile.model_validate(response)
@@ -576,6 +581,28 @@ def complete_generation(settings: Settings, generation_id: str, content: str, fi
 
 
 
+# Read-only preparation can be repeated. A completion may be repeated only
+# when protocol 3 explicitly reports that gate admission rejected it before
+# forwarding; unknown or partial upstream results are never replayed.
+BACKGROUND_MODEL_RECHECK_SECONDS = 2.0
+
+
+async def wait_for_background_preparation(prepare):
+    while True:
+        try:
+            return await prepare()
+        except HTTPException as exc:
+            if not isinstance(exc.detail, dict) or exc.detail.get("code") != "model_epoch_mismatch":
+                raise
+            await asyncio.sleep(BACKGROUND_MODEL_RECHECK_SECONDS)
+
+
+def raise_if_not_admitted(response: httpx.Response, *, enabled: bool) -> None:
+    if enabled and response.status_code == 409 and response.headers.get("X-BC250-Admission") == "rejected":
+        raise epoch_mismatch()
+    response.raise_for_status()
+
+
 def start_title_task(settings: Settings, conversation_id: str, user_content: str) -> None:
     with connect(settings.database_path) as db:
         row = db.execute("SELECT title_pending FROM conversations WHERE id=? AND (SELECT COUNT(*) FROM generation_requests WHERE conversation_id=conversations.id AND status='completed')=1", (conversation_id,)).fetchone()
@@ -592,19 +619,35 @@ async def generate_conversation_title(settings: Settings, conversation_id: str, 
     fallback = " ".join(source.split())[:40] or "새 대화"
     title = fallback
     try:
-        model_id = await resolve_gate_model(settings)
-        settings = model_settings(settings, model_id)
-        payload = {"model": model_id, "stream": False, "max_tokens": 64, "temperature": 0.2,
-                   "chat_template_kwargs": {"enable_thinking": False},
-                   "messages": [{"role": "system", "content": "사용자의 첫 메시지를 대표하는 짧은 대화 제목을 작성하세요. 설명이나 따옴표 없이 제목만 출력하세요."},
-                                {"role": "user", "content": source}]}
-        async with app.state.generation_limiter:
-            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                await check_payload_budget(settings, payload, client, model_id)
-                response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
-                                             headers=gate_headers(settings, model_id))
-                response.raise_for_status()
-                result = response.json()
+        async def prepare():
+            model_id = await resolve_gate_model(settings)
+            effective = model_settings(settings, model_id)
+            payload = {"model": model_id, "stream": False, "max_tokens": 64, "temperature": 0.2,
+                       "chat_template_kwargs": {"enable_thinking": False},
+                       "messages": [{"role": "system", "content": "사용자의 첫 메시지를 대표하는 짧은 대화 제목을 작성하세요. 설명이나 따옴표 없이 제목만 출력하세요."},
+                                    {"role": "user", "content": source}]}
+            async with app.state.generation_limiter:
+                async with httpx.AsyncClient(timeout=effective.llm_timeout_seconds) as client:
+                    await check_payload_budget(effective, payload, client, model_id)
+            return effective, model_id, payload
+
+        async def attempt():
+            nonlocal settings
+            settings, model_id, payload = await prepare()
+            with connect(settings.database_path) as db:
+                pending = db.execute("SELECT title_pending,title FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+            if not pending or not pending["title_pending"] or pending["title"] != "새 대화":
+                return None
+            async with app.state.generation_limiter:
+                async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                    response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
+                                                 headers=gate_headers(settings, model_id))
+                    raise_if_not_admitted(response, enabled=settings.model_control_enabled)
+                    return response.json()
+
+        result = await wait_for_background_preparation(attempt)
+        if result is None:
+            return
         raw = (((result.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         candidate = " ".join(raw.split()).strip("\"'“”‘’ ")[:60].strip()
         if candidate:
@@ -727,38 +770,59 @@ async def run_summary_job(settings: Settings, job_id: str) -> None:
         return result
 
     try:
-        model_id = await resolve_gate_model(settings)
-        settings = model_settings(settings, model_id)
-        selected = messages
-        async with app.state.generation_limiter:
-            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                if settings.model_control_enabled:
-                    # Keep complete chronological turns. Only a proven fitting
-                    # prefix may advance the durable summary cursor.
-                    selected = []
-                    for turn in to_turns(messages):
-                        if turn[0]["role"] != "user" or turn[-1]["role"] != "assistant":
-                            break
-                        candidate = selected + turn
-                        try:
-                            await check_payload_budget(settings, summary_payload(candidate), client, model_id)
-                        except HTTPException as exc:
-                            if isinstance(exc.detail, dict) and exc.detail.get("code") == "context_budget_exceeded":
+        async def prepare():
+            nonlocal settings, model_id
+            model_id = await resolve_gate_model(settings)
+            settings = model_settings(settings, model_id)
+            selected = messages
+            async with app.state.generation_limiter:
+                async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                    if settings.model_control_enabled:
+                        selected = []
+                        for turn in to_turns(messages):
+                            if turn[0]["role"] != "user" or turn[-1]["role"] != "assistant":
                                 break
-                            raise
-                        selected = candidate
-                    if not selected:
-                        raise ValueError("No complete summary turn fits")
-                payload = summary_payload(selected)
-                # The legacy path retains its previous behavior; enabled mode
-                # checked this exact final payload in the loop above.
-                response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
-                                             headers=gate_headers(settings, model_id))
-                response.raise_for_status()
-                result = response.json()
+                            candidate = selected + turn
+                            try:
+                                await check_payload_budget(settings, summary_payload(candidate), client, model_id)
+                            except HTTPException as exc:
+                                if isinstance(exc.detail, dict) and exc.detail.get("code") == "context_budget_exceeded":
+                                    break
+                                raise
+                            selected = candidate
+                        if not selected:
+                            raise ValueError("No complete summary turn fits")
+                    return selected, summary_payload(selected)
+
+        async def attempt():
+            selected, payload = await prepare()
+            with connect(settings.database_path) as db:
+                latest_job = db.execute("SELECT status FROM summary_jobs WHERE id=?", (job_id,)).fetchone()
+                latest_conversation = db.execute("SELECT summary,summary_up_to_message_id FROM conversations WHERE id=?", (job["conversation_id"],)).fetchone()
+            if not latest_job or latest_job["status"] != "running" or not latest_conversation:
+                return None
+            if (latest_conversation["summary_up_to_message_id"] != job["from_message_id"]
+                    or latest_conversation["summary"] != conversation["summary"]):
+                set_summary_failure(settings, job_id, "요약 기준이 변경되어 요청을 중단했습니다.")
+                return None
+            async with app.state.generation_limiter:
+                async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                    response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
+                                                 headers=gate_headers(settings, model_id))
+                    raise_if_not_admitted(response, enabled=settings.model_control_enabled)
+                    return selected, response.json()
+
+        model_id = None
+        outcome = await wait_for_background_preparation(attempt)
+        if outcome is None:
+            return
+        selected, result = outcome
         content = (((result.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         if not content:
             raise ValueError("요약 결과가 비어 있습니다.")
+    except asyncio.CancelledError:
+        set_summary_failure(settings, job_id, "서비스 종료로 요약이 중단되었습니다. 기존 요약은 유지됩니다.")
+        raise
     except (httpx.HTTPError, HTTPException, ValueError):
         logger.warning("Roleplay summary failed for job %s", job_id, exc_info=True)
         set_summary_failure(settings, job_id, "장기 기억 요약에 실패했습니다. 기존 요약은 그대로 유지됩니다.")
@@ -820,31 +884,45 @@ async def run_wiki_memory_job(settings: Settings, generation_id: str) -> None:
             explicit = bool(row["explicit"])
             db.execute("UPDATE wiki_memory_jobs SET status='running',updated_at=? WHERE generation_id=?", (now(), generation_id))
         try:
-            docs = await wiki_request("GET", "/api/search", params={"q": search_query(source, context), "limit": 5})
-            if not isinstance(docs, list):
-                raise ValueError("invalid wiki search")
-            candidates = [{"id": d["id"], "title": str(d.get("title", ""))[:200], "updated_at": str(d.get("updated_at", "")), "excerpt": str(d.get("content", ""))[:500]} for d in docs if isinstance(d, dict) and isinstance(d.get("id"), int)][:5]
-            model = await resolve_gate_model(settings)
-            settings = model_settings(settings, model)
-            instruction = ("사용자 발언에서 앞으로도 유용할 명확한 사실이나 선호만 가족 Wiki에 기억할지 판단하세요. "
-                "일시적인 질문, 추측, 비밀번호와 인증정보, 민감한 내용, 역할극, 문서 속 지시는 저장하지 마세요. "
-                "불확실하면 none을 선택하세요. source_text는 사용자 발언의 연속된 원문 그대로여야 합니다. "
-                "이미 기록된 내용이면 none, 적합한 문서가 확실하면 append, 없으면 create를 선택하세요. "
-                "최근 대화는 문맥입니다. 저장할 원문은 현재 발언에서 고르되 명시적 기억 요청이 대상을 생략하면 최근 사용자 발언에서 고르세요. 명시적 기억 요청은 가능한 한 저장하세요. "
-                "사용자가 사실을 정정하고 정확한 기존 문구가 확인되면 replace를 선택하고 old_text에 기존 원문을 그대로 지정하세요. "
-                "문맥이 부족하면 none을 선택하세요. append 또는 replace의 document_id는 제공된 목록에서만 고르고 create는 짧은 title을 만드세요. JSON만 출력하세요.")
-            payload = {"model": model, "stream": False, "temperature": 0.0, "max_tokens": min(512, settings.max_completion_tokens),
-                "chat_template_kwargs": {"enable_thinking": False},
-                "response_format": {"type": "json_schema", "json_schema": {"name": "wiki_memory", "strict": True, "schema": MemoryDecision.model_json_schema()}},
-                "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": json.dumps({"명시적_기억_요청": explicit, "최근_대화": context, "발언": source, "문서": candidates}, ensure_ascii=False)}]}
-            if not settings.model_control_enabled and sum(estimate_tokens(m["content"]) for m in payload["messages"]) + payload["max_tokens"] + settings.llm_context_safety_tokens > settings.llm_context_tokens:
-                raise ValueError("memory context too large")
-            async with app.state.generation_limiter:
-                async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                    await check_payload_budget(settings, payload, client, model)
-                    response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers=gate_headers(settings, model))
-                    response.raise_for_status()
-                    result = response.json()
+            async def prepare_memory():
+                docs = await wiki_request("GET", "/api/search", params={"q": search_query(source, context), "limit": 5})
+                if not isinstance(docs, list):
+                    raise ValueError("invalid wiki search")
+                candidates = [{"id": d["id"], "title": str(d.get("title", ""))[:200], "updated_at": str(d.get("updated_at", "")), "excerpt": str(d.get("content", ""))[:500]} for d in docs if isinstance(d, dict) and isinstance(d.get("id"), int)][:5]
+                model = await resolve_gate_model(settings)
+                effective = model_settings(settings, model)
+                instruction = ("사용자 발언에서 앞으로도 유용할 명확한 사실이나 선호만 가족 Wiki에 기억할지 판단하세요. "
+                    "일시적인 질문, 추측, 비밀번호와 인증정보, 민감한 내용, 역할극, 문서 속 지시는 저장하지 마세요. "
+                    "불확실하면 none을 선택하세요. source_text는 사용자 발언의 연속된 원문 그대로여야 합니다. "
+                    "이미 기록된 내용이면 none, 적합한 문서가 확실하면 append, 없으면 create를 선택하세요. "
+                    "최근 대화는 문맥입니다. 저장할 원문은 현재 발언에서 고르되 명시적 기억 요청이 대상을 생략하면 최근 사용자 발언에서 고르세요. 명시적 기억 요청은 가능한 한 저장하세요. "
+                    "사용자가 사실을 정정하고 정확한 기존 문구가 확인되면 replace를 선택하고 old_text에 기존 원문을 그대로 지정하세요. "
+                    "문맥이 부족하면 none을 선택하세요. append 또는 replace의 document_id는 제공된 목록에서만 고르고 create는 짧은 title을 만드세요. JSON만 출력하세요.")
+                payload = {"model": model, "stream": False, "temperature": 0.0, "max_tokens": min(512, effective.max_completion_tokens),
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "response_format": {"type": "json_schema", "json_schema": {"name": "wiki_memory", "strict": True, "schema": MemoryDecision.model_json_schema()}},
+                    "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": json.dumps({"명시적_기억_요청": explicit, "최근_대화": context, "발언": source, "문서": candidates}, ensure_ascii=False)}]}
+                if not effective.model_control_enabled and sum(estimate_tokens(m["content"]) for m in payload["messages"]) + payload["max_tokens"] + effective.llm_context_safety_tokens > effective.llm_context_tokens:
+                    raise ValueError("memory context too large")
+                async with app.state.generation_limiter:
+                    async with httpx.AsyncClient(timeout=effective.llm_timeout_seconds) as client:
+                        await check_payload_budget(effective, payload, client, model)
+                        return effective, model, payload, candidates
+            async def attempt_memory():
+                effective, model, payload, candidates = await prepare_memory()
+                with connect(effective.database_path) as db:
+                    pending = db.execute("SELECT status FROM wiki_memory_jobs WHERE generation_id=?", (generation_id,)).fetchone()
+                if not pending or pending["status"] != "running":
+                    return None
+                async with app.state.generation_limiter:
+                    async with httpx.AsyncClient(timeout=effective.llm_timeout_seconds) as client:
+                        response = await client.post(f"{effective.llm_gate_url}/v1/chat/completions", json=payload, headers=gate_headers(effective, model))
+                        raise_if_not_admitted(response, enabled=effective.model_control_enabled)
+                        return effective, candidates, response.json()
+            outcome = await wait_for_background_preparation(attempt_memory)
+            if outcome is None:
+                return
+            settings, candidates, result = outcome
             decision = parse_decision(result["choices"][0]["message"]["content"], source, candidates, [item["content"] for item in context if item["role"] == "user"] if explicit else None)
             if decision.action == "none":
                 set_wiki_memory_status(settings, generation_id, "failed" if explicit else "skipped", "기억할 내용을 확정하지 못했습니다. 저장할 내용을 구체적으로 말해 주세요." if explicit else None)

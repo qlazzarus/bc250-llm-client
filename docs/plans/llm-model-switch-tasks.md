@@ -48,6 +48,16 @@ worker `profile`과 Client의 전후 snapshot 대조를 추가했다. 활성 con
 
 검증: 로컬 백엔드 770개 통과·4개 건너뜀 및 Unix socket 통합 4개 별도 통과(합산 774개), 서버 격리 Python 3.14 후보 계약 71개 통과. 실제 서버에서 draft 생성 시 두 기능 모두 unknown, 운영 Qwen3.6 및 `b11850-9ae73e68f` 확인. 전환 활성 시 기록 없는 reasoning/schema 요청은 차단되므로 실제 네 모델 검증·기록 설치와 shared runtime 설치가 끝나기 전 기능을 활성화하지 않는다. 새 후보는 아직 운영에 배포하지 않았다.
 
+### M5-02 — 2026-11-10 후속
+
+사용자가 푸시한 `3ac7dab` [Actions 42790337089](https://github.com/qlazzarus/bc250-llm-client/actions/runs/42790337089) 성공, 서버 Client `main.py` hash 일치와 모델 조회 API 200·Client/Studio/gate/llama active를 읽기 전용으로 확인했다. 운영 gate는 구형이고 worker socket은 미설치다. Client 자동 배포에는 gate candidate·worker/root runtime이 포함되지 않는다.
+
+첫 gate snapshot 직후 worker에 전환이 접수되면 profile RPC가 busy를 돌려도 기존 Client는 503으로 처리해 UI의 전환 충돌·초안 복원 경로를 놓쳤다. 이를 `model_epoch_mismatch` 409로 연결했다. 실제 API 시험에서 사용자 메시지와 요청 ID가 보존되고 자동 재전송 없이 사용자의 재제출로 새 모델 응답을 받으며 사용자 메시지가 중복되지 않음을 확인했다. HTTP/SSE 일반 대화와 HTTP 이미지 프롬프트의 UI 초안·모델 재조회 시험을 포함한다.
+
+제목·요약·Client 내부 Wiki 메모리는 snapshot/토큰 계산 중 전환 충돌을 만나면 대기하며 새 모델·epoch로 준비를 다시 한다. gate 후보는 추론 요청을 upstream 전송 전 거절한 경우에만 409와 `X-BC250-Admission: rejected`를 반환하고 같은 이름의 사용자 요청·upstream 응답 header를 제거한다. background 작업은 이 명시적 거절에 한해 준비를 다시 한다. upstream의 일반 409·응답 유실·부분 응답은 자동 재전송하지 않고, legacy 비활성 모드는 이 신호를 신뢰하지 않는다. 대기 중 요약/제목/Wiki 상태가 바뀌면 오래된 작업을 보내거나 적용하지 않는다. 프로세스 재시작을 가로지르는 자동 재개는 제공하지 않는다.
+
+로컬 백엔드 782개 통과·4개 건너뜀, 별도 Unix socket 4개 통과(합산 786개). 프런트 lint·14개 시험·build 및 서버 Python 3.14 격리 시험 75개 통과. gate candidate·Client·worker의 로컬 계약 근거이며 실제 Studio/GPU 연동·운영 gate 이전이나 UI 모델 전환 성공은 아니다. M5-02는 로컬 구현·계약 검증 완료로 기록하고 M6~M8의 실제 Linux 서비스·설치·UI 확인은 유지한다. 새 gate의 admission header와 Client는 함께 적용해야 한다.
+
 ## M1 운영 읽기 전용 조사
 
 - `/usr/local/bin/ai-model`은 root 소유 `/opt/ai/scripts/ai-model`을 가리킨다. llama unit은 root로 `/opt/ai/scripts/start-llama.sh`를 실행하며 8080 loopback을 사용한다. 설정의 `ACTIVE_MODEL`과 개별 모델 conf를 source하고 `MODEL_PATH`를 `-m`으로 전달한다. 재시작 on-failure, stop timeout 60초다.

@@ -21,6 +21,8 @@ def test_title_generation_and_manual_rename_are_safe(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "resolve_gate_model", model)
 
     class Response:
+        status_code = 200
+        headers = {}
         def raise_for_status(self): pass
         def json(self): return {"choices": [{"message": {"content": '"화성 여행 계획"'}}]}
     class Client:

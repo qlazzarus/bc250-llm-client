@@ -97,7 +97,8 @@ async def test_client_binds_registry_profile_between_gate_snapshots(monkeypatch,
         assert model.capabilities['json_schema'] == 'unknown' and len(calls) == 2
     else:
         with pytest.raises(main.HTTPException) as error: await main.resolve_gate_model(settings)
-        assert error.value.status_code == (409 if scenario in {'epoch_race', 'model_race'} else 503)
+        assert error.value.status_code == (409 if scenario in {'epoch_race', 'model_race', 'worker_busy'} else 503)
+        if scenario == 'worker_busy': assert error.value.detail['code'] == 'model_epoch_mismatch'
 
 
 def test_unknown_capabilities_block_only_required_features():

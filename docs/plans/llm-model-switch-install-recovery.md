@@ -87,3 +87,5 @@ sudo ai-model status --operation <operation-id>
 기능 검증 기록은 선택적 `/opt/ai/config/capabilities/<관리이름>.json`이며 directory와 파일은 worker가 검사할 수 있도록 root 관리 경로여야 한다. [draft 생성기](../../scripts/draft_model_capabilities.py)는 현재 모델·설정·파일·llama runtime의 관찰값만 수집하고 두 기능을 unknown으로 작성한다. 전환과 서비스 재시작이 없는 구간에 생성하고, 실제 기능 시험 결과와 관찰된 동일 모델·설정·빌드가 맞는지 확인한 뒤 관리자만 검토·작성한다. 단순 초안이나 한 차례 응답을 근거로 전체 reasoning/schema 지원을 자동 승격하지 않는다. 설치·소유권·백업 및 교체 절차는 아직 M7에서 대상 서버에 맞춰 확정해야 한다.
 
 기록이 없거나 stale이면 기능은 unknown이며 `enable_thinking`/JSON schema가 필요한 요청은 차단된다. 운영의 현재 기본 채팅도 `enable_thinking=false`를 사용하므로 각 대상 모델의 검증과 기록을 준비하기 전 활성화하면 대화할 수 없다. 모델별 기능시험 및 worker/gate 실제 설치 전에는 전환을 비활성으로 유지한다.
+
+M5-02 candidate: protocol 3 gate는 입장 전 거절 409에 `X-BC250-Admission: rejected`를 제공하고 upstream의 동일 header를 제거한다. 이 후보 gate와 해당 Client를 함께 설치·검증해야 background의 안전한 대기/재시도가 완성된다. 현재 Client 자동 배포는 gate를 설치하지 않는다.

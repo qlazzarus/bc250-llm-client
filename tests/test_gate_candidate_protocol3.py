@@ -282,3 +282,26 @@ async def test_repeated_cancellation_waits_for_upstream_close(tmp_path):
         finish_close.set()
         with pytest.raises(asyncio.CancelledError): await asyncio.wait_for(task, 2)
         assert closed.is_set() and (await gate.status())['active_requests'] == 0
+
+
+@pytest.mark.asyncio
+async def test_admission_rejection_header_cannot_be_supplied_by_upstream(tmp_path):
+    path = tmp_path / 'state'; provision(path)
+    seen = []
+    class Body(httpx.AsyncByteStream):
+        async def __aiter__(self): yield b'{}'
+    def upstream(request):
+        seen.append(request.headers.get('x-bc250-admission'))
+        return httpx.Response(409, headers={'X-BC250-Admission': 'rejected'}, stream=Body())
+    app = create_app(path, 'http://upstream', admin_key='admin', studio_key='studio', switch_key='switch',
+                     transport=httpx.MockTransport(upstream))
+    async with app.router.lifespan_context(app):
+        await app.state.gate.mutate('release', 'startup')
+        epoch = (await app.state.gate.status())['epoch']
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://gate') as client:
+            rejected = await client.post('/v1/chat/completions', headers={'X-Model-Epoch': '0' * 32})
+            assert rejected.status_code == 409 and rejected.headers['X-BC250-Admission'] == 'rejected'
+            assert not seen
+            forwarded = await client.post('/v1/chat/completions', headers={'X-Model-Epoch': epoch, 'X-BC250-Admission': 'rejected'})
+            assert forwarded.status_code == 409 and 'X-BC250-Admission' not in forwarded.headers
+            assert seen == [None]
