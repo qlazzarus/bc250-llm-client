@@ -10,6 +10,7 @@ Group=ai-studio
 WorkingDirectory=/opt/bc250-llm-gate
 ExecStart=/opt/bc250-llm-gate/.venv/bin/uvicorn gate_candidate.runtime:create_gate_app --factory --host 127.0.0.1 --port 8081 --workers 1
 LoadCredential=admin-key:/etc/bc250-model-control/gate-admin-key
+LoadCredential=client-key:/etc/bc250-model-control/gate-client-key
 LoadCredential=studio-key:/etc/bc250-model-control/gate-studio-key
 LoadCredential=switch-key:/etc/bc250-model-control/switch-gate-key
 LoadCredential=llm-key:/etc/bc250-model-control/llm-key

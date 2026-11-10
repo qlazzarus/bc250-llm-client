@@ -28,5 +28,5 @@ def credential(name, *, optional=False):
 def create_gate_app():
     """Use pre-provisioned durable state; never initialize state on startup."""
     return create_app(STATE, UPSTREAM, admin_key=credential('admin-key'),
-                      studio_key=credential('studio-key'), switch_key=credential('switch-key'),
+                      client_key=credential('client-key'), studio_key=credential('studio-key'), switch_key=credential('switch-key'),
                       upstream_api_key=credential('llm-key', optional=True))

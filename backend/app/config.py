@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from typing import Literal
 from pathlib import Path
@@ -15,6 +16,7 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     llm_gate_url: str = "http://127.0.0.1:8081"
     llm_gate_api_key: str
+    llm_gate_hold_id: str = ""
     llm_timeout_seconds: float = 180
     max_request_bytes: int = 65536
     max_history_messages: int = 200
@@ -47,6 +49,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_token_settings(self) -> "Settings":
+        if self.llm_gate_hold_id and not re.fullmatch(r"client-[0-9a-f]{32}", self.llm_gate_hold_id):
+            raise ValueError("LLM_GATE_HOLD_ID must be client- followed by 32 lowercase hex digits")
         if self.model_control_enabled and self.llm_model_id:
             raise ValueError("LLM_MODEL_ID must be empty when MODEL_CONTROL_ENABLED=true")
         if self.app_auth_mode == "key" and not self.app_api_key:

@@ -1,6 +1,6 @@
 # LLM Client 모델 전환 통합 계획
 
-기준일: 2026-11-07. 상태: **M3/M4 로컬 구현 진행, 운영 통합·실제 전환 미검증**. 현재 단계와 실행 순서는 [실행 체크리스트](#7-실행-체크리스트와-완료-조건)를 따른다.
+갱신일: 2026-11-10. 상태: **M3/M4 로컬 완료, M5~M7 부분 진행, 운영 전환 미검증**. 현재 단계와 실행 순서는 [실행 체크리스트](#7-실행-체크리스트와-완료-조건)를 따른다.
 
 후속 설계: [운영 ai-model 분석 및 CLI/API 공용 실행부 설계](llm-model-switch-design.md). 사용자가 제공한 실제 원문에서 확인된 실패 경로와 변경 구조를 기록한다.
 
@@ -30,10 +30,10 @@ M2-03의 모델별 설정·요청 예산·미검증 기능 처리 기준: [모�
 
 | 영역 | 현재 상태 | 남은 판단 |
 | --- | --- | --- |
-| Client UI/API | 운영자 인증을 추가한 관리 API와 화면을 로컬 구현 | 브라우저 흐름·오류·복원 및 실제 작업자 계약 검증 |
+| Client UI/API | 운영자 인증을 추가한 관리 API와 화면을 로컬 구현·가짜 작업자 흐름 검증 | 실제 worker·운영 UI 검증 |
 | 공용 작업자 | root 경계·CLI/socket·작업 기록·복구·조율 어댑터 로컬 구현 | 관리자 복구 진입, Linux 권한과 실제 gate/Studio 통합 검증 |
 | 운영 서비스 | 작업자 미설치, 현재 gate는 owned hold 미지원 | 운영 조율 계약, 설치와 복구 조건 확인 후 별도 적용 |
-| 모델 요청 | 활성 모델 추종과 전환 중 추론 제어 미구현 | 고정 ID·호출자·모델별 추론 정책 확인 및 M5 구현 |
+| 모델 요청 | snapshot/epoch 및 전환 충돌 처리 구현 | 모델별 예산·옵션과 실제 호출자 조율 |
 
 기존 로컬 시험 기록은 219개 통과·1개 건너뜀과 프런트 lint/build 통과다. macOS에서 peer UID·xattr 및 운영 연동 일부는 대역을 사용했다. 이는 실제 GPU/운영 성공이나 최종 후보 회귀의 증거가 아니다. 이번 문서 갱신에서는 시험을 재실행하지 않았다.
 
@@ -151,10 +151,10 @@ UI는 현재 모델, 설치 모델 선택, 전환 버튼, 전역 변경 안내, 
 | M4-03 | M2-02, M4-01 | root 복구 진입·상관관계·안전 차단의 기본 구현 | root 조사·복구 후보, hold ID 영속 연결, 일치·빈 journal 대역 시험 및 불일치·손상 시 보존·차단 | **범위 조정 후 로컬 완료**: [복구·조사](llm-model-switch-tasks.md#m4-03-root-복구조사-진행). 기존 orphan·불일치 후속 처리·종결 구현은 M4-04로 이관; 실제 gate·Studio 구현과 통합은 M5/M6 |
 | M4-04 | M4-02, M4-03 | 가정용 환경의 공용 전환·복구 경로 완성 | 기존 관리자 계정과 실제 서비스 구성을 지원하고, 공유 GPU 잠금·journal·gate/Studio 인증·상태 확인 및 안전한 복구 진입을 로컬 검증. 소유권 불명 hold는 자동 해제하지 않음. [상세 추적](llm-model-switch-tasks.md#m4-04-이관된-미완료-작업) 참조 | 로컬 완료: 일부 서비스 신원·모델·Studio 경로 검사는 대역. 실제 gate·Studio 통합은 M5-02/03, Linux 최종 후보는 M6, 배포·복구 절차는 M7 |
 | M5-01 | M2-03, M4-01 | 공통 모델 해석과 active-follow, 모델별 옵션 | 채팅·요약·제목·이미지 의도/프롬프트가 실제 모델에 맞는 예산을 사용하고 호환 회귀 통과 | 부분 구현: 전환 활성 상태의 고정 LLM_MODEL_ID를 설정 검증에서 거절. 모델별 실제 context·기능과 최종 payload 예산 처리는 미완료 |
-| M5-02 | M2-02, M3-01 | Client admission과 gate의 stale 요청 처리 | 신규 요청 409·초안 보존, 모델 snapshot epoch 검증, 기존 요청 drain, 백그라운드 보류 및 동시 진입 경합 검증. 복구용 배타 예약과 독립 hold·epoch 조건부 자기 hold 해제의 원자적 영속 처리 | 부분 구현: [gate_candidate](../../gate_candidate/README.md) protocol 3·streaming·hold·reservation 및 Client snapshot/epoch 로컬 후보 연결. stale 409·초안 및 모델 재조회 대역 검증. 실제 gate 이전·Studio 통합 및 Linux 중단 검증은 미완료 |
-| M5-03 | M1-03, M2-02 | 범위 내 다른 LLM/GPU 호출자 및 gate/Studio 최소 연동 | 독립 Wiki를 제외한 자동 경로가 공용 잠금·journal·owned hold를 따르거나 명확히 차단됨. Studio 복구 전용 인증 조회와 journal·GPU·독립 복구 상태 계약 구현 | 부분 구현: handoff Studio에 적용할 복구 endpoint·protocol 3 [후보 패치](../../deploy/ai-studio-model-switch-recovery.md)와 로컬 시험 추가. 운영 Studio 적용·실제 gate 통합과 벤치마크 직접 제어 정리는 미완료; Wiki 통합은 후속 예외 |
-| M6-01 | M3-02, M4-04, M5-01, M5-02, M5-03 | 같은 최종 후보의 UI/API/CLI→worker 통합 회귀 | 중복·동시성·hold·cleanup crash window·불명 결과·재시작과 기존 회귀 통과 | 부분 완료: 기존 219 통과는 선행 증거일 뿐 최종 후보 통과 아님 |
-| M6-02 | M4-04, M7-01 | 최소 Linux 격리 시험 | 실제 SO_PEERCRED·socket activation·root bootstrap·ACL/SELinux/xattr·CAP_SYS_PTRACE/proc namespace·재시작·원자 교체 검증 | 미완료: macOS 대역만 있음. 과거 유지보수 VM/DB 차단 시험은 재개하지 않음 |
+| M5-02 | M2-02, M3-01 | Client admission과 gate의 stale 요청 처리 | 신규 요청 409·초안 보존, 모델 snapshot epoch 검증, 기존 요청 drain, 백그라운드 보류 및 동시 진입 경합 검증. 복구용 배타 예약과 독립 hold·epoch 조건부 자기 hold 해제의 원자적 영속 처리 | 부분 구현: [gate_candidate](../../gate_candidate/README.md) protocol 3·streaming·hold·reservation 및 Client snapshot/epoch 로컬 후보 연결. stale 409·초안 및 모델 재조회 대역 검증. 11/10 Client 역할·고정 hold, 응답 유실/재시작·타 hold 보존 로컬 통합 추가. 실제 gate 이전·Studio 통합 및 Linux 중단 검증은 미완료 |
+| M5-03 | M1-03, M2-02 | 범위 내 다른 LLM/GPU 호출자 및 gate/Studio 최소 연동 | 독립 Wiki를 제외한 자동 경로가 공용 잠금·journal·owned hold를 따르거나 명확히 차단됨. Studio 복구 전용 인증 조회와 journal·GPU·독립 복구 상태 계약 구현 | 부분 구현: handoff Studio에 적용할 복구 endpoint·protocol 3 [후보 패치](../../deploy/ai-studio-model-switch-recovery.md)와 로컬 시험 추가. 운영 Studio endpoint 코드 존재 확인; 실제 설정·gate 통합과 벤치마크 직접 제어 정리는 미완료; Wiki 통합은 후속 예외 |
+| M6-01 | M3-02, M4-04, M5-01, M5-02, M5-03 | 같은 최종 후보의 UI/API/CLI→worker 통합 회귀 | 중복·동시성·hold·cleanup crash window·불명 결과·재시작과 기존 회귀 통과 | 부분 완료: 11/10 백엔드 712 통과·4 건너뜀, 샌드박스 socket 오류 3개는 별도 실행 3 통과. 프런트 lint·13 tests·build 통과. 실제 GPU·서비스 통합은 남음 |
+| M6-02 | M4-04, M7-01 | 최소 Linux 격리 시험 | 실제 SO_PEERCRED·socket activation·root bootstrap·ACL/SELinux/xattr·CAP_SYS_PTRACE/proc namespace·재시작·원자 교체 검증 | 부분 근거: Linux SO_PEERCRED·사용자 임시 socket activation 등 과거 시험 있음; 실제 root runtime·SELinux·서비스 통합 미완료. 과거 유지보수 VM/DB 차단 시험은 재개하지 않음 |
 | M7-01 | M2-02, M4-04 | 패키지·credential·state 초기화, CLI 백업/교체, 공용 변경·비활성 설치·복구/rollback 절차 | 미해결 상태와 기존 pause 보존, 중복 controller 방지, 실제 Client·gate·Studio 호환 구성의 설치·복구 runbook | 부분 완료: 기존 자동 배포는 worker와 gate/Studio 공용 계약을 설치하지 않음. 실제 권한·파일·서비스·키 이관과 복구 절차 필요; root 자산 출처 인증이나 기존 Studio 배포 방식 유지는 필수 아님 |
 | M7-02 | M1-02, M1-03, M6-01, M6-02, M7-01 | 배포 준비 판정표 | 후보 commit/hash·시험 근거·구체 변경/복구 목록이 일치하고 미확인 해소·fail-closed 확인 | 미완료 |
 | M8-01 | M7-02 | 허용된 운영 단계에서 비활성 설치→준비 확인→단일 CLI/API 경로 활성화 | 원본 CLI 백업, Wiki를 제외한 제어 우회 제거 및 실제 gate/Studio owned 계약 확인. Wiki 예외와 영향 기록 | 미착수: 이 문서 갱신은 운영 실행 승인 아님 |

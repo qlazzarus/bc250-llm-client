@@ -86,7 +86,8 @@ class WikiDraftRequest(BaseModel):
 
 
 class GateControl(BaseModel):
-    paused: bool | None = None
+    model_config = ConfigDict(extra="forbid")
+    paused: bool
 
 
 class ImageDraftUpdate(BaseModel):
@@ -1682,11 +1683,32 @@ async def gate_status(settings: Settings = Depends(get_settings)):
 @app.put("/api/v1/admin/gate-control", dependencies=[Depends(require_operator)])
 async def gate_control(body: GateControl, settings: Settings = Depends(get_settings)):
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.put(f"{settings.llm_gate_url}/control", json=body.model_dump(exclude_none=True), headers={"Authorization": f"Bearer {settings.llm_gate_api_key}"})
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+            headers = {"Authorization": f"Bearer {settings.llm_gate_api_key}"}
+            identity = await client.get(f"{settings.llm_gate_url}/control/identity", headers=headers)
+            if identity.status_code == 404 and not settings.model_control_enabled and not settings.llm_gate_hold_id:
+                response = await client.put(f"{settings.llm_gate_url}/control", json=body.model_dump(), headers=headers)
+                response.raise_for_status()
+                return response.json()
+            identity.raise_for_status()
+            if identity.json() != {"protocol": 3, "role": "client"} or not re.fullmatch(r"client-[0-9a-f]{32}", settings.llm_gate_hold_id):
+                raise ValueError("Client owned gate configuration required")
+            response = await client.request("PUT" if body.paused else "DELETE",
+                f"{settings.llm_gate_url}/control/holds/{settings.llm_gate_hold_id}", headers=headers)
             response.raise_for_status()
-            return response.json()
-    except httpx.HTTPError: raise fail("gate_unavailable", "LLM gate 제어 요청에 실패했습니다.", 503)
+            state = response.json()
+            if (not isinstance(state, dict) or state.get("protocol") != 3 or state.get("durable") is not True
+                    or not isinstance(state.get("holds"), list)
+                    or any(not isinstance(hold, str) for hold in state["holds"])
+                    or state.get("held") is not body.paused
+                    or (settings.llm_gate_hold_id in state["holds"]) != body.paused
+                    or state.get("paused") is not bool(state["holds"])):
+                raise ValueError("Unverified Client hold result")
+            return state
+    except (httpx.HTTPError, ValueError):
+        # Repeating the desired state reuses the hold ID after response loss or restart.
+        raise fail("gate_unavailable", "LLM gate 제어 결과를 확인하지 못했습니다. 상태를 다시 조회하세요.", 503)
+
 
 
 @app.get("/api/v1/llm/models", dependencies=[Depends(require_operator)])

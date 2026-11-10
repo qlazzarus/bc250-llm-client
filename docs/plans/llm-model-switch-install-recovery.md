@@ -8,11 +8,11 @@
 | --- | --- | --- |
 | Client | 기존 Client CI의 backend와 frontend; 전환은 기본 비활성 | 운영에는 이전 버전, 현재 후보 미배포 |
 | gate | `gate_candidate`와 protocol 3 unit 후보, 전용 상태 및 역할 키 | 기존 gate는 Studio venv의 구형 factory; protocol 3 미설치 |
-| Studio | handoff 원본에 적용한 recovery 패치와 protocol 3 설정 | 패치는 로컬 후보; 실제 배포 대상과 차이 확인 필요 |
+| Studio | handoff 원본에 적용한 recovery 패치와 protocol 3 설정 | PR 병합 기록 및 11/10 운영 복구 endpoint 코드 확인; 설정·실제 조율 미검증 |
 | worker/CLI | root 관리 실행 트리·소켓·unit·기존 CLI 백업 및 교체 | 미설치; 기존 Client 배포가 설치하지 않음 |
 | GPU 공유 | `/run/bc250-gpu/gpu.lock`, worker lifetime lock, `/var/lib/bc250-model-control/switch.json` | 사용자 확인 시 공유 lock과 journal 부재 |
 
-gate는 [unit 후보](../../deploy/model-control/bc250-llm-gate-protocol3.service)의 systemd credential 네 개를 읽는다. admin·Studio·switch 키는 서로 달라야 하며 Studio 조율 키도 별도다. `llm-key`는 upstream 인증 미사용 시 빈 파일을 포함해 실제 서버 설정에 맞게 준비한다. 키는 서버 root가 생성·보관하고 내용은 채팅·로그·Git에 넣지 않는다. Client의 기존 앱·운영자 인증은 유지한다. 공개 GitHub에는 배포용 SSH credential만 기존 Actions Secret으로 전달하며 서비스 키를 등록하는 것은 필수가 아니다.
+gate는 [unit 후보](../../deploy/model-control/bc250-llm-gate-protocol3.service)의 systemd credential 다섯 개를 읽는다. admin·Client·Studio·switch 키는 서로 달라야 하며 Studio 조율 키도 별도다. `llm-key`는 upstream 인증 미사용 시 빈 파일을 포함해 실제 서버 설정에 맞게 준비한다. 키는 서버 root가 생성·보관하고 내용은 채팅·로그·Git에 넣지 않는다. Client의 기존 앱·운영자 인증은 유지한다. 공개 GitHub에는 배포용 SSH credential만 기존 Actions Secret으로 전달하며 서비스 키를 등록하는 것은 필수가 아니다.
 
 Studio는 `STUDIO_ADMISSION_URL`, `STUDIO_ADMISSION_KEY`, `STUDIO_ADMISSION_OWNED_HOLDS`, `STUDIO_COORDINATION_KEY`, `STUDIO_GPU_LOCK_PATH`, `STUDIO_GPU_LOCK_SECURE_PRECREATED`, `STUDIO_SWITCH_JOURNAL_PATH` 설정을 사용한다. 역할별 키는 gate credential과 값이 일치해야 한다. 실제 배포 대상의 설정 이름·키 전달 방식과 기존 값을 적용 전에 확인한다. Client 전환 활성화와 고정 `LLM_MODEL_ID`는 함께 사용할 수 없다.
 
@@ -74,4 +74,8 @@ sudo ai-model status --operation <operation-id>
 - worker root 실행 트리의 의존성 패키징, socket activation, tmpfiles, 그룹·SELinux와 부팅 후 경로 재생성 검증.
 - gate/Studio/worker 인증 조회와 실행 중 작업 확인을 **비밀값 출력 없이** 수행하는 대상 서버용 명령.
 - M5 모델별 실제 context·요청 예산 및 범위 내 직접 호출자 정리, M6 Linux 종단·중단 시험, M7 readiness 판정.
-- Client frontend 의존성 복원 및 lint/test/build; 실제 `MODEL_CONTROL_ENABLED` 유효값은 사용자 조회가 `unset-or-other`여서 미확정.
+- Client frontend lint/test/build는 11/10 통과; 11/10 실행 환경에서 `MODEL_CONTROL_ENABLED`는 비활성, 고정 ID는 비어 있음.
+
+## 2026-11-10 Client hold 적용 조건
+
+`LLM_GATE_API_KEY`에는 신규 gate의 `client-key` 값을 전달하고, `LLM_GATE_HOLD_ID=client-<32 lowercase hex>`를 한 번 생성해 이후 배포에도 보존한다. gate unit에 `LoadCredential=client-key:/etc/bc250-model-control/gate-client-key`가 추가됐다. Client 재시작 후 resume가 다른 hold나 legacy pause를 해제하지 않는지 확인한다. Client pause가 남아 있으면 worker 전환은 차단된다. 기존 운영 키 정정과 신규 역할 키 발급은 구분한다. 이 설정 준비만으로 전환을 활성화하지 않는다.

@@ -6,7 +6,7 @@ from gate_candidate import runtime
 
 def test_factory_uses_credentials_without_initializing_state(tmp_path, monkeypatch):
     for name, value in {'admin-key': 'a' * 24, 'studio-key': 'b' * 24,
-                        'switch-key': 'c' * 24, 'llm-key': ''}.items():
+                        'switch-key': 'c' * 24, 'client-key': 'd' * 24, 'llm-key': ''}.items():
         (tmp_path / name).write_text(value)
     monkeypatch.setenv('CREDENTIALS_DIRECTORY', str(tmp_path))
     calls = []
@@ -15,7 +15,7 @@ def test_factory_uses_credentials_without_initializing_state(tmp_path, monkeypat
     args, kwargs = calls[0]
     assert args == (runtime.STATE, runtime.UPSTREAM)
     assert kwargs == {'admin_key': 'a' * 24, 'studio_key': 'b' * 24,
-                      'switch_key': 'c' * 24, 'upstream_api_key': None}
+                      'switch_key': 'c' * 24, 'client_key': 'd' * 24, 'upstream_api_key': None}
     assert not (tmp_path / 'state.json').exists()
 
 

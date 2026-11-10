@@ -56,3 +56,5 @@ M5-01은 선택된 실제 모델·template에 대응하는 검증된 token 계�
 4. **M6 실제 모델별 검증:** 안전한 통합 환경에서 각 모델을 실제로 로드하고 ID, `/props`와 슬롯별 `n_ctx`, 최소 대화 및 필요한 reasoning·strict JSON schema 옵션을 모델·GGUF·빌드·template별로 확인한다. 확인하지 못한 조합은 미검증으로 남기며 해당 기능을 지원한다고 표시하지 않는다. 실제 운영 GPU 전환·후속 대화는 M8의 별도 완료 조건이다.
 
 이 문서 작성 중 모델 전환, 서버 재시작, GPU 추론 요청 및 운영 설정 변경은 하지 않았다.
+
+2026-11-10 읽기 전용 재확인: 운영 Qwen3.6 IQ2_M의 `/v1/models` meta `n_ctx=16384`와 `/slots` slot 0 `n_ctx=16384`가 일치했다. health는 ok, 해당 순간 슬롯은 유휴였다. 이는 해당 로드 모델 context 근거이며 다른 세 모델의 실제 context나 JSON schema/reasoning 호환 시험은 아니다.

@@ -1,3 +1,5 @@
+> 2026-11-10: Studio PR #1 merge was recorded previously; read-only inspection now confirms the operating source contains `/internal/model-switch/recovery` and protocol 3 checks. The patches below are retained handoff artifacts, not instructions to reapply them to the installed release. Runtime configuration and shared gate/lock/journal integration remain unverified.
+
 # Studio model-switch recovery candidate
 
 `ai-studio-model-switch-recovery.patch` applies to the Studio source in

@@ -14,7 +14,7 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-ID = re.compile(r'(?:startup|legacy|admin-[A-Za-z0-9_.:-]{1,128}|(?:studio|switch)-[0-9a-f]{32})\Z')
+ID = re.compile(r'(?:startup|legacy|admin-[A-Za-z0-9_.:-]{1,128}|(?:client|studio|switch)-[0-9a-f]{32})\Z')
 SWITCH = re.compile(r'switch-[0-9a-f]{32}\Z')
 INDEPENDENT = re.compile(r'(?:startup|legacy|admin-[A-Za-z0-9_.:-]{1,128})\Z')
 HEX = re.compile(r'[0-9a-f]{32}\Z')
@@ -131,7 +131,7 @@ class Admission:
                 if exclusive:
                     if hold in holds: raise HTTPException(409, 'Hold already exists')
                     generation = secrets.token_hex(16)
-                if reservation and hold != reservation and (hold.startswith(('switch-', 'studio-'))): raise HTTPException(409, 'Recovery reserved')
+                if reservation and hold != reservation and (hold.startswith(('client-', 'switch-', 'studio-'))): raise HTTPException(409, 'Recovery reserved')
                 if hold not in holds and hold.startswith('switch-'): epoch = secrets.token_hex(16)
                 holds.add(hold)
             elif operation == 'release':
@@ -197,10 +197,11 @@ class UpstreamResponse(StreamingResponse):
                 raise asyncio.CancelledError
 
 
-def create_app(state_path, upstream_url, *, admin_key, studio_key, switch_key, upstream_api_key=None, transport=None):
+def create_app(state_path, upstream_url, *, admin_key, studio_key, switch_key, client_key=None, upstream_api_key=None, transport=None):
     if upstream_api_key is not None and (not isinstance(upstream_api_key, str) or not upstream_api_key): raise ValueError('Invalid upstream credential')
     keys = {'admin': admin_key, 'studio': studio_key, 'switch': switch_key}
-    if any(not isinstance(k, str) or not k for k in keys.values()) or len(set(keys.values())) != 3: raise ValueError('Distinct control keys required')
+    if client_key is not None: keys['client'] = client_key
+    if any(not isinstance(k, str) or not k for k in keys.values()) or len(set(keys.values())) != len(keys): raise ValueError('Distinct control keys required')
     if upstream_api_key is not None and upstream_api_key in keys.values(): raise ValueError('Upstream credential must differ from control keys')
     @asynccontextmanager
     async def lifespan(app):
@@ -216,7 +217,7 @@ def create_app(state_path, upstream_url, *, admin_key, studio_key, switch_key, u
                 if hmac.compare_digest(header[7:].encode(), key.encode()): return role
         raise HTTPException(401, 'Invalid credential')
     def own(role, hold):
-        if not ID.fullmatch(hold) or not ((role == 'admin' and (hold == 'startup' or hold.startswith('admin-'))) or (role in ('studio', 'switch') and re.fullmatch(role + r'-[0-9a-f]{32}', hold))): raise HTTPException(403, 'Hold belongs to another controller')
+        if not ID.fullmatch(hold) or not ((role == 'admin' and (hold == 'startup' or hold.startswith('admin-'))) or (role in ('client', 'studio', 'switch') and re.fullmatch(role + r'-[0-9a-f]{32}', hold))): raise HTTPException(403, 'Hold belongs to another controller')
     @app.get('/control')
     async def status(authorization: str | None = Header(None)):
         auth(authorization); return await app.state.gate.status()
