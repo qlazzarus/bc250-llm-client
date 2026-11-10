@@ -8,11 +8,17 @@
 
 - **읽기 전용 서버 확인:** SSH 외부 주소와 기존 키로 접속. Client(PID 1411), Studio(111463), 구형 gate(1014), llama(113928) 모두 active/running. worker socket과 `/run/bc250-gpu`, `/var/lib/bc250-model-control`, `/opt/bc250-model-control`, `/opt/bc250-llm-gate`는 미설치/부재. PID는 조사 순간값이다.
 - **실행 설정/모델:** Client 실행 환경의 전환 값은 비활성, 고정 모델 ID는 비어 있다. llama health ok, Qwen3.6 IQ2_M 실제 모델 ID, models meta의 `n_ctx=16384`와 slot 0의 `n_ctx=16384`, `is_processing=false`를 확인했다. 타 모델 context·옵션 호환 검증은 남는다.
-- **Studio:** 운영 `main.py`의 coordination/recovery endpoint와 GPU·switch barrier의 protocol 3 검사 코드 존재 확인. 앞선 PR #1 병합 기록과 일치한다. 패치를 다시 적용하지 않는다. 실제 credential·owned hold·공유 lock/journal 설정 확인은 root 결과 대기이며 GPU 조율 성공 증거는 아니다.
+- **Studio:** 운영 `main.py`의 coordination/recovery endpoint와 GPU·switch barrier의 protocol 3 검사 코드 존재 확인. 앞선 PR #1 병합 기록과 일치한다. 패치를 다시 적용하지 않는다. 사용자 root 조회에서 coordination 키·owned hold·secure-precreated·journal 환경 설정은 미설정, GPU lock은 기존 `/run/bc250-ai-studio/gpu.lock`임을 확인했다. 실제 공용 조율은 미적용이다.
 - **M5-02 불일치 수정:** 문서의 Client 소유 hold 계약과 달리 구현이 legacy pause API만 호출하던 문제를 수정했다. gate에 고유 Client 역할 credential, Client 서버 설정 `LLM_GATE_HOLD_ID`, protocol identity 검증과 자기 hold PUT/DELETE를 추가했다. 구형 identity 404 + 전환 비활성 + hold ID 미설정일 때만 legacy 호환을 유지한다. admin 키·인증 오류·미지원 protocol 뒤 fallback은 금지한다. Client pause가 있으면 worker는 전환을 시작하지 않으며 배타 예약 중 새 Client hold도 거절한다.
 - **M6 로컬 검증:** 전체 백엔드 712 통과·4 건너뜀과 샌드박스 socket bind 오류 3개. 해당 Unix socket 통합 3개는 제한 밖에서 별도 재실행해 전부 통과했다(합산 715 통과). 새 Client↔실제 gate ASGI 시험은 타 hold 보존, 재시작·반복 resume, 응답 유실, 잘못된 역할/키·legacy fallback 제한과 worker admission 차단을 포함한다. 프런트 lint·13개 시험·build 통과. Studio 외부 의존/OS 조건의 skip은 운영 성공으로 간주하지 않는다.
 - **문서:** 조율 계약에서 폐기된 origin/UID 강화 요구를 현재 계약과 분리하고, 후보에 이미 구현된 예약/조건부 해제 및 운영 Studio 코드 상태를 정정했다. gate runtime credential 파일은 Client 키 포함 5개이며 적용 절차에 반영했다.
 - **남은 M5~M8:** 모델별 context/최종 payload 예산·옵션, 벤치마크 제어 경로 정리, 실제 Linux root runtime와 Studio·gate 계약 연결, 비밀 비노출 설정 확인·상태 이전·복구/롤백 절차, 실제 UI A→B와 B 후속 대화. 전환은 활성화하지 않는다. Wiki 예외 유지, DB 차단/유지보수 VM 시험은 재개하지 않는다.
+
+사용자 root 읽기 전용 추가 결과: gate의 protocol 필드는 없고 paused=false, active/waiting=0이었다. Client↔gate 키는 불일치, Studio↔gate 키는 일치하며 조회 전후 세 서비스 PID가 같았다. 이는 당시 순간 상태이며 실제 이전 시 다시 확인한다. 키 값·해시는 수집하지 않았다.
+
+`f5b0209`를 main에 푸시한 [Actions 42749024345](https://github.com/qlazzarus/bc250-llm-client/actions/runs/42749024345)가 backend·frontend 검사와 Client 배포를 성공했다. 서버 main/config 파일 SHA-256이 해당 커밋과 일치, Client PID는 118667로 변경, 대화 목록·모델 조회 API는 200이다. Studio·gate·llama PID는 그대로이고 worker socket은 미설치, Client 전환 설정도 비활성이다. 실제 전환이나 GPU 추론을 실행한 결과가 아니다.
+
+Linux 추가 검증: 커밋 `f5b0209`를 `/tmp/bc250-contract-f5b0209.g80y9uzN`에 격리 복사하고 서버의 기존 Client Python 3.14 환경을 읽어 사용했다. 테스트 선택 실행에서 새 테스트 모듈의 환경변수 초기화 누락을 발견해 테스트에 가짜 키 기본값만 추가했다(운영 키는 사용하지 않음). 수정 후 gate·Client·worker 계약, 실제 Linux SO_PEERCRED·procfs/flock, socket 및 bootstrap 대역 시험 **119개 통과**. 기존 venv 설치·운영 파일·서비스·GPU는 변경하지 않았다. root bootstrap 소유권·systemd credential·SELinux·실제 Studio/GPU 경계의 완전한 검증은 아니므로 M6-02는 부분 상태를 유지한다. 후속 커밋은 이 테스트 격리 수정과 기록뿐이며 `[skip ci]`로 동일 앱의 불필요한 재배포를 생략한다.
 
 Client main 배포는 backend와 frontend/dist만 교체하고 Client만 재시작한다. gate_candidate·worker unit·root runtime·Studio 패치는 패키지에 포함되지 않는다. 따라서 Client 배포 확인과 M8 모델 전환 성공을 구분한다.
 

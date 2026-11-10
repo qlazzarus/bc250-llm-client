@@ -1,4 +1,9 @@
 """Client controls its durable pause without releasing another controller's hold."""
+import os
+
+os.environ.setdefault('APP_API_KEY', 'client-key')
+os.environ.setdefault('LLM_GATE_API_KEY', 'gate-key')
+
 import httpx
 import pytest
 from fastapi import HTTPException

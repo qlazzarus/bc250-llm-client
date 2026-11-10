@@ -6,11 +6,11 @@
 
 | 구성 | 설치·설정 대상 | 현재 상태 |
 | --- | --- | --- |
-| Client | 기존 Client CI의 backend와 frontend; 전환은 기본 비활성 | 운영에는 이전 버전, 현재 후보 미배포 |
+| Client | 기존 Client CI의 backend와 frontend; 전환은 기본 비활성 | `f5b0209` 자동 배포 성공(11/10); 전환 비활성 |
 | gate | `gate_candidate`와 protocol 3 unit 후보, 전용 상태 및 역할 키 | 기존 gate는 Studio venv의 구형 factory; protocol 3 미설치 |
 | Studio | handoff 원본에 적용한 recovery 패치와 protocol 3 설정 | PR 병합 기록 및 11/10 운영 복구 endpoint 코드 확인; 설정·실제 조율 미검증 |
 | worker/CLI | root 관리 실행 트리·소켓·unit·기존 CLI 백업 및 교체 | 미설치; 기존 Client 배포가 설치하지 않음 |
-| GPU 공유 | `/run/bc250-gpu/gpu.lock`, worker lifetime lock, `/var/lib/bc250-model-control/switch.json` | 사용자 확인 시 공유 lock과 journal 부재 |
+| GPU 공유 | `/run/bc250-gpu/gpu.lock`, worker lifetime lock, `/var/lib/bc250-model-control/switch.json` | 11/10 공유 lock/runtime 부재 및 Studio journal 설정 미설정 확인 |
 
 gate는 [unit 후보](../../deploy/model-control/bc250-llm-gate-protocol3.service)의 systemd credential 다섯 개를 읽는다. admin·Client·Studio·switch 키는 서로 달라야 하며 Studio 조율 키도 별도다. `llm-key`는 upstream 인증 미사용 시 빈 파일을 포함해 실제 서버 설정에 맞게 준비한다. 키는 서버 root가 생성·보관하고 내용은 채팅·로그·Git에 넣지 않는다. Client의 기존 앱·운영자 인증은 유지한다. 공개 GitHub에는 배포용 SSH credential만 기존 Actions Secret으로 전달하며 서비스 키를 등록하는 것은 필수가 아니다.
 
@@ -79,3 +79,5 @@ sudo ai-model status --operation <operation-id>
 ## 2026-11-10 Client hold 적용 조건
 
 `LLM_GATE_API_KEY`에는 신규 gate의 `client-key` 값을 전달하고, `LLM_GATE_HOLD_ID=client-<32 lowercase hex>`를 한 번 생성해 이후 배포에도 보존한다. gate unit에 `LoadCredential=client-key:/etc/bc250-model-control/gate-client-key`가 추가됐다. Client 재시작 후 resume가 다른 hold나 legacy pause를 해제하지 않는지 확인한다. Client pause가 남아 있으면 worker 전환은 차단된다. 기존 운영 키 정정과 신규 역할 키 발급은 구분한다. 이 설정 준비만으로 전환을 활성화하지 않는다.
+
+11/10 root 읽기 전용 확인: 구형 gate paused=false, active/waiting=0; Client↔gate 키 불일치, Studio↔gate 키 일치. Studio coordination 키, owned hold, secure-precreated lock 및 journal 설정은 미설정이며 lock 경로는 기존 `/run/bc250-ai-studio/gpu.lock`이다. 실제 이전 시 다시 확인하고 역할 키·공유 파일 설정을 한 호환 세트로 적용해야 한다.
