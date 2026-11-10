@@ -60,6 +60,16 @@ worker `profile`과 Client의 전후 snapshot 대조를 추가했다. 활성 con
 
 로컬 백엔드 782개 통과·4개 건너뜀, 별도 Unix socket 4개 통과(합산 786개). 프런트 lint·14개 시험·build 및 서버 Python 3.14 격리 시험 75개 통과. gate candidate·Client·worker의 로컬 계약 근거이며 실제 Studio/GPU 연동·운영 gate 이전이나 UI 모델 전환 성공은 아니다. M5-02는 로컬 구현·계약 검증 완료로 기록하고 M6~M8의 실제 Linux 서비스·설치·UI 확인은 유지한다. 새 gate의 admission header와 Client는 함께 적용해야 한다.
 
+### M5-03 — 2026-11-10 후속
+
+운영 `/opt/ai-benchmark/benchmark.py`, `run-comparison.py`를 읽기 전용으로 확인했다. 기존 추론·tokenize는 8080을 직접 사용하고 비교기는 특정 상황에서 llama를 직접 start/stop하며 timeout 후에도 다음 모델 전환이나 복원을 시도할 수 있었다. root 소유 원본은 변경하지 않았다. 원본 hash와 검토용 [벤치마크 후보](../../deploy/benchmark-candidate/README.md)를 보존했다. `benchmark-memory.py`는 benchmark.py를 자식으로 실행하고 그 외 systemd 참조는 상태·메모리 조회였다.
+
+벤치마크 후보는 단일 gate snapshot의 실제 모델 ID와 epoch를 모든 추론·token count에 전달한다. epoch 변경·hold·timeout·불명 응답은 자동 재전송 없이 suite를 중단한다. 비교 후보는 시작·종료를 systemctl로 직접 수행하지 않으며 모든 전환을 공용 `ai-model`에 보낸다. 각 요청의 idempotency key를 먼저 출력하고 timeout 시 확인된 operation ID를 보존한다. 실패·불명·중단 후 다음 모델이나 자동 복원을 실행하지 않는다. 정상 전체 완료 후에는 snapshot을 확인하고 공용 CLI로 원래 모델을 복원한다. snapshot 확인과 복원 접수는 원자적이지 않으므로 단일 관리자가 비교 중 UI/CLI 병렬 전환을 하지 않는 운영 절차가 필요하다.
+
+운영 Studio의 `main.py`, `services/llm.py`, `services/gpu.py` hash는 각각 `3692f5f591b21ee6f66ea7f0fa3a2f6bc4c94383fd0b6254abd4d2d4b43103f`, `fe3871095c5c32fa0b6b0b488557d65e14d876757ba9ed7683c67c670059399e`, `ed7627cc9597bbc05c1371f30b0c53f2fdbc0aabcc7bb293b843653279b11702`였다. Studio 소스와 마이그레이션의 임시 복사본·fake 엔진을 사용해 Client/Studio·protocol 3 gate/worker 계약을 시험했다. Studio는 이미지 작업 때 llama를 정지·재기동하므로 gate 후보가 신규 Studio hold에서도 epoch를 바꾸도록 보완했다. 실제 Studio 코드·gate 후보 시험에서 Studio 자기 hold 해제 시 독립 Client/legacy hold가 남고, 그 전 snapshot은 재입장하지 못함을 확인했다.
+
+최종 로컬 backend 799개 통과·5개 건너뜀, 서버 Linux Python 3.14 격리 통합 39개 통과. 서버의 `patch` 실행 파일 부재와 첫 임시 복사본의 migration 누락은 확인 후 필요한 migration 소스만 추가해 실제 Studio fake 통합을 재실행했다. 운영 DB·GPU·서비스 설정은 변경하지 않았다. M5-03은 **로컬 후보와 계약 검증 완료**이며, 현재 운영 벤치마크는 여전히 구형이고 Studio 공유 lock/journal 및 protocol 3 gate/worker는 미설치다. 원본 hash 재대조·백업과 후보 동시 설치, 실제 Linux GPU 경쟁·불명 상태 검증은 M6~M8에 남는다. 독립 Wiki 예외는 유지한다.
+
 ## M1 운영 읽기 전용 조사
 
 - `/usr/local/bin/ai-model`은 root 소유 `/opt/ai/scripts/ai-model`을 가리킨다. llama unit은 root로 `/opt/ai/scripts/start-llama.sh`를 실행하며 8080 loopback을 사용한다. 설정의 `ACTIVE_MODEL`과 개별 모델 conf를 source하고 `MODEL_PATH`를 `-m`으로 전달한다. 재시작 on-failure, stop timeout 60초다.

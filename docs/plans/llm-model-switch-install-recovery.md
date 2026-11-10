@@ -89,3 +89,5 @@ sudo ai-model status --operation <operation-id>
 기록이 없거나 stale이면 기능은 unknown이며 `enable_thinking`/JSON schema가 필요한 요청은 차단된다. 운영의 현재 기본 채팅도 `enable_thinking=false`를 사용하므로 각 대상 모델의 검증과 기록을 준비하기 전 활성화하면 대화할 수 없다. 모델별 기능시험 및 worker/gate 실제 설치 전에는 전환을 비활성으로 유지한다.
 
 M5-02 candidate: protocol 3 gate는 입장 전 거절 409에 `X-BC250-Admission: rejected`를 제공하고 upstream의 동일 header를 제거한다. 이 후보 gate와 해당 Client를 함께 설치·검증해야 background의 안전한 대기/재시도가 완성된다. 현재 Client 자동 배포는 gate를 설치하지 않는다.
+
+M5-03: 운영 benchmark.py/run-comparison.py는 아직 직접 8080과 서비스 제어를 사용한다. [검토용 후보](../../deploy/benchmark-candidate/README.md)의 원본 hash를 적용 직전 다시 대조하고 기존 파일을 백업한다. protocol 3 gate·Studio 공용 lock/journal·worker와 함께 두 후보를 설치하고 오래된 직접 경로가 남지 않는지 확인하기 전에는 전환을 활성화하지 않는다. 비교 중 다른 UI/CLI 전환을 실행하지 않는 단일 관리자 절차를 적용한다.

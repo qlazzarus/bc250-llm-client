@@ -32,7 +32,7 @@
 
 gate는 요청 admission과 hold 획득을 같은 동기화 경계에서 직렬화한다. 이미 입장한 추론은 active로 집계하며 worker는 hold 획득 뒤 이 요청과 llama 슬롯이 비워질 때까지 기다린다. hold 중 새 추론은 대기시켰다 재전송하지 않고 `409 model_switch_in_progress`로 즉시 거절한다. Client는 입력 초안을 보존하고 전환 후 실제 모델을 다시 조회해 사용자가 다시 제출할 수 있게 한다. 응답을 일부 전달한 요청은 자동 재실행하지 않는다.
 
-hold 기간에만 거절하면 **hold 이전에 모델을 조회하고 hold 해제 후 오래된 ID로 진입하는 경합**을 막지 못한다. 따라서 모델 snapshot에는 전환 세대(epoch)를 포함하고, 범위 내 추론 요청에는 조회한 epoch가 필수다. gate는 같은 동기화 경계에서 hold 부재·요청 epoch 일치 검사와 active 증가를 원자적으로 수행한다. switch hold 획득 및 gate 재시작 때 epoch를 변경해 이전 snapshot의 요청을 거절하며 프로세스 재시작으로 세대가 우연히 재사용되지 않게 한다. epoch 부재·불일치는 재조회가 필요한 명시적 오류이며 자동 재전송하지 않는다. 기존 deployment hold의 generation과 모델 epoch는 별개다. 범위 내 호출자는 전환 활성화 전 이 계약으로 옮긴다.
+hold 기간에만 거절하면 **hold 이전에 모델을 조회하고 hold 해제 후 오래된 ID로 진입하는 경합**을 막지 못한다. 따라서 모델 snapshot에는 전환 세대(epoch)를 포함하고, 범위 내 추론 요청에는 조회한 epoch가 필수다. gate는 같은 동기화 경계에서 hold 부재·요청 epoch 일치 검사와 active 증가를 원자적으로 수행한다. switch 또는 Studio hold를 새로 획득할 때와 gate 재시작 때 epoch를 변경해 이전 snapshot의 요청을 거절하며 프로세스 재시작으로 세대가 우연히 재사용되지 않게 한다. epoch 부재·불일치는 재조회가 필요한 명시적 오류이며 자동 재전송하지 않는다. 기존 deployment hold의 generation과 모델 epoch는 별개다. 범위 내 호출자는 전환 활성화 전 이 계약으로 옮긴다.
 
 gate 프로세스 교체 시 먼저 유입·제어 쓰기를 제한하고 기존 active 요청을 0으로 배출한다. waiting도 0이면 정상적으로 교체한다. 기존 관리자 pause 때문에 waiting이 남았다면 pause를 풀어 원래 요청을 재전송하지 않는다. pause snapshot을 영속 보존한 다음 구형 gate를 종료해 그 대기 연결을 실패로 종료하고 새 gate의 startup/legacy hold로 이어간다. 이 분기에서 active 요청이 이미 끝났고 남은 연결이 실패로 끝나는지 확인할 수 없다면 교체하지 않는다. 모델 조회는 추론 대기열과 분리해 hold 중 `ready=false`와 현재 epoch를 제공한다. 모델 ID와 epoch는 같은 세대의 snapshot으로 확인해야 하며, 조회 중 전환이 끼면 결과를 폐기한다. 작업자의 모델 검증은 gate를 우회한 loopback llama health·model ID를 사용한다. 기존 `/v1/models`와 호환되는 snapshot 전달 경로·오류 형식은 M5-02에서 Client와 gate를 함께 구현하고 통합 시험한다.
 
@@ -52,7 +52,7 @@ worker는 단일 영속 작업 접수→GPU lock→실제 계약 preflight→이
 
 ## 5. 범위 내 다른 호출자
 
-`benchmark.py`는 직접 8080 대신 gate의 모델 snapshot·epoch를 사용하고 전환 중 거절에 맞춰 모델을 다시 조회해야 한다. `run-comparison.py`의 직접 `systemctl start`는 제거하고 전환·복구를 공용 CLI로 보낸다. 360초 timeout이나 CLI 연결 종료는 서버 작업 취소를 의미하지 않으므로 출력된 중복 방지 키·작업 ID로 결과를 확인하고 불명 상태에서 새 요청이나 restart를 하지 않는다. 실제 도구 변경과 테스트는 M5-03/M6에 속한다. 전환과 벤치마크의 안전한 조율이 준비되기 전 동시 실행을 허용된 운영 흐름으로 취급하지 않는다.
+[벤치마크 후보](../../deploy/benchmark-candidate/README.md)는 직접 8080 대신 gate의 모델 snapshot·epoch를 사용하고, 전환 중 거절 시 중단 후 새 실행에서 모델을 다시 조회한다. 비교 후보는 직접 `systemctl start/stop`을 제거하고 전환과 정상 종료 후 복원을 공용 CLI로 보낸다. 360초 timeout이나 CLI 연결 종료는 서버 작업 취소를 의미하지 않으므로 출력된 중복 방지 키·작업 ID로 결과를 확인하고 불명 상태에서 새 요청이나 restart를 하지 않는다. 실제 도구 변경과 테스트는 M5-03/M6에 속한다. 전환과 벤치마크의 안전한 조율이 준비되기 전 동시 실행을 허용된 운영 흐름으로 취급하지 않는다.
 
 독립 Wiki는 사용자가 명시한 이번 범위의 예외다. Wiki의 8080 요청은 gate drain으로 차단·보호되지 않으며 전환 시 중단·실패할 수 있다. Wiki API/UI의 Client 통합은 후속 계획이고 M2-02의 완료 조건이 아니다. Client 내부 Wiki 메모리 생성은 다른 Client 추론 경로와 함께 M5에 포함한다.
 

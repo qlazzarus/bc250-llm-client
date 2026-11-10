@@ -191,3 +191,50 @@ def test_candidate_preflight_with_studio_and_gate_apps(monkeypatch, tmp_path):
                 pre()
     finally:
         lock.release()
+
+
+@pytest.mark.asyncio
+async def test_installed_studio_owned_hold_preserves_client_pause_and_invalidates_snapshot(monkeypatch, tmp_path):
+    """Use the Studio source under test with the real protocol 3 gate app."""
+    import httpx
+    from fastapi import HTTPException
+    from gate_candidate.gate import create_app as create_gate, provision
+    studio_path = os.environ.get('BC250_STUDIO_SOURCE')
+    if not studio_path or not (Path(studio_path) / 'backend/app/services/llm.py').is_file():
+        pytest.skip('Set BC250_STUDIO_SOURCE to the Studio source to test')
+    pytest.importorskip('sqlalchemy')
+    monkeypatch.syspath_prepend(str(Path(studio_path) / 'backend'))
+    studio_llm = importlib.import_module('app.services.llm')
+    from types import SimpleNamespace
+    settings = SimpleNamespace(llm_service='llama-server.service', allowed_services=['llama-server.service'],
+                               admission_key='studio', admission_url='http://127.0.0.1:8081/control')
+    llm = studio_llm.SystemdLLM(settings)
+    async def settled(): pass
+    monkeypatch.setattr(llm, '_verify_switchable_service', settled)
+    path = tmp_path / 'gate.json'; provision(path)
+    gate = create_gate(path, 'http://upstream', admin_key='admin', client_key='client',
+                       studio_key='studio', switch_key='switch')
+    original = httpx.AsyncClient
+    async with gate.router.lifespan_context(gate):
+        transport = httpx.ASGITransport(app=gate)
+        async with original(transport=transport, base_url='http://gate') as client:
+            admin = {'Authorization':'Bearer admin'}
+            await client.delete('/control/holds/startup', headers=admin)
+            old_epoch = (await gate.state.gate.status())['epoch']
+            await client.put('/control', headers=admin, json={'paused': True})
+            client_hold, studio_hold = 'client-' + 'a' * 32, 'studio-' + 'b' * 32
+            await client.put('/control/holds/' + client_hold, headers={'Authorization':'Bearer client'})
+            monkeypatch.setattr(studio_llm.httpx, 'AsyncClient', lambda **kw: original(**{**kw, 'transport':transport}))
+            assert await llm.owned_control_identity()
+            await llm.ensure_image_admission()
+            await llm.pause_owned(studio_hold)
+            assert set((await gate.state.gate.status())['holds']) == {'legacy', client_hold, studio_hold}
+            assert (await client.delete('/control/holds/' + client_hold, headers={'Authorization':'Bearer studio'})).status_code == 403
+            await llm.resume_owned(studio_hold)
+            assert set((await gate.state.gate.status())['holds']) == {'legacy', client_hold}
+            await client.delete('/control/holds/' + client_hold, headers={'Authorization':'Bearer client'})
+            await client.put('/control', headers=admin, json={'paused': False})
+            with pytest.raises(HTTPException) as error: await gate.state.gate.enter(old_epoch)
+            assert error.value.status_code == 409
+            await gate.state.gate.enter((await gate.state.gate.status())['epoch'])
+            await gate.state.gate.leave()

@@ -132,7 +132,7 @@ class Admission:
                     if hold in holds: raise HTTPException(409, 'Hold already exists')
                     generation = secrets.token_hex(16)
                 if reservation and hold != reservation and (hold.startswith(('client-', 'switch-', 'studio-'))): raise HTTPException(409, 'Recovery reserved')
-                if hold not in holds and hold.startswith('switch-'): epoch = secrets.token_hex(16)
+                if hold not in holds and hold.startswith(('switch-', 'studio-')): epoch = secrets.token_hex(16)
                 holds.add(hold)
             elif operation == 'release':
                 if hold == 'admin-deployment' and (generation is not None or expected_generation is not None):
