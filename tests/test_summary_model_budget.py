@@ -10,6 +10,11 @@ from backend.app.config import Settings
 from backend.app.db import connect, initialize
 
 
+@pytest.fixture(autouse=True)
+def supported_test_features(monkeypatch):
+    monkeypatch.setattr(main, 'require_model_capabilities', lambda *_: None)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('failure', ['none', 'too_large', 'stale', 'missing', 'summary_changed'])
 async def test_summary_selects_whole_turns_and_preserves_cursor_on_failure(tmp_path, monkeypatch, failure):

@@ -9,6 +9,7 @@ os.environ.setdefault('APP_API_KEY', 'client-key')
 os.environ.setdefault('LLM_GATE_API_KEY', 'gate-key')
 
 from backend.app import main
+from backend.app.model_control.capability_identity import runtime_identity
 from gate_candidate.gate import create_app, provision
 
 
@@ -27,6 +28,9 @@ async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream,
             return httpx.Response(200, json={'data': [{'id': 'candidate-model', 'meta': {'n_ctx': 16384}}]})
         if request.url.path == '/slots':
             return httpx.Response(200, json=[{'n_ctx': context}])
+        if request.url.path == '/props':
+            props = {'model_path': 'candidate-model', 'build_info': 'test-build', 'chat_template': 'test template', 'default_generation_settings': {}, 'chat_template_caps': {}, 'modalities': {}}
+            return httpx.Response(200, headers={'content-type': 'application/json'}, stream=Body(json.dumps(props).encode()))
         if request.url.path == '/v1/chat/completions/input_tokens':
             return httpx.Response(200, headers={'content-type': 'application/json'}, stream=Body(b'{"input_tokens":20}'))
         requests.append(json.loads(request.content))
@@ -43,6 +47,13 @@ async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream,
     monkeypatch.setattr(settings, 'llm_gate_url', 'http://gate')
     monkeypatch.setattr(settings, 'llm_model_id', '')
     monkeypatch.setattr(settings, 'model_control_enabled', True)
+    async def worker_profile(_self, operation):
+        assert operation == 'profile'
+        return {'name': 'candidate', 'model_id': 'candidate-model', 'configured_context': 16384,
+                'parallel': 1, 'config_sha256': 'a' * 64,
+                'capabilities': {'reasoning_control': 'supported', 'json_schema': 'supported'},
+                'runtime_identity': runtime_identity({'model_path': 'candidate-model', 'build_info': 'test-build', 'chat_template': 'test template', 'default_generation_settings': {}, 'chat_template_caps': {}, 'modalities': {}}, 'candidate-model')}
+    monkeypatch.setattr(main.ModelControlClient, 'request', worker_profile)
     monkeypatch.setattr(main, 'start_title_task', lambda *_: None)
     observed = []
     class Intercept(httpx.AsyncBaseTransport):

@@ -71,6 +71,19 @@ class ModelControlBridge:
                 return {'error': 'forbidden'}
             method = getattr(self.worker, action)
             return await method(PRINCIPAL, request['id'])
+        if action == 'profile' and set(request) == {'operation'}:
+            # Fail closed while a queued, running or unresolved operation exists.
+            if self.worker.reconciliation_error or self.worker.store.unresolved():
+                return {'error': 'switch_busy_or_recovery_required'}
+            registry = self.worker.switch.service.registry
+            name = registry.current_model()
+            profile = registry.model_profile(name)
+            # Detect configuration replacement while reading. Gate epoch checks
+            # around this request detect a coordinated model switch.
+            if (registry.current_model() != name or registry.model_profile(name) != profile
+                    or self.worker.store.unresolved()):
+                return {'error': 'switch_busy_or_recovery_required'}
+            return profile
         if action == 'models' and set(request) == {'operation'}:
             service = self.worker.switch.service
             models, current = await service.installed(), await service.current()

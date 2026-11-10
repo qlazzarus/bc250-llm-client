@@ -38,6 +38,16 @@ M5-01-01에서 gate의 `include_context=true` snapshot에 실제 slot context와
 
 로컬 백엔드 744개 통과·4개 건너뜀과 별도 Unix socket 3개 통과(합산 747개). 서버의 격리된 Python 3.14 후보 시험 44개 통과. Studio 실제 프로세스와 GPU 모델 변경·모델별 inference는 시험하지 않았다. M5-01-02는 로컬 완료이며 M5-01-03의 설정 profile·기능 검증과 M6~M8의 실제 후보·운영 검증은 계속 남는다. Client/gate 후보는 아직 운영 배포하지 않았다.
 
+### M5-01-03 — 2026-11-10
+
+사용자가 푸시한 `82ef841` [배포 run 42751169542](https://github.com/qlazzarus/bc250-llm-client/actions/runs/42751169542)는 성공했다. 서버 설치 `backend/app/main.py`의 SHA-256은 해당 commit과 일치하고 Client·Studio·gate·llama는 active, 모델 조회 API는 200이었다. 이 확인은 전환 기능의 운영 설치나 활성화가 아니다.
+
+worker `profile`과 Client의 전후 snapshot 대조를 추가했다. 활성 conf의 모델 경로·context·parallel과 gate의 실제 로드 경로·slot context·epoch가 일치해야 한다. 작업 진행/미해결·설정 교체·경로/epoch 불일치는 차단한다. 기본 feature 상태는 unknown이고, 기능에 필요한 검증 기록이 없는 추론은 명시적으로 거절한다. 관리자가 작성한 선택적 기록은 conf digest, GGUF 파일 상태 및 gate의 빌드·template·실행 설정과 대조한다. 파일 상태 지문은 내용 전체 해시가 아니며 운영 Linux mount/SELinux 확인은 M6/M7이다. 초안 생성 도구는 두 상태를 모두 unknown으로 출력하고 설치하지 않는다.
+
+현재 Qwen3.6에 기존 gate를 통과하는 짧은 실제 추론 1회로 간단한 JSON schema와 비사고 모드를 관찰했다. 정상 stop, 기대 JSON 값, reasoning content 부재, token count/usage 23 일치였다. 이는 모델별 전체 기능 검증이 아니며 capability record를 작성하거나 supported로 설정하지 않았다. Wiki 독립 호출 예외는 유지하고 기존 gate·Studio·llama의 서비스/설정은 변경하지 않았다.
+
+검증: 로컬 백엔드 770개 통과·4개 건너뜀 및 Unix socket 통합 4개 별도 통과(합산 774개), 서버 격리 Python 3.14 후보 계약 71개 통과. 실제 서버에서 draft 생성 시 두 기능 모두 unknown, 운영 Qwen3.6 및 `b11850-9ae73e68f` 확인. 전환 활성 시 기록 없는 reasoning/schema 요청은 차단되므로 실제 네 모델 검증·기록 설치와 shared runtime 설치가 끝나기 전 기능을 활성화하지 않는다. 새 후보는 아직 운영에 배포하지 않았다.
+
 ## M1 운영 읽기 전용 조사
 
 - `/usr/local/bin/ai-model`은 root 소유 `/opt/ai/scripts/ai-model`을 가리킨다. llama unit은 root로 `/opt/ai/scripts/start-llama.sh`를 실행하며 8080 loopback을 사용한다. 설정의 `ACTIVE_MODEL`과 개별 모델 conf를 source하고 `MODEL_PATH`를 `-m`으로 전달한다. 재시작 on-failure, stop timeout 60초다.

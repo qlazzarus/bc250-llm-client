@@ -144,3 +144,27 @@ async def test_cli_switch_continues_after_submitter_disconnects(running_worker, 
         await asyncio.sleep(.01)
     assert final['state'] == 'succeeded'
     assert 'operation_id=' in capsys.readouterr().out
+
+
+async def test_profile_rpc_is_read_only_and_blocked_during_switch(running_worker):
+    bridge, service, _gate, path, _journal = running_worker
+    class Registry:
+        def current_model(self): return service.model
+        def model_profile(self, name):
+            return {'name': name, 'model_id': f'/models/{name}.gguf', 'configured_context': 4096,
+                    'parallel': 1, 'config_sha256': 'a' * 64,
+                    'capabilities': {'reasoning_control': 'unknown', 'json_schema': 'unknown'},
+                    'runtime_identity': None}
+    service.registry = Registry()
+    client = ModelControlClient(str(path))
+    assert (await client.request('profile'))['name'] == 'old'
+    operation = await client.request('submit', model='new', idempotency_key='profile-race')
+    await asyncio.wait_for(service.entered.wait(), 2)
+    assert (await client.request('profile'))['error'] == 'switch_busy_or_recovery_required'
+    service.release.set()
+    for _ in range(100):
+        result = await client.request('get', id=operation['id'])
+        if result['state'] == 'succeeded': break
+        await asyncio.sleep(.01)
+    assert result['state'] == 'succeeded'
+    assert (await client.request('profile'))['name'] == 'new'

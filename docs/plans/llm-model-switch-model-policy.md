@@ -65,7 +65,7 @@ M5-01은 선택된 실제 모델·template에 대응하는 검증된 token 계�
 | --- | --- | --- |
 | M5-01-01 | 실제 runtime context와 epoch 결합, 모든 Client 추론 경로의 요청별 상한 | 로컬 완료. `include_context=true` snapshot에서 단일 로드 모델의 meta `n_ctx`와 모든 slot `n_ctx`의 최솟값을 사용하고 조회 전후 epoch/hold를 대조. 누락·불명 값이면 거절. Client 설정 상한도 함께 적용 |
 | M5-01-02 | 실제 template/tokenizer 기반 최종 payload 계산, 출력 예약 검증, 요약 범위 재선정 | 로컬 완료. 동일 epoch의 gate를 통해 최종 payload 전체를 `/v1/chat/completions/input_tokens`로 계산하고 출력·safety를 예약한다. 완결된 최근 채팅 턴과 오래된 요약 턴을 각 context에 맞게 재선정한다. 실제 모델별 추론 및 운영 gate 연결은 M6~M8에 남는다 |
-| M5-01-03 | registry 설정과 runtime 프로필 결합, 모델별 reasoning/JSON schema 검증 상태 | 미완료. 현재 runtime meta와 slot 값은 확인하지만 root 모델 conf와 기능 증거까지 묶은 프로필은 아님. 네 모델 실제 추론은 M6/M8에서 검증 |
+| M5-01-03 | registry 설정과 runtime 프로필 결합, 모델별 reasoning/JSON schema 검증 상태 | 로컬 구현·계약 검증 완료. root 모델 conf·로드 ID·slot context·epoch 및 모델 파일/빌드/template/실행 설정에 결부된 관리자 검증 기록을 대조한다. 네 모델의 실제 기능 확인과 기록 작성·설치는 M6~M8에 남으며 미검증 기능은 차단 |
 
 Client는 전환 활성 시에만 context 확장 snapshot을 요구한다. 비활성 기존 gate 호환은 유지한다. 전역 Settings는 수정하지 않고 요청별 복사본에 예산을 적용하며, 다음 백그라운드 작업에서 새 모델이 커지면 원래 Client 상한 안에서 다시 계산한다. 채팅·제목·요약·Wiki 메모리/초안·이미지 의도/프롬프트의 각 전송(재시도 포함)에 해당 모델의 실제 count endpoint 검사를 적용했다. 실제 전환 활성화나 M5-01 전체 완료를 의미하지 않는다.
 
@@ -74,3 +74,15 @@ Client는 전환 활성 시에만 context 확장 snapshot을 요구한다. 비�
 전환 활성일 때 실제 최종 chat payload를 epoch header와 함께 gate의 `/v1/chat/completions/input_tokens`로 보내고, 반환된 `input_tokens`에 같은 요청의 `max_tokens`와 safety margin을 더해 context에 맞춰 확인한다. 현재 운영 llama-server `b11850-9ae73e68f` 원문에서 count와 chat이 같은 `oaicompat_chat_params_parse` 및 동일한 특수 토큰 설정의 tokenizer를 사용하고, schema·template 옵션을 처리함을 확인했다. `max_tokens`는 `n_predict`이며 생성 token 수가 그 한도에 도달하면 중단되는 코드 경로다. 운영 서버에서 고정된 일반/schema payload의 token-count만 요청해 각각 HTTP 200과 결과를 확인했다. 추론이나 모델 전환은 실행하지 않았다. 이 근거는 해당 빌드 기준이며 다른 빌드·각 모델에 대한 실제 추론 검증은 M6에 남는다.
 
 count 실패·미지원·형식 오류나 epoch 불일치에는 추론하지 않으며 예전 추정값으로 fallback하지 않는다. 비활성 legacy 경로는 기존 동작을 유지한다. 정확 계산이 켜진 경우 채팅은 가장 오래된 완결 턴부터 제외하며, 요약은 가장 오래된 완결 턴부터 순서대로 포함한다. 현재 요청과 기존 요약은 임의로 삭제하지 않는다. 요약 성공 시 실제 포함된 마지막 메시지까지 cursor와 job의 종점을 함께 기록하며, count 실패·첫 턴 초과·요약 변경 경합 시 기존 cursor를 보존한다. 큐 생성의 summary trigger는 여전히 휴리스틱이므로 스케줄 시점의 추정과 최종 admission의 정확 계산을 구분한다.
+
+### M5-01-03 구현과 실제 기능 확인
+
+공용 worker의 읽기 전용 `profile`은 실제 활성 conf의 관리 이름·GGUF ID·`CONTEXT_SIZE`·`PARALLEL`과 설정 digest를 반환한다. 미해결 작업이 있거나 확인 중 설정이 바뀌면 거절한다. Client는 전후 gate snapshot의 ID·epoch·실제 slot context가 일치하고 worker의 GGUF ID도 정확히 일치할 때만 설정 context·slot context·Client 상한의 최솟값을 사용한다. 이 프로필은 내부 계약이며 관리자 모델 목록 API의 의미를 바꾸지 않는다.
+
+기능 상태는 기본 `unknown`이다. 관리자 검증 기록이 없는 `enable_thinking` 또는 JSON schema 사용 요청은 `model_capability_unverified`, 명시적으로 미지원인 요청은 `model_capability_unsupported`로 추론 전에 거절한다. 특히 기본 설정에서 일반 채팅에도 `enable_thinking=false`가 전달되므로 reasoning 검증 기록을 준비하기 전에는 전환 기능을 활성화하지 않는다. `unknown`을 지원으로 추정하지 않으며 사용자 요청의 옵션을 조용히 제거하지 않는다.
+
+선택적 기록 경로는 `/opt/ai/config/capabilities/<관리이름>.json`이다. 기록은 실제 모델 경로·모델 conf SHA-256·GGUF 파일의 device/inode/size/mtime/ctime, llama `build_info`, chat template SHA-256, `/props`의 default generation settings·template capabilities·modalities digest 및 `reasoning_control`/`json_schema` 상태를 포함한다. worker는 설정과 파일 상태를, Client는 epoch로 보호한 gate `/props`의 모델 ID·빌드·template·실행 설정을 각각 대조한다. 다르거나 누락된 경우 해당 기록은 지원 증거로 사용하지 않는다. 파일 식별자는 내용 전체의 암호학적 해시가 아니라 파일 상태에 따른 변경 감지이며 사용자·관리자 단일 환경의 기능 기록이다.
+
+[scripts/draft_model_capabilities.py](../../scripts/draft_model_capabilities.py)는 전환·서비스 재시작이 없는 동안 `PYTHONPATH=. python scripts/draft_model_capabilities.py`로 현재 모델의 기록 초안을 표준 출력에 생성한다. 실제 추론이나 파일 설치를 하지 않으며 두 상태는 항상 `unknown`이다. 관리자만 모델별 실제 기능 시험과 그 결과·조건을 확인한 뒤 필요한 상태를 `supported` 또는 `unsupported`로 바꾸어 root 관리 기록 경로에 설치한다. 파일 내용이나 모델/설정/빌드/template 변경, worker·gate 이전 후 재검증 및 재발급은 M6/M7의 작업이다. 초안 생성이나 한 번의 성공 응답 자체는 모든 schema·reasoning 호환성의 증거가 아니다.
+
+2026-11-10 현재 Qwen3.6에 **기존 gate를 통한 짧은 실제 요청 1회**를 실행했다. `enable_thinking=false`, 간단한 정수 JSON schema의 값·형식, stop 및 빈 reasoning content를 확인했고 count와 실제 prompt usage는 각각 23이었다. 0.5초였다. 이는 해당 모델·빌드의 단일 사례이며 이미지/위키에서 사용하는 모든 schema나 다른 세 모델에 대한 인증이 아니다. 프로필/기록 경로는 미설치이고 이 시험으로 운영 증거 파일을 생성하거나 supported로 승격하지 않았다.

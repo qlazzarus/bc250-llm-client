@@ -10,6 +10,11 @@ from backend.app.config import Settings
 from gate_candidate.gate import create_app, provision
 
 
+@pytest.fixture(autouse=True)
+def supported_test_features(monkeypatch):
+    monkeypatch.setattr(main, 'require_model_capabilities', lambda *_: None)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('slots,meta,expected', [
     ([{'n_ctx': 4096}, {'n_ctx': 2048}], {'n_ctx': 16384, 'n_ctx_train': 262144}, 2048),

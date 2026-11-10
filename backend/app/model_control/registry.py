@@ -4,6 +4,7 @@ The only accepted operations are read-only. Switching is deliberately unavailabl
 until lock, admission and crash recovery are enforced inside the privileged service.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -93,12 +94,8 @@ class ModelRegistry:
             raise RuntimeError("Active model is not installed")
         return name
 
-    def model_id(self, name):
-        """Return the GGUF path from a trusted, strictly literal model config.
-
-        This is the expected llama ID, not a claim that llama has loaded it.
-        Unsupported shell syntax fails closed instead of being executed here.
-        """
+    def _model_config(self, name):
+        """Read a protected literal configuration without evaluating shell."""
         if not isinstance(name, str) or not MODEL_NAME.fullmatch(name):
             raise ValueError("Invalid model name")
         base = self._open_base()
@@ -136,7 +133,89 @@ class ModelRegistry:
         if (not path.startswith("/") or os.path.normpath(path) != path
                 or not path.endswith(".gguf") or values.get("MODEL_NAME", name) != name):
             raise RuntimeError("Invalid model configuration mapping")
-        return path
+        return values, hashlib.sha256(raw).hexdigest()
+
+    def model_id(self, name):
+        """Expected llama ID; this does not assert that it is loaded."""
+        return self._model_config(name)[0]["MODEL_PATH"]
+
+    def _capability_evidence(self, name):
+        """Read optional administrator-supplied verification, never create it."""
+        base = self._open_base()
+        try:
+            try:
+                directory = os.open("capabilities", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=base)
+            except FileNotFoundError:
+                return None
+            try:
+                FileLock._check_trusted_directory(os.fstat(directory))
+                try:
+                    fd = os.open(name + ".json", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+                except FileNotFoundError:
+                    return None
+                try:
+                    self._check_file(os.fstat(fd))
+                    raw = os.read(fd, 16385)
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(directory)
+        finally:
+            os.close(base)
+        if len(raw) > 16384:
+            raise RuntimeError("Capability evidence too large")
+        try:
+            value = json.loads(raw)
+        except (ValueError, UnicodeDecodeError) as error:
+            raise RuntimeError("Invalid capability evidence") from error
+        if not isinstance(value, dict):
+            raise RuntimeError("Invalid capability evidence")
+        return value
+
+    def model_profile(self, name):
+        """Read model identity and configured upper bounds from one config read."""
+        values, digest = self._model_config(name)
+        def positive(field):
+            raw = values.get(field, "")
+            if not re.fullmatch(r"[1-9][0-9]{0,9}", raw) or int(raw) > 2147483647:
+                raise RuntimeError("Invalid model context configuration")
+            return int(raw)
+        result = {"name": name, "model_id": values["MODEL_PATH"],
+                  "configured_context": positive("CONTEXT_SIZE"),
+                  "parallel": positive("PARALLEL"), "config_sha256": digest,
+                  "capabilities": {"reasoning_control": "unknown", "json_schema": "unknown"},
+                  "runtime_identity": None}
+        evidence = self._capability_evidence(name)
+        if evidence is None:
+            return result
+        try:
+            info = os.stat(values["MODEL_PATH"], follow_symlinks=False)
+            fingerprint = {key: getattr(info, 'st_' + key) for key in ('dev', 'ino', 'size', 'mtime_ns', 'ctime_ns')}
+            if not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
+                raise ValueError("Invalid model file")
+            capabilities = evidence["capabilities"]
+            runtime = evidence["runtime_identity"]
+            model_file = evidence["model_file"]
+            if (not isinstance(model_file, dict) or set(model_file) != set(fingerprint)
+                    or any(type(value) is not int or value < 0 for value in model_file.values())
+                    or set(evidence) != {"model_id", "config_sha256", "model_file", "runtime_identity", "capabilities"}
+                    or evidence["model_id"] != result["model_id"] or evidence["config_sha256"] != digest
+                    or evidence["model_file"] != fingerprint
+                    or not isinstance(capabilities, dict) or set(capabilities) != {"reasoning_control", "json_schema"}
+                    or any(value not in ("unknown", "supported", "unsupported") for value in capabilities.values())
+                    or not isinstance(runtime, dict) or set(runtime) != {"build_info", "chat_template_sha256", "runtime_settings_sha256"}
+                    or not isinstance(runtime["build_info"], str) or not 0 < len(runtime["build_info"]) <= 256
+                    or not isinstance(runtime["chat_template_sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", runtime["chat_template_sha256"])
+                    or not isinstance(runtime["runtime_settings_sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", runtime["runtime_settings_sha256"])):
+                raise ValueError("Stale capability evidence")
+        except (KeyError, TypeError, ValueError, OSError):
+            # Stale or unrecognised evidence cannot assert feature support.
+            return result
+        result["capabilities"] = capabilities
+        result["runtime_identity"] = runtime
+        return result
 
 
 class ActiveModelWriter:

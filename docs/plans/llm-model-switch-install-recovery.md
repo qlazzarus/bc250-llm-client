@@ -81,3 +81,9 @@ sudo ai-model status --operation <operation-id>
 `LLM_GATE_API_KEY`에는 신규 gate의 `client-key` 값을 전달하고, `LLM_GATE_HOLD_ID=client-<32 lowercase hex>`를 한 번 생성해 이후 배포에도 보존한다. gate unit에 `LoadCredential=client-key:/etc/bc250-model-control/gate-client-key`가 추가됐다. Client 재시작 후 resume가 다른 hold나 legacy pause를 해제하지 않는지 확인한다. Client pause가 남아 있으면 worker 전환은 차단된다. 기존 운영 키 정정과 신규 역할 키 발급은 구분한다. 이 설정 준비만으로 전환을 활성화하지 않는다.
 
 11/10 root 읽기 전용 확인: 구형 gate paused=false, active/waiting=0; Client↔gate 키 불일치, Studio↔gate 키 일치. Studio coordination 키, owned hold, secure-precreated lock 및 journal 설정은 미설정이며 lock 경로는 기존 `/run/bc250-ai-studio/gpu.lock`이다. 실제 이전 시 다시 확인하고 역할 키·공유 파일 설정을 한 호환 세트로 적용해야 한다.
+
+## 모델별 기능 기록 준비 — M5-01-03 / M6
+
+기능 검증 기록은 선택적 `/opt/ai/config/capabilities/<관리이름>.json`이며 directory와 파일은 worker가 검사할 수 있도록 root 관리 경로여야 한다. [draft 생성기](../../scripts/draft_model_capabilities.py)는 현재 모델·설정·파일·llama runtime의 관찰값만 수집하고 두 기능을 unknown으로 작성한다. 전환과 서비스 재시작이 없는 구간에 생성하고, 실제 기능 시험 결과와 관찰된 동일 모델·설정·빌드가 맞는지 확인한 뒤 관리자만 검토·작성한다. 단순 초안이나 한 차례 응답을 근거로 전체 reasoning/schema 지원을 자동 승격하지 않는다. 설치·소유권·백업 및 교체 절차는 아직 M7에서 대상 서버에 맞춰 확정해야 한다.
+
+기록이 없거나 stale이면 기능은 unknown이며 `enable_thinking`/JSON schema가 필요한 요청은 차단된다. 운영의 현재 기본 채팅도 `enable_thinking=false`를 사용하므로 각 대상 모델의 검증과 기록을 준비하기 전 활성화하면 대화할 수 없다. 모델별 기능시험 및 worker/gate 실제 설치 전에는 전환을 비활성으로 유지한다.

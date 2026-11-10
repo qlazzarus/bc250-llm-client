@@ -19,8 +19,9 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import Settings, get_settings
+from .model_control.capability_identity import runtime_identity
 from .model_control.client import ModelControlClient, WorkerUnavailable
-from .model_control.schemas import ModelList, Operation, CurrentOperation
+from .model_control.schemas import ModelList, ModelProfile, Operation, CurrentOperation
 from .db import connect, initialize
 from .image_prompt import IMAGE_MODELS, ImagePromptValidationError, parse_image_prompt_config, text_response_format as image_prompt_response_format, apply_balanced_preset
 from .image_intent import INTENT_INSTRUCTION, parse_intent, prompt_with_intent, response_format as image_intent_response_format
@@ -416,7 +417,42 @@ async def resolve_gate_model(settings: Settings) -> str:
         if settings.llm_model_id not in model_ids:
             raise fail("configured_model_unavailable", "서버에 설정된 모델을 LLM gate에서 찾지 못했습니다.", 503)
         return GateModel(settings.llm_model_id, epoch, context)
-    return GateModel(model_ids[0], epoch, context)
+    if not settings.model_control_enabled:
+        return GateModel(model_ids[0], epoch, context)
+    if len(model_ids) != 1:
+        raise fail("model_context_unavailable", "로드된 모델을 확인할 수 없습니다.", 503)
+    try:
+        response = await ModelControlClient(settings.model_control_socket).request("profile")
+        if response.get("error"):
+            raise ValueError("worker profile unavailable")
+        profile = ModelProfile.model_validate(response)
+    except (WorkerUnavailable, ValidationError, ValueError):
+        raise fail("model_context_unavailable", "설치 모델의 설정을 확인할 수 없습니다.", 503)
+    if profile.runtime_identity is not None:
+        try:
+            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, trust_env=False) as client:
+                props_response = await client.get(f"{settings.llm_gate_url}/props",
+                                                  headers=gate_headers(settings, GateModel(model_ids[0], epoch, context)))
+                if props_response.status_code == 409:
+                    raise epoch_mismatch()
+                props_response.raise_for_status()
+                props = props_response.json()
+            if runtime_identity(props, profile.model_id) != profile.runtime_identity.model_dump():
+                raise ValueError("Capability evidence does not match runtime")
+        except (httpx.HTTPError, ValueError, AttributeError):
+            raise fail("model_capability_unverified", "현재 모델의 기능 검증 정보를 확인할 수 없습니다.", 503)
+    elif any(value != "unknown" for value in profile.capabilities.model_dump().values()):
+        raise fail("model_capability_unverified", "현재 모델의 기능 검증 정보가 없습니다.", 503)
+    after_models, after_epoch, after_context = await gate_model_snapshot(settings)
+    if (after_epoch != epoch or after_context != context or after_models != models):
+        raise epoch_mismatch()
+    if profile.model_id != model_ids[0]:
+        raise fail("model_context_unavailable", "로드된 모델이 서버 설정과 일치하지 않습니다.", 503)
+    model = GateModel(model_ids[0], epoch, min(context, profile.configured_context))
+    model.management_name = profile.name
+    model.config_sha256 = profile.config_sha256
+    model.capabilities = profile.capabilities.model_dump()
+    return model
 
 
 def model_settings(settings: Settings, model: str) -> Settings:
@@ -430,6 +466,24 @@ def model_settings(settings: Settings, model: str) -> Settings:
         resolved._model_context_ceiling = ceiling
         return resolved
     return settings
+
+
+def require_model_capabilities(settings: Settings, payload: dict, model: str) -> None:
+    """Unverified options cannot be silently assumed to work after a switch."""
+    if not settings.model_control_enabled:
+        return
+    capabilities = getattr(model, "capabilities", {})
+    required = []
+    template = payload.get("chat_template_kwargs")
+    if isinstance(template, dict) and "enable_thinking" in template:
+        required.append("reasoning_control")
+    response_format = payload.get("response_format")
+    if isinstance(response_format, dict) and response_format.get("type") in {"json_schema", "json_object"}:
+        required.append("json_schema")
+    if any(capabilities.get(item) == "unsupported" for item in required):
+        raise fail("model_capability_unsupported", "현재 모델은 요청한 기능을 지원하지 않습니다.", 422)
+    if any(capabilities.get(item) != "supported" for item in required):
+        raise fail("model_capability_unverified", "현재 모델의 요청 기능이 아직 검증되지 않았습니다.", 503)
 
 
 async def count_payload_tokens(settings: Settings, payload: dict, client: httpx.AsyncClient, model: str) -> int:
@@ -453,6 +507,7 @@ async def check_payload_budget(settings: Settings, payload: dict, client: httpx.
     """Count final chat input and reserve all generated tokens plus safety."""
     if not settings.model_control_enabled:
         return None
+    require_model_capabilities(settings, payload, model)
     output = payload.get("max_tokens")
     if type(output) is not int or output <= 0:
         raise fail("model_token_count_unavailable", "출력 토큰 예산을 확인할 수 없습니다.", 503)

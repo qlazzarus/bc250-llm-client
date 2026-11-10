@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ModelEntry(BaseModel):
@@ -14,6 +14,30 @@ class ModelList(BaseModel):
     ready: bool
     switch_enabled: bool
     active_operation_id: str | None = Field(pattern=r'^[a-f0-9]{32}$')
+
+
+class ModelCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    reasoning_control: Literal["unknown", "supported", "unsupported"]
+    json_schema: Literal["unknown", "supported", "unsupported"]
+
+
+class ModelRuntimeIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    build_info: str = Field(min_length=1, max_length=256)
+    chat_template_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    runtime_settings_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ModelProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,128}$")
+    model_id: str = Field(min_length=1, max_length=4096)
+    configured_context: int = Field(gt=0, le=2147483647)
+    parallel: int = Field(gt=0, le=2147483647)
+    config_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    capabilities: ModelCapabilities
+    runtime_identity: ModelRuntimeIdentity | None = None
 
 
 class Operation(BaseModel):
