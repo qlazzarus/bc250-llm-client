@@ -30,6 +30,14 @@ M5-01-01에서 gate의 `include_context=true` snapshot에 실제 slot context와
 
 정확한 tokenizer 계산, 요약 청크 재선정, root registry conf 결합과 모델별 옵션 검증은 M5-01-02/03으로 남겼다. 현재 실패 처리는 자동 재전송·내용 삭제 대신 오류/기존 데이터 보존이다. 검증은 백엔드 733개 통과·4개 건너뜀, 별도 Unix socket 통합 3개 통과(합산 736개)다. 프런트 변경은 없으며 이번에 프런트 검사를 재실행하지 않았다. 운영 전환은 비활성이며 이번 후보는 아직 배포하지 않았다.
 
+### M5-01-02 — 2026-11-10
+
+실제 llama-server `b11850-9ae73e68f` 원문을 확인해 `/v1/chat/completions/input_tokens`가 chat과 같은 parser·template·tokenizer로 전체 payload를 처리함을 확인했다. 운영의 현재 Qwen3.6에서 미리 정한 일반 및 JSON schema 입력의 count만 호출해 각각 25를 반환받았다. 추론, 모델 변경, 서비스 설정 변경은 하지 않았다. count와 completion 사이의 switch 경합은 protocol 3 gate에 같은 epoch를 전달해 거절한다. HTTP 오류·미지원·잘못된 count 또는 epoch 불일치에서는 추정값 fallback 없이 추론을 차단한다.
+
+채팅은 측정값이 맞을 때까지 오래된 완결 턴을 제외하고, 요약은 원래 큐 범위의 오래된 완결 턴을 하나씩 측정해 맞는 구간만 전송한다. 요약의 성공 cursor와 job 종점은 실제 포함된 마지막 메시지로 함께 갱신하고, 첫 턴 초과·count 오류·기존 요약 변경 시 이전 요약과 cursor를 보존한다. Client 전역 상한은 그대로이며 매 재시도에서 schema·template 옵션을 포함한 최종 payload와 출력 예약 및 safety를 다시 계산한다. 기존 비활성 legacy 경로는 유지한다. summary 큐 trigger는 휴리스틱이지만 실제 admission은 tokenizer를 사용한다.
+
+로컬 백엔드 744개 통과·4개 건너뜀과 별도 Unix socket 3개 통과(합산 747개). 서버의 격리된 Python 3.14 후보 시험 44개 통과. Studio 실제 프로세스와 GPU 모델 변경·모델별 inference는 시험하지 않았다. M5-01-02는 로컬 완료이며 M5-01-03의 설정 profile·기능 검증과 M6~M8의 실제 후보·운영 검증은 계속 남는다. Client/gate 후보는 아직 운영 배포하지 않았다.
+
 ## M1 운영 읽기 전용 조사
 
 - `/usr/local/bin/ai-model`은 root 소유 `/opt/ai/scripts/ai-model`을 가리킨다. llama unit은 root로 `/opt/ai/scripts/start-llama.sh`를 실행하며 8080 loopback을 사용한다. 설정의 `ACTIVE_MODEL`과 개별 모델 conf를 source하고 `MODEL_PATH`를 `-m`으로 전달한다. 재시작 on-failure, stop timeout 60초다.

@@ -68,28 +68,29 @@ async def test_enabled_client_rejects_missing_or_invalid_context(monkeypatch, co
     assert error.value.status_code == 503
 
 
-def test_request_settings_do_not_pin_background_work_to_previous_context():
+@pytest.mark.asyncio
+async def test_exact_count_includes_full_schema_retry_and_rechecks_model_ceiling():
     base = Settings(_env_file=None, model_control_enabled=True, llm_context_tokens=16384)
     small = main.model_settings(base, main.GateModel('small', 'a' * 32, 4096))
     large = main.model_settings(small, main.GateModel('large', 'b' * 32, 32768))
     assert small.llm_context_tokens == 4096
     assert base.llm_context_tokens == large.llm_context_tokens == 16384
-    payload = {'messages': [{'role': 'user', 'content': 'x' * 7500}], 'max_tokens': 512}
-    with pytest.raises(main.HTTPException) as error:
-        main.check_payload_budget(small, payload)
-    assert error.value.detail['code'] == 'context_budget_exceeded'
-    main.check_payload_budget(large, payload)
-
-
-def test_schema_and_retry_messages_are_counted_in_final_budget():
-    settings = Settings(_env_file=None, model_control_enabled=True, llm_context_tokens=1000, llm_context_safety_tokens=100)
-    payload = {'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 100}
-    main.check_payload_budget(settings, payload)
-    payload['response_format'] = {'json_schema': {'description': 'x' * 1800}}
-    with pytest.raises(main.HTTPException): main.check_payload_budget(settings, payload)
-    del payload['response_format']
-    payload['messages'].append({'role': 'system', 'content': '다시 작성하세요.' * 100})
-    with pytest.raises(main.HTTPException): main.check_payload_budget(settings, payload)
+    requests = []
+    def count(request):
+        import json
+        body = json.loads(request.content)
+        requests.append((request.headers.get('x-model-epoch'), body))
+        return httpx.Response(200, json={'input_tokens': len(str(body))})
+    payload = {'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 512}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(count), base_url='http://gate') as client:
+        await main.check_payload_budget(small, payload, client, main.GateModel('small', 'a' * 32, 4096))
+        payload['response_format'] = {'json_schema': {'description': 'x' * 4000}}
+        with pytest.raises(main.HTTPException) as error:
+            await main.check_payload_budget(small, payload, client, main.GateModel('small', 'a' * 32, 4096))
+        assert error.value.detail['code'] == 'context_budget_exceeded'
+        await main.check_payload_budget(large, payload, client, main.GateModel('large', 'b' * 32, 32768))
+    assert requests[1][0] == 'a' * 32 and requests[1][1]['response_format'] == payload['response_format']
+    assert requests[2][0] == 'b' * 32
 
 
 @pytest.mark.asyncio
@@ -106,9 +107,50 @@ async def test_title_budget_failure_uses_fallback_without_inference(tmp_path, mo
     class Client:
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
-        async def post(self, *args, **kwargs): pytest.fail('oversized title sent to inference')
+        async def post(self, url, **kwargs):
+            assert url.endswith('/input_tokens')
+            return httpx.Response(200, request=httpx.Request('POST', url), json={'input_tokens': 1000})
     monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kw: Client())
     await main.generate_conversation_title(settings, 'c', '가나다' * 500)
     with connect(settings.database_path) as db:
         row = db.execute("SELECT title,title_pending FROM conversations WHERE id='c'").fetchone()
         assert row['title_pending'] == 0 and row['title'] == ('가나다' * 500)[:40]
+
+
+@pytest.mark.asyncio
+async def test_chat_context_reselection_keeps_current_and_complete_recent_turns():
+    settings = Settings(_env_file=None, model_control_enabled=True, llm_context_tokens=200, llm_context_safety_tokens=50)
+    model = main.GateModel('model', 'a' * 32, 200)
+    payload = {'max_tokens': 50, 'messages': [
+        {'role': 'system', 'content': 'system'},
+        {'role': 'user', 'content': 'old'}, {'role': 'assistant', 'content': 'old answer'},
+        {'role': 'user', 'content': 'recent'}, {'role': 'assistant', 'content': 'recent answer'},
+        {'role': 'user', 'content': 'current'},
+    ]}
+    seen = []
+    def handle(request):
+        import json
+        body = json.loads(request.content); seen.append(body)
+        return httpx.Response(200, json={'input_tokens': 120 if any(m['content'] == 'old' for m in body['messages']) else 80})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle), base_url='http://gate') as client:
+        assert await main.fit_chat_payload(settings, payload, client, model) == 80
+    assert [m['content'] for m in payload['messages']] == ['system', 'recent', 'recent answer', 'current']
+    assert len(seen) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,result,code', [
+    (409, {}, 'model_epoch_mismatch'), (404, {}, 'model_token_count_unavailable'),
+    (200, {'input_tokens': True}, 'model_token_count_unavailable'),
+    (200, {'input_tokens': -1}, 'model_token_count_unavailable'),
+    (200, {'input_tokens': '42'}, 'model_token_count_unavailable'),
+    (200, {}, 'model_token_count_unavailable'),
+])
+async def test_token_count_unavailable_and_stale_fail_closed(status, result, code):
+    settings = Settings(_env_file=None, model_control_enabled=True)
+    payload = {'messages': [{'role': 'user', 'content': 'hello'}], 'max_tokens': 512}
+    model = main.GateModel('model', 'a' * 32, 4096)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(status, json=result))) as client:
+        with pytest.raises(main.HTTPException) as error:
+            await main.check_payload_budget(settings, payload, client, model)
+    assert error.value.detail['code'] == code

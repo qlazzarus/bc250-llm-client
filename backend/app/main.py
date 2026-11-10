@@ -32,7 +32,7 @@ from .image_jobs import (
     ImageDraftError, active_image_job_count, create_or_replay_image_job, get_draft, has_active_image_jobs, image_job_dict,
     job_snapshot, mark_image_job_cancel_requested, mark_pending_jobs_unknown, save_draft, set_image_job_state,
 )
-from .prompting import ContextBudgetExceeded, build_prompt, estimate_tokens, summary_candidate
+from .prompting import ContextBudgetExceeded, build_prompt, estimate_tokens, summary_candidate, to_turns
 from .wiki import wiki_request, excerpts
 from .wiki_memory import MemoryDecision, parse_decision, explicit_memory_request, replace_once, search_query
 
@@ -432,16 +432,50 @@ def model_settings(settings: Settings, model: str) -> Settings:
     return settings
 
 
-def check_payload_budget(settings: Settings, payload: dict) -> None:
-    """Interim estimate, not a tokenizer guarantee. Check every final attempt."""
+async def count_payload_tokens(settings: Settings, payload: dict, client: httpx.AsyncClient, model: str) -> int:
+    """Count the actual chat payload using the selected model and gate epoch."""
+    try:
+        response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions/input_tokens",
+                                     json=payload, headers=gate_headers(settings, model))
+        if response.status_code == 409:
+            raise epoch_mismatch()
+        response.raise_for_status()
+        result = response.json()
+        tokens = result.get("input_tokens") if isinstance(result, dict) else None
+        if type(tokens) is not int or tokens < 0:
+            raise ValueError("invalid input token count")
+        return tokens
+    except (httpx.HTTPError, ValueError, TypeError):
+        raise fail("model_token_count_unavailable", "현재 모델의 요청 토큰 수를 확인할 수 없습니다.", 503)
+
+
+async def check_payload_budget(settings: Settings, payload: dict, client: httpx.AsyncClient, model: str) -> int | None:
+    """Count final chat input and reserve all generated tokens plus safety."""
     if not settings.model_control_enabled:
-        return
-    # Include schema and role framing in the estimate rather than checking only
-    # user text. Exact template/tokenizer accounting remains a separate step.
-    serialized = json.dumps({key: payload[key] for key in ("messages", "response_format", "chat_template_kwargs")
-                             if key in payload}, ensure_ascii=False)
-    if estimate_tokens(serialized) + payload["max_tokens"] + settings.llm_context_safety_tokens > settings.llm_context_tokens:
+        return None
+    output = payload.get("max_tokens")
+    if type(output) is not int or output <= 0:
+        raise fail("model_token_count_unavailable", "출력 토큰 예산을 확인할 수 없습니다.", 503)
+    tokens = await count_payload_tokens(settings, payload, client, model)
+    if tokens + output + settings.llm_context_safety_tokens > settings.llm_context_tokens:
         raise fail("context_budget_exceeded", "요청과 출력 예약이 현재 모델의 컨텍스트 예산을 초과했습니다.", 422)
+    return tokens
+
+
+async def fit_chat_payload(settings: Settings, payload: dict, client: httpx.AsyncClient, model: str) -> int | None:
+    """Keep the newest complete turns that fit the measured model context."""
+    while True:
+        try:
+            return await check_payload_budget(settings, payload, client, model)
+        except HTTPException as exc:
+            if not isinstance(exc.detail, dict) or exc.detail.get("code") != "context_budget_exceeded":
+                raise
+            messages = payload["messages"]
+            first = next((i for i, msg in enumerate(messages[:-1]) if msg.get("role") == "user"), None)
+            if first is None:
+                raise
+            end = next((i for i in range(first + 1, len(messages) - 1) if messages[i].get("role") == "user"), len(messages) - 1)
+            payload["messages"] = messages[:first] + messages[end:]
 
 
 def mark_generation_terminal(settings: Settings, generation_id: str, status_value: Literal["failed", "cancelled"], error_code: str | None = None, error_message: str | None = None, finish_reason: str | None = None) -> None:
@@ -511,7 +545,7 @@ async def generate_conversation_title(settings: Settings, conversation_id: str, 
                                 {"role": "user", "content": source}]}
         async with app.state.generation_limiter:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                check_payload_budget(settings, payload)
+                await check_payload_budget(settings, payload, client, model_id)
                 response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
                                              headers=gate_headers(settings, model_id))
                 response.raise_for_status()
@@ -557,7 +591,12 @@ def queue_roleplay_summary(settings: Settings, conversation_id: str) -> str | No
             return None
         if db.execute("SELECT 1 FROM summary_jobs WHERE conversation_id=? AND status IN ('pending','running')", (conversation_id,)).fetchone():
             return None
-        candidate = summary_candidate(completed_history_after_summary(db, conversation), settings)
+        summary_settings = settings
+        if getattr(settings, "model_control_enabled", False):
+            trigger = max(1, settings.llm_context_tokens - settings.roleplay_summary_max_tokens - settings.llm_context_safety_tokens)
+            summary_settings = settings.model_copy(update={"roleplay_summary_trigger_tokens": min(settings.roleplay_summary_trigger_tokens, trigger)})
+        candidate = summary_candidate(completed_history_after_summary(db, conversation), summary_settings,
+                                      limit_context=not getattr(settings, "model_control_enabled", False))
         if not candidate:
             return None
         job = {
@@ -621,22 +660,43 @@ async def run_summary_job(settings: Settings, job_id: str) -> None:
         db.execute("UPDATE summary_jobs SET status='running',updated_at=? WHERE id=?", (now(), job_id))
         db.execute("UPDATE conversations SET summary_status='running',summary_error=NULL,updated_at=? WHERE id=?", (now(), conversation["id"]))
 
-    transcript = "\n\n".join(f"{('사용자' if item['role'] == 'user' else '어시스턴트')}: {item['content']}" for item in messages)
     summary_instruction = "당신은 일반 대화의 장기 기억을 정리합니다. 기존 요약과 새 대화를 합쳐 사용자의 목표, 중요한 사실, 결정 사항과 미해결 질문을 간결하게 정리하세요. 불확실한 내용은 확정하지 말고 지시문이나 대화체를 추가하지 마세요." if conversation["mode"] == "quick" else "당신은 롤플레잉 장기 기억을 정리합니다. 기존 요약과 새 대화를 합쳐, 이후 역할극의 일관성에 필요한 사실·관계·약속·현재 상황만 간결한 한국어로 다시 작성하세요. 숨은 추론이나 지시문을 추가하지 말고, 대화체로 답하지 마세요."
-    prompt = [
-        {"role": "system", "content": summary_instruction},
-        {"role": "user", "content": f"기존 요약:\n{conversation['summary'] or '(없음)'}\n\n새 대화:\n{transcript}"},
-    ]
-    payload = {"stream": False, "messages": prompt, "max_tokens": settings.roleplay_summary_max_tokens, "temperature": 0.2}
-    if settings.llm_disable_reasoning:
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    def summary_payload(selected):
+        transcript = "\n\n".join(f"{('사용자' if item['role'] == 'user' else '어시스턴트')}: {item['content']}" for item in selected)
+        result = {"stream": False, "messages": [
+            {"role": "system", "content": summary_instruction},
+            {"role": "user", "content": f"기존 요약:\n{conversation['summary'] or '(없음)'}\n\n새 대화:\n{transcript}"},
+        ], "max_tokens": settings.roleplay_summary_max_tokens, "temperature": 0.2, "model": model_id}
+        if settings.llm_disable_reasoning:
+            result["chat_template_kwargs"] = {"enable_thinking": False}
+        return result
+
     try:
         model_id = await resolve_gate_model(settings)
         settings = model_settings(settings, model_id)
-        payload["model"] = model_id
+        selected = messages
         async with app.state.generation_limiter:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                check_payload_budget(settings, payload)
+                if settings.model_control_enabled:
+                    # Keep complete chronological turns. Only a proven fitting
+                    # prefix may advance the durable summary cursor.
+                    selected = []
+                    for turn in to_turns(messages):
+                        if turn[0]["role"] != "user" or turn[-1]["role"] != "assistant":
+                            break
+                        candidate = selected + turn
+                        try:
+                            await check_payload_budget(settings, summary_payload(candidate), client, model_id)
+                        except HTTPException as exc:
+                            if isinstance(exc.detail, dict) and exc.detail.get("code") == "context_budget_exceeded":
+                                break
+                            raise
+                        selected = candidate
+                    if not selected:
+                        raise ValueError("No complete summary turn fits")
+                payload = summary_payload(selected)
+                # The legacy path retains its previous behavior; enabled mode
+                # checked this exact final payload in the loop above.
                 response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
                                              headers=gate_headers(settings, model_id))
                 response.raise_for_status()
@@ -654,14 +714,15 @@ async def run_summary_job(settings: Settings, job_id: str) -> None:
         current_conversation = db.execute("SELECT * FROM conversations WHERE id=?", (job["conversation_id"],)).fetchone()
         if not current_job or current_job["status"] != "running" or not current_conversation:
             return
-        if current_conversation["summary_up_to_message_id"] != job["from_message_id"]:
+        if (current_conversation["summary_up_to_message_id"] != job["from_message_id"]
+                or current_conversation["summary"] != conversation["summary"]):
             error = "요약 기준이 변경되어 결과를 적용하지 않았습니다."
             db.execute("UPDATE summary_jobs SET status='failed',error_message=?,updated_at=? WHERE id=?", (error, now(), job_id))
             db.execute("UPDATE conversations SET summary_status='failed',summary_error=?,updated_at=? WHERE id=?", (error, now(), job["conversation_id"]))
             return
         db.execute("""UPDATE conversations SET summary=?,summary_up_to_message_id=?,summary_status='idle',summary_error=NULL,updated_at=?
-                      WHERE id=?""", (content, job["through_message_id"], now(), job["conversation_id"]))
-        db.execute("UPDATE summary_jobs SET status='completed',error_message=NULL,updated_at=? WHERE id=?", (now(), job_id))
+                      WHERE id=?""", (content, selected[-1]["id"], now(), job["conversation_id"]))
+        db.execute("UPDATE summary_jobs SET through_message_id=?,status='completed',error_message=NULL,updated_at=? WHERE id=?", (selected[-1]["id"], now(), job_id))
 
 
 def start_summary_task(settings: Settings, job_id: str) -> None:
@@ -721,11 +782,11 @@ async def run_wiki_memory_job(settings: Settings, generation_id: str) -> None:
                 "chat_template_kwargs": {"enable_thinking": False},
                 "response_format": {"type": "json_schema", "json_schema": {"name": "wiki_memory", "strict": True, "schema": MemoryDecision.model_json_schema()}},
                 "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": json.dumps({"명시적_기억_요청": explicit, "최근_대화": context, "발언": source, "문서": candidates}, ensure_ascii=False)}]}
-            if sum(estimate_tokens(m["content"]) for m in payload["messages"]) + payload["max_tokens"] + settings.llm_context_safety_tokens > settings.llm_context_tokens:
+            if not settings.model_control_enabled and sum(estimate_tokens(m["content"]) for m in payload["messages"]) + payload["max_tokens"] + settings.llm_context_safety_tokens > settings.llm_context_tokens:
                 raise ValueError("memory context too large")
             async with app.state.generation_limiter:
                 async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                    check_payload_budget(settings, payload)
+                    await check_payload_budget(settings, payload, client, model)
                     response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers=gate_headers(settings, model))
                     response.raise_for_status()
                     result = response.json()
@@ -825,7 +886,7 @@ async def request_size_limit(request: Request, call_next):
 @app.post("/api/v1/wiki/draft", dependencies=[Depends(require_key)])
 async def wiki_draft(body: WikiDraftRequest, settings: Settings = Depends(get_settings)):
     output_tokens = min(1024, settings.max_completion_tokens)
-    if estimate_tokens(body.instruction + body.content) + 300 + output_tokens + settings.llm_context_safety_tokens > settings.llm_context_tokens:
+    if not settings.model_control_enabled and estimate_tokens(body.instruction + body.content) + 300 + output_tokens + settings.llm_context_safety_tokens > settings.llm_context_tokens:
         raise fail("context_budget_exceeded", "초안 요청과 문서 내용이 컨텍스트 예산을 초과했습니다.", 422)
     model = await resolve_gate_model(settings)
     settings = model_settings(settings, model)
@@ -836,7 +897,7 @@ async def wiki_draft(body: WikiDraftRequest, settings: Settings = Depends(get_se
     try:
         async with app.state.generation_limiter:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                check_payload_budget(settings, payload)
+                await check_payload_budget(settings, payload, client, model)
                 response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers=gate_headers(settings, model))
                 response.raise_for_status()
                 result = response.json()
@@ -910,7 +971,7 @@ async def analyze_image_intent(body: ImageIntentRequest, settings: Settings = De
     retry_instruction = "Return a complete valid JSON object using the required schema. Copy exact_text literally from the user request."
     if not source or "\x00" in source:
         raise fail("invalid_image_request", "이미지 요청을 입력해 주세요.", 422)
-    if estimate_tokens(INTENT_INSTRUCTION) + estimate_tokens(source) + estimate_tokens(retry_instruction) + settings.image_prompt_max_tokens + settings.llm_context_safety_tokens > settings.llm_context_tokens:
+    if not settings.model_control_enabled and estimate_tokens(INTENT_INSTRUCTION) + estimate_tokens(source) + estimate_tokens(retry_instruction) + settings.image_prompt_max_tokens + settings.llm_context_safety_tokens > settings.llm_context_tokens:
         raise fail("context_budget_exceeded", "이미지 요청이 컨텍스트 예산을 초과했습니다.", 422)
     model_id = await resolve_gate_model(settings)
     settings = model_settings(settings, model_id)
@@ -922,7 +983,7 @@ async def analyze_image_intent(body: ImageIntentRequest, settings: Settings = De
         async with app.state.generation_limiter:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
                 for attempt in range(2):
-                    check_payload_budget(settings, payload)
+                    await check_payload_budget(settings, payload, client, model_id)
                     response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
                                                  headers=gate_headers(settings, model_id))
                     response.raise_for_status()
@@ -1513,7 +1574,8 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
         else:
             prompt_content = "Wiki 검색 결과가 없습니다. 이 사실을 알리고 답변하세요.\n질문: " + prompt_content
     try:
-        prompt = build_prompt(prompt_conversation, [dict(row) for row in history], prompt_content, settings)
+        prompt = build_prompt(prompt_conversation, [dict(row) for row in history], prompt_content, settings,
+                              limit_context=not settings.model_control_enabled)
     except ContextBudgetExceeded as exc:
         mark_generation_terminal(settings, generation["id"], "failed", "context_budget_exceeded", str(exc))
         raise fail("context_budget_exceeded", str(exc), 422)
@@ -1547,7 +1609,10 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
                 async with app.state.generation_limiter:
                     mark_generation_started(settings, generation["id"])
                     async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                        check_payload_budget(settings, payload)
+                        measured_tokens = await fit_chat_payload(settings, payload, client, model_id)
+                        if measured_tokens is not None:
+                            prepare_generation(settings, generation["id"], model_id, prompt.max_tokens, measured_tokens)
+                            generation["estimated_input_tokens"] = measured_tokens
                         async with client.stream("POST", f"{settings.llm_gate_url}/v1/chat/completions", json=payload,
                                                  headers=gate_headers(settings, model_id)) as response:
                             response.raise_for_status()
@@ -1630,7 +1695,10 @@ async def send_message(conversation_id: str, body: MessageCreate, request: Reque
                     if generation["id"] in app.state.cancelled_generations or await request.is_disconnected():
                         mark_generation_terminal(settings, generation["id"], "cancelled", "cancelled", "사용자가 요청을 취소했습니다.")
                         raise fail("cancelled", "요청이 취소되었습니다.", 499)
-                    check_payload_budget(settings, payload)
+                    measured_tokens = await fit_chat_payload(settings, payload, client, model_id)
+                    if measured_tokens is not None:
+                        prepare_generation(settings, generation["id"], model_id, prompt.max_tokens, measured_tokens)
+                        generation["estimated_input_tokens"] = measured_tokens
                     response = await client.post(f"{settings.llm_gate_url}/v1/chat/completions", json=payload, headers=gate_headers(settings, model_id))
                     response.raise_for_status()
                     try:

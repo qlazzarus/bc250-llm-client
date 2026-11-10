@@ -74,7 +74,7 @@ def to_turns(messages: list[dict[str, str]]) -> list[list[dict[str, str]]]:
     return turns
 
 
-def build_prompt(conversation: dict[str, Any], completed_history: list[dict[str, str]], current_user_content: str, settings: Any) -> PromptPlan:
+def build_prompt(conversation: dict[str, Any], completed_history: list[dict[str, str]], current_user_content: str, settings: Any, *, limit_context: bool = True) -> PromptPlan:
     max_tokens = prompt_output_tokens(conversation, settings)
     input_budget = settings.llm_context_tokens - max_tokens - settings.llm_context_safety_tokens
     system_messages = [{"role": "system", "content": mode_instruction(conversation)}]
@@ -83,7 +83,7 @@ def build_prompt(conversation: dict[str, Any], completed_history: list[dict[str,
     current_message = {"role": "user", "content": current_user_content}
     mandatory = system_messages + [current_message]
     mandatory_tokens = sum(estimate_tokens(message["content"]) for message in mandatory)
-    if mandatory_tokens > input_budget:
+    if limit_context and mandatory_tokens > input_budget:
         raise ContextBudgetExceeded("대화 설정 또는 현재 메시지가 컨텍스트 예산을 초과했습니다. 메시지나 설정을 줄여 주세요.")
 
     # Do not trust a legacy database value here: image prompt generation is
@@ -95,7 +95,7 @@ def build_prompt(conversation: dict[str, Any], completed_history: list[dict[str,
     used_tokens = mandatory_tokens
     for turn in reversed(to_turns(completed_history)):
         turn_tokens = sum(estimate_tokens(message["content"]) for message in turn)
-        if used_tokens + turn_tokens > input_budget:
+        if limit_context and used_tokens + turn_tokens > input_budget:
             break
         selected_turns.append(turn)
         used_tokens += turn_tokens
@@ -103,7 +103,7 @@ def build_prompt(conversation: dict[str, Any], completed_history: list[dict[str,
     return PromptPlan(system_messages + selected_history + [current_message], max_tokens, used_tokens)
 
 
-def summary_candidate(completed_history: list[dict[str, str]], settings: Any) -> SummaryCandidate | None:
+def summary_candidate(completed_history: list[dict[str, str]], settings: Any, *, limit_context: bool = True) -> SummaryCandidate | None:
     turns = to_turns(completed_history)
     if len(turns) <= settings.roleplay_summary_keep_recent_turns:
         return None
@@ -119,7 +119,7 @@ def summary_candidate(completed_history: list[dict[str, str]], settings: Any) ->
     used_tokens = 0
     for turn in candidate_turns:
         turn_tokens = sum(estimate_tokens(message["content"]) for message in turn)
-        if used_tokens + turn_tokens > input_budget:
+        if limit_context and used_tokens + turn_tokens > input_budget:
             break
         selected_turns.append(turn)
         used_tokens += turn_tokens

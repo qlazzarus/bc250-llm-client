@@ -64,7 +64,13 @@ M5-01은 선택된 실제 모델·template에 대응하는 검증된 token 계�
 | ID | 범위 | 상태 |
 | --- | --- | --- |
 | M5-01-01 | 실제 runtime context와 epoch 결합, 모든 Client 추론 경로의 요청별 상한 | 로컬 완료. `include_context=true` snapshot에서 단일 로드 모델의 meta `n_ctx`와 모든 slot `n_ctx`의 최솟값을 사용하고 조회 전후 epoch/hold를 대조. 누락·불명 값이면 거절. Client 설정 상한도 함께 적용 |
-| M5-01-02 | 실제 template/tokenizer 기반 최종 payload 계산, 출력 예약 검증, 요약 범위 재선정 | 미완료. 현재는 메시지·role·schema·template 옵션의 JSON을 포함한 추정 검사이며 정확한 토큰 상한을 보증하지 않음. 요약이 넘치면 기존 요약/cursor를 유지하고 실패, 더 작은 청크를 재선정하지는 않음 |
+| M5-01-02 | 실제 template/tokenizer 기반 최종 payload 계산, 출력 예약 검증, 요약 범위 재선정 | 로컬 완료. 동일 epoch의 gate를 통해 최종 payload 전체를 `/v1/chat/completions/input_tokens`로 계산하고 출력·safety를 예약한다. 완결된 최근 채팅 턴과 오래된 요약 턴을 각 context에 맞게 재선정한다. 실제 모델별 추론 및 운영 gate 연결은 M6~M8에 남는다 |
 | M5-01-03 | registry 설정과 runtime 프로필 결합, 모델별 reasoning/JSON schema 검증 상태 | 미완료. 현재 runtime meta와 slot 값은 확인하지만 root 모델 conf와 기능 증거까지 묶은 프로필은 아님. 네 모델 실제 추론은 M6/M8에서 검증 |
 
-Client는 전환 활성 시에만 context 확장 snapshot을 요구한다. 비활성 기존 gate 호환은 유지한다. 전역 Settings는 수정하지 않고 요청별 복사본에 예산을 적용하며, 다음 백그라운드 작업에서 새 모델이 커지면 원래 Client 상한 안에서 다시 계산한다. 채팅·제목·요약·Wiki 메모리/초안·이미지 의도/프롬프트의 각 전송(재시도 포함)에 검사를 적용했다. 실제 전환 활성화나 M5-01 전체 완료를 의미하지 않는다.
+Client는 전환 활성 시에만 context 확장 snapshot을 요구한다. 비활성 기존 gate 호환은 유지한다. 전역 Settings는 수정하지 않고 요청별 복사본에 예산을 적용하며, 다음 백그라운드 작업에서 새 모델이 커지면 원래 Client 상한 안에서 다시 계산한다. 채팅·제목·요약·Wiki 메모리/초안·이미지 의도/프롬프트의 각 전송(재시도 포함)에 해당 모델의 실제 count endpoint 검사를 적용했다. 실제 전환 활성화나 M5-01 전체 완료를 의미하지 않는다.
+
+### M5-01-02 계산 및 검증 근거
+
+전환 활성일 때 실제 최종 chat payload를 epoch header와 함께 gate의 `/v1/chat/completions/input_tokens`로 보내고, 반환된 `input_tokens`에 같은 요청의 `max_tokens`와 safety margin을 더해 context에 맞춰 확인한다. 현재 운영 llama-server `b11850-9ae73e68f` 원문에서 count와 chat이 같은 `oaicompat_chat_params_parse` 및 동일한 특수 토큰 설정의 tokenizer를 사용하고, schema·template 옵션을 처리함을 확인했다. `max_tokens`는 `n_predict`이며 생성 token 수가 그 한도에 도달하면 중단되는 코드 경로다. 운영 서버에서 고정된 일반/schema payload의 token-count만 요청해 각각 HTTP 200과 결과를 확인했다. 추론이나 모델 전환은 실행하지 않았다. 이 근거는 해당 빌드 기준이며 다른 빌드·각 모델에 대한 실제 추론 검증은 M6에 남는다.
+
+count 실패·미지원·형식 오류나 epoch 불일치에는 추론하지 않으며 예전 추정값으로 fallback하지 않는다. 비활성 legacy 경로는 기존 동작을 유지한다. 정확 계산이 켜진 경우 채팅은 가장 오래된 완결 턴부터 제외하며, 요약은 가장 오래된 완결 턴부터 순서대로 포함한다. 현재 요청과 기존 요약은 임의로 삭제하지 않는다. 요약 성공 시 실제 포함된 마지막 메시지까지 cursor와 job의 종점을 함께 기록하며, count 실패·첫 턴 초과·요약 변경 경합 시 기존 cursor를 보존한다. 큐 생성의 summary trigger는 여전히 휴리스틱이므로 스케줄 시점의 추정과 최종 admission의 정확 계산을 구분한다.

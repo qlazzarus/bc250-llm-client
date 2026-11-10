@@ -27,6 +27,8 @@ async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream,
             return httpx.Response(200, json={'data': [{'id': 'candidate-model', 'meta': {'n_ctx': 16384}}]})
         if request.url.path == '/slots':
             return httpx.Response(200, json=[{'n_ctx': context}])
+        if request.url.path == '/v1/chat/completions/input_tokens':
+            return httpx.Response(200, headers={'content-type': 'application/json'}, stream=Body(b'{"input_tokens":20}'))
         requests.append(json.loads(request.content))
         if stream:
             return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=Body(b'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'))
@@ -64,8 +66,11 @@ async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream,
                 cid = (await client.post('/api/v1/conversations', headers=headers, json={})).json()['id']
                 response = await client.post(f'/api/v1/conversations/{cid}/messages', headers=headers, json={'content': 'question', 'stream': stream})
                 if context == 600:
-                    assert response.status_code == 422
-                    assert response.json()['error']['code'] == 'context_budget_exceeded'
+                    if stream:
+                        assert response.status_code == 200 and 'context_budget_exceeded' in response.text
+                    else:
+                        assert response.status_code == 422
+                        assert response.json()['error']['code'] == 'context_budget_exceeded'
                     assert not requests and not observed
                     from backend.app.db import connect
                     with connect(settings.database_path) as db:
