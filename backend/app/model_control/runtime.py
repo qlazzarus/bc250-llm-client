@@ -6,6 +6,7 @@ import pwd
 import signal
 import socket
 import stat
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -110,6 +111,13 @@ def inherited_socket():
     return listener
 
 
+async def start_inherited_server(bridge, listener):
+    # Python 3.13+ otherwise unlinks even an inherited systemd socket when
+    # the server closes, preventing activation on the next service start.
+    options = {'cleanup_socket': False} if sys.version_info >= (3, 13) else {}
+    return await asyncio.start_unix_server(bridge.handle, sock=listener, limit=MAX_MESSAGE + 1, **options)
+
+
 async def serve():
     listener = inherited_socket()
     enabled = os.environ.get('MODEL_CONTROL_SWITCH_ENABLED', 'false')
@@ -123,7 +131,7 @@ async def serve():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
     try:
-        server = await asyncio.start_unix_server(bridge.handle, sock=listener, limit=MAX_MESSAGE + 1)
+        server = await start_inherited_server(bridge, listener)
         async with server:
             await stop.wait()
         await server.wait_closed()

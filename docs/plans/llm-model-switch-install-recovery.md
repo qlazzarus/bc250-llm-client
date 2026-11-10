@@ -21,6 +21,8 @@ Studio는 `STUDIO_ADMISSION_URL`, `STUDIO_ADMISSION_KEY`, `STUDIO_ADMISSION_OWNE
 1. 최종 Client commit, Studio 배포 대상과 patch 적용 결과, gate·worker 코드 및 의존성 버전을 고정한다. Studio 기존 배포 workflow가 gate 코드 또는 venv를 덮어쓰는지 확인하고, protocol 3 gate가 사용하는 코드·venv가 이후 배포에도 유지되도록 배치한다.
 2. gate factory의 상태 디렉터리는 `ai-studio`가 쓸 수 있어야 한다. gate 코드와 별도 venv는 Client 측 `/opt/bc250-llm-gate`에서 관리해 Studio 배포 및 worker bootstrap 검사 트리와 분리한다. worker 실행 트리는 `/opt/bc250-model-control/lib` 아래에 `backend.app.model_control`과 `/usr/bin/python3 -I -S`에서 실제 import 가능한 의존성이 포함되어야 한다. symlink·bytecode·`.pth`에 대한 bootstrap 검사와 대상 서버의 Python/SELinux를 검증한다. gate unit 후보의 실행 파일과 working directory도 실제 대상에서 검증한다.
 3. GPU lock은 root 소유, Studio가 잠글 수 있는 공유 그룹 `0660`; journal은 root 소유, Studio가 읽을 수 있는 그룹 `0640`, 초기 유효 내용은 `{}`다. 상태 디렉터리·그룹·ACL·SELinux와 `/run` 재부팅 후 생성 방식을 준비한다. 운영 서비스가 시작한 뒤 lock inode를 교체하지 않는다. **이미 존재하는 journal·gate 상태·DB를 초기화하거나 덮어쓰지 않는다.**
+
+   SELinux enforcing 시험에서 관리자 셸이 만든 journal과 systemd service가 만든 임시 파일의 보안 속성이 다르면 원자 교체가 fail-closed됐다. 새 격리 디렉터리에 정책 라벨을 적용한 뒤에는 속성 보존과 원자 교체가 통과했다. 운영에서는 실제 state 경로의 정책 라벨과 worker가 생성하는 임시 파일 라벨이 일치하는지 설치 중 확인하고, 불일치하면 전환을 활성화하지 않는다. 기존 journal을 무조건 relabel하거나 초기화하는 명령으로 취급하지 않는다.
 4. 운영 적용 전 실제 Studio 이미지 작업·복구, gate의 active/waiting 및 기존 pause, llama systemd 작업을 확인한다. 인증 실패·상태 불명·작업 진행 중·미해결 전환이면 중단한다. 기존 gate에서 durable hold/epoch 지원 여부를 추정하지 않는다. 독립 hold 및 기존 pause를 보존할 이전 절차를 준비한다.
 5. gate 교체 시 active와 waiting이 모두 0인지 확인한다. 대기 요청이 있으면 기존 pause를 해제해 재전송하지 않고 중단한다. Client/Studio 배포와 수동 CLI 실행도 이 구간에 중단한다. `migration.provision_from_legacy_snapshot`은 인증된 snapshot의 세 필드를 검증해 pause를 보존하지만 서비스 중단·다른 제어자의 배제를 증명하지는 않는다.
 

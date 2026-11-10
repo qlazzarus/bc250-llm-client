@@ -4,6 +4,20 @@
 
 ## 최신 진행 — 2026-11-10
 
+### M6-02 Linux 경계 시험 — 2026-11-10
+
+**격리 후보 완료.** root가 실행한 세 번째 시험에서 실제 systemd socket activation과 worker 재시작, Client UID의 전환 비활성 거절 및 다른 계정의 socket 접근 거절, Studio 계정의 공유 lock·journal 접근, 실제 Studio/gate의 프로세스 신원과 CAP_SYS_PTRACE를 이용한 Studio namespace 내 lock·journal inode 비교가 통과했다. journal 원자 교체 전후에도 양쪽 namespace inode가 일치했고 SELinux 속성이 보존됐다. `restorecon -RF`를 새 임시 상태 디렉터리에 적용한 뒤 journal과 worker가 생성한 임시 파일 모두 `system_u:object_r:var_run_t:s0`로 확인했다. 앞선 서로 다른 라벨에서는 교체가 안전하게 거절됐다. 실제 `/var/lib` 적용 전에도 해당 정책과 서비스 생성 라벨의 일치를 확인해야 한다.
+
+root 후보 시험은 경로를 `/run` 임시 트리로 오버라이드하고 가짜 credential과 전환 비활성 설정을 사용했다. 운영 worker 설치·운영 credential·gate 이전·실제 GPU 전환을 확인한 것은 아니다. 운영 서비스는 변경하지 않았다. socket 수정 후 전체 로컬 backend **813 통과·5 건너뜀**, 서버의 Studio 소스 복사본을 포함한 Linux 통합 **71 통과**. 실제 설치와 재부팅 이후 상태, 모델별 GPU 검증은 M7~M8에 남는다.
+
+서버는 Fedora 43 커널 6.17, systemd 258, Python 3.14, SELinux enforcing이다. 사용자 권한의 일회성 systemd socket unit으로 Unix listener 전달과 `LISTEN_PID`/`LISTEN_FDS`를 확인하고 종료·삭제했다. 후보 preflight의 실제 Studio·gate unit과 `/proc`의 계정·시작 시각 조회는 두 번 연속 일치했다. 임시 journal에서 실제 SELinux label 유지 및 원자 교체를 확인했고, 명시적 확장 ACL을 임시 파일에 보존할 수 없으면 원본 inode·ACL을 보존하고 교체를 거절함을 확인했다. worker 의존성 staging은 고정 버전과 일치하고 symlink·`.pth`·`.pyc`가 없었다. 운영 서비스 네 개는 active, worker socket은 미설치였다.
+
+root 전용 추가 시험은 [격리 스크립트](../../scripts/m602-root-probe.sh)와 보조 Python 코드로 준비했다. 고유한 `/run` 임시 트리·transient unit과 가짜 credential을 사용하며 운영 파일·서비스 또는 GPU를 변경하지 않는다. 실제 후보 bootstrap 및 전환 비활성 worker의 root systemd socket activation·재시작과 Studio namespace에서 공유 inode·원자 교체를 확인하도록 구성했다. 최종 결과는 위 후속 기록을 따른다. 실제 운영 설치 경로·credential 및 GPU 시험은 M7~M8에 남는다.
+
+첫 root 시험에서는 실제 Client UID의 전환 비활성 요청 거절이 통과했지만 worker 정상 종료 후 socket 경로가 사라져 재시작 시험이 실패했다. 서버 Python 3.14 `asyncio.create_unix_server`의 기본 `cleanup_socket=True`가 systemd에서 상속한 socket 경로도 제거하는 원인이었다. worker가 Python 3.13 이상에서 `cleanup_socket=False`로 systemd 소유 경로를 보존하도록 수정하고, 3.12는 기존 동작을 유지했다. 실제 socket을 복제해 두 번 worker server를 닫아도 경로가 남는 회귀를 추가했으며 로컬과 서버 Linux에서 관련 시험 각각 **28 통과**. 수정 후보의 root 재시험도 위와 같이 통과했다.
+
+두 번째 root 시험에서 수정 후보의 실제 socket activation·service 재시작, Client UID의 전환 비활성 거절, 타 계정 socket 접근 거절, Studio 계정의 임시 lock·journal 접근이 통과했다. CAP_SYS_PTRACE가 포함된 격리 root service의 실제 Studio namespace 공유 inode 비교도 journal 교체 이전까지 통과했다. 이후 journal 원자 교체가 속성 불일치로 fail-closed됐다. 정책 라벨을 적용한 세 번째 시험 결과는 위와 같다.
+
 ### M6-01 최종 후보 통합 회귀 — 2026-11-10
 
 후속 검증으로 Edge에서 실제 빌드 UI→Client API→Unix socket worker→protocol 3 gate 후보를 연결해 A→B `succeeded`, 활성 모델 B 표시 및 B의 후속 스트리밍 대화를 확인했다. `BC250_CANDIDATE_BROWSER=1 PYTHONPATH=. .venv/bin/pytest -s -q 'tests/test_final_candidate_flow.py::test_api_cli_worker_gate_and_post_switch_conversation[none]'`와 로컬 `frontend/dist`를 사용했다. 이 수동 시험의 인증은 테스트 전용이며 llama와 Studio preflight 및 peer 신원은 대역이다.
