@@ -50,6 +50,8 @@ worker `profile`과 Client의 전후 snapshot 대조를 추가했다. 활성 con
 
 ### M5-02 — 2026-11-10 후속
 
+후속 배포: `bf1d0ba` [Actions 42792533514](https://github.com/qlazzarus/bc250-llm-client/actions/runs/42792533514) 성공. Client `main.py` hash가 commit과 일치하고 대화 목록·모델 조회 API가 각각 200, Client·Studio·gate·llama active다. worker socket은 미설치이며 Client 실행 환경에서 전환 기능은 비활성이다. 자동 배포는 Client만 갱신했고 gate candidate·worker/root runtime은 설치하지 않았다. 이 확인은 운영 모델 전환 성공이 아니다.
+
 사용자가 푸시한 `3ac7dab` [Actions 42790337089](https://github.com/qlazzarus/bc250-llm-client/actions/runs/42790337089) 성공, 서버 Client `main.py` hash 일치와 모델 조회 API 200·Client/Studio/gate/llama active를 읽기 전용으로 확인했다. 운영 gate는 구형이고 worker socket은 미설치다. Client 자동 배포에는 gate candidate·worker/root runtime이 포함되지 않는다.
 
 첫 gate snapshot 직후 worker에 전환이 접수되면 profile RPC가 busy를 돌려도 기존 Client는 503으로 처리해 UI의 전환 충돌·초안 복원 경로를 놓쳤다. 이를 `model_epoch_mismatch` 409로 연결했다. 실제 API 시험에서 사용자 메시지와 요청 ID가 보존되고 자동 재전송 없이 사용자의 재제출로 새 모델 응답을 받으며 사용자 메시지가 중복되지 않음을 확인했다. HTTP/SSE 일반 대화와 HTTP 이미지 프롬프트의 UI 초안·모델 재조회 시험을 포함한다.

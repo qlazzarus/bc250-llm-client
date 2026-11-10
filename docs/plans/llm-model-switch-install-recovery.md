@@ -6,7 +6,7 @@
 
 | 구성 | 설치·설정 대상 | 현재 상태 |
 | --- | --- | --- |
-| Client | 기존 Client CI의 backend와 frontend; 전환은 기본 비활성 | `f5b0209` 자동 배포 성공(11/10); 전환 비활성 |
+| Client | 기존 Client CI의 backend와 frontend; 전환은 기본 비활성 | `bf1d0ba` 자동 배포 성공(11/10); 전환 비활성 |
 | gate | `gate_candidate`와 protocol 3 unit 후보, 전용 상태 및 역할 키 | 기존 gate는 Studio venv의 구형 factory; protocol 3 미설치 |
 | Studio | handoff 원본에 적용한 recovery 패치와 protocol 3 설정 | PR 병합 기록 및 11/10 운영 복구 endpoint 코드 확인; 설정·실제 조율 미검증 |
 | worker/CLI | root 관리 실행 트리·소켓·unit·기존 CLI 백업 및 교체 | 미설치; 기존 Client 배포가 설치하지 않음 |
