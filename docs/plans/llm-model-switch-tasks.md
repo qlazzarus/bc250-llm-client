@@ -4,6 +4,16 @@
 
 ## 최신 진행 — 2026-11-10
 
+### M7-01 설치·복구 준비 — 2026-11-10
+
+운영을 읽기 전용으로 재확인했다. Client·Studio·gate·llama는 active이고 worker/runtime 공유 경로는 없다. gate는 `/etc/bc250-llm-gate.env`와 Studio venv의 기존 factory, Studio와 Client는 각자의 `/etc` 환경 파일을 사용한다. 기존 `/usr/local/bin/ai-model`은 `/opt/ai/scripts/ai-model`을 가리키므로 실제 파일 경로도 공용 CLI로 전환해야 우회가 남지 않는다. Studio의 `ProtectSystem=strict`에 공용 lock 쓰기 경로를 추가하는 drop-in, Client 환경 drop-in 및 재부팅용 tmpfiles 후보를 추가했다. 임시 사용자 경로에서 tmpfiles 재실행이 lock inode·내용을 보존함을 확인했다.
+
+Studio 인증 상태와 전체 작업 페이지를 두 번 확인하는 읽기 전용 도구의 root 실행 결과 `nonterminal_jobs=0`, `quiescent=true`; gate 상태와 마찬가지로 이는 순간 관찰이며 적용 직전 재확인해야 한다. 역할별 credential과 환경 fragment를 root 전용 신규 staging에만 만드는 도구를 추가했다. 실제 프로세스 환경을 이용한 root 임시 시험에서 `credential_bundle_prepared=true`, 권한 검증 통과, 기존 Client 운영자 키는 없어 새 키가 필요함을 확인했다. 키 값·작업 내용은 출력하지 않았다.
+
+인증된 구형 gate snapshot의 배타 저장과 정지 후 기존 pause 보존 이전, 신규 startup만 조건 확인 후 해제, 역할/Studio/Client 상태 조회, 미해결 worker 기록을 보존하는 rollback 판정과 기존 legacy pause 복원 도구를 추가했다. root 전용 backup 도구는 격리 GNU tar 시험에서 파일·mode·CLI symlink·확장 ACL·SELinux 속성 복원을 확인했다. 이 도구들은 실제 gate 교체·CLI 전환·모델 전환을 수행하지 않았다. 최종 로컬 전체 backend **834 통과·6 건너뜀**(GNU tar Linux 전용 시험 1개 포함), 서버 격리 Linux 선택 시험 **95 통과**. 동일 서버의 Python 3.14에서 고정 의존성 staging과 현재 worker 코드의 `-I -S` import도 통과했다. [대상 서버 실행 순서](llm-model-switch-install-recovery.md#m7-01-대상-서버-실행-순서와-점검-도구--2026-11-10)에 백업·이전·비활성 설치·복구·롤백 순서를 기록했다.
+
+서버의 새로운 임시 Python 3.14 gate venv에 [고정 의존성](../../deploy/model-control/gate-requirements.txt)을 설치했고 후보 import 및 별도 fake upstream의 역할 인증·startup/legacy hold·context snapshot 시험이 통과했다. M7-01의 후보 준비는 완료했다. 설치·복원 명령의 전체 조합을 운영 경로에서 실행한 증거는 없으며 M7-02는 후보 commit/hash와 적용 전 파일·키 전달, 모델별 실제 기능 검증 및 운영 상태에 대한 준비 판정이다. 운영 서비스·credential·GPU는 변경하지 않았다.
+
 ### M6-02 Linux 경계 시험 — 2026-11-10
 
 **격리 후보 완료.** root가 실행한 세 번째 시험에서 실제 systemd socket activation과 worker 재시작, Client UID의 전환 비활성 거절 및 다른 계정의 socket 접근 거절, Studio 계정의 공유 lock·journal 접근, 실제 Studio/gate의 프로세스 신원과 CAP_SYS_PTRACE를 이용한 Studio namespace 내 lock·journal inode 비교가 통과했다. journal 원자 교체 전후에도 양쪽 namespace inode가 일치했고 SELinux 속성이 보존됐다. `restorecon -RF`를 새 임시 상태 디렉터리에 적용한 뒤 journal과 worker가 생성한 임시 파일 모두 `system_u:object_r:var_run_t:s0`로 확인했다. 앞선 서로 다른 라벨에서는 교체가 안전하게 거절됐다. 실제 `/var/lib` 적용 전에도 해당 정책과 서비스 생성 라벨의 일치를 확인해야 한다.

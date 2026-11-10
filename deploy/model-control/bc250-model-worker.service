@@ -1,7 +1,7 @@
 [Unit]
 Description=BC-250 model control worker (disabled until coordination is installed)
 Requires=bc250-model-worker.socket
-After=bc250-model-worker.socket bc250-llm-gate.service bc250-ai-studio.service
+After=systemd-tmpfiles-setup.service bc250-model-worker.socket bc250-llm-gate.service bc250-ai-studio.service
 
 [Service]
 Type=simple

@@ -130,7 +130,7 @@ UI는 현재 모델, 설치 모델 선택, 전환 버튼, 전역 변경 안내, 
 | M4 공용 제어 실행부 | 로컬 완료 | M4-01~04의 구현·로컬 검증 완료. Linux·운영 경계의 최종 검증은 M6~M8 |
 | M5 전환 후 Client 호환 | 부분 구현 | M5-01~03에서 모델 추종·요청 경합·다른 호출자 조율 |
 | M6 최종 통합 검증 | 격리 후보 완료 | M6-01~02의 기능·Linux 경계 검증 완료. 실제 운영 설치·GPU 통합은 M7~M8 |
-| M7 배포·복구 준비 | 템플릿만 있음 | M7-01~02에서 설치·복구 절차와 준비 판정 완료 |
+| M7 배포·복구 준비 | 후보 준비 완료 | M7-01 설치·복구 절차와 격리 시험을 준비; M7-02 최종 후보·운영 준비 판정 필요 |
 | M8 운영 기능 확인·정리 | 미착수 | M8-01~03에서 실제 전환·후속 대화와 정리 완료 |
 
 ### 세부 작업 추적
@@ -155,7 +155,7 @@ UI는 현재 모델, 설치 모델 선택, 전환 버튼, 전역 변경 안내, 
 | M5-03 | M1-03, M2-02 | 범위 내 다른 LLM/GPU 호출자 및 gate/Studio 최소 연동 | 독립 Wiki를 제외한 자동 경로가 공용 잠금·journal·owned hold를 따르거나 명확히 차단됨. Studio 복구 전용 인증 조회와 journal·GPU·독립 복구 상태 계약 구현 | 로컬 후보 완료: 운영 Studio 소스 복사본의 fake 엔진·gate/worker 계약과 다른 hold 보존 확인. [벤치마크 후보](../../deploy/benchmark-candidate/README.md)는 gate epoch 및 공용 CLI를 사용하고 불명 결과에서 중단. Studio 공유 설정, gate/worker와 벤치마크 후보의 실제 적용·GPU 검증은 M6~M8에 남음; Wiki 통합은 후속 예외 |
 | M6-01 | M3-02, M4-04, M5-01, M5-02, M5-03 | 같은 최종 후보의 UI/API/CLI→worker 통합 회귀 | 중복·동시성·hold·cleanup crash window·불명 결과·재시작과 기존 회귀 통과 | 격리 후보 완료: [최종 후보 회귀](llm-model-switch-tasks.md#m6-01-최종-후보-통합-회귀--2026-11-10), 실제 Edge UI→Client→socket worker→protocol 3 gate의 A→B·후속 대화와 cleanup 다섯 지점 SIGKILL 복구. 로컬 backend 812 통과·5 건너뜀, frontend lint·14 tests·build 및 Linux 격리 70 통과. llama·Studio preflight는 대역; 실제 root runtime·GPU·서비스 확인은 M6-02/M8에 남음 |
 | M6-02 | M4-04, M7-01 | 최소 Linux 격리 시험 | 실제 SO_PEERCRED·socket activation·root bootstrap·ACL/SELinux/xattr·CAP_SYS_PTRACE/proc namespace·재시작·원자 교체 검증 | 격리 후보 완료: [Linux 경계 시험](llm-model-switch-tasks.md#m6-02-linux-경계-시험--2026-11-10). 실제 root transient service·socket activation/재시작·Studio namespace inode·enforcing SELinux 원자 교체 확인. 후보 경로와 credential은 임시 대역, 실제 운영 설치·GPU는 M7~M8. 과거 유지보수 VM/DB 차단 시험은 재개하지 않음 |
-| M7-01 | M2-02, M4-04 | 패키지·credential·state 초기화, CLI 백업/교체, 공용 변경·비활성 설치·복구/rollback 절차 | 미해결 상태와 기존 pause 보존, 중복 controller 방지, 실제 Client·gate·Studio 호환 구성의 설치·복구 runbook | 부분 완료: 기존 자동 배포는 worker와 gate/Studio 공용 계약을 설치하지 않음. 실제 권한·파일·서비스·키 이관과 복구 절차 필요; root 자산 출처 인증이나 기존 Studio 배포 방식 유지는 필수 아님 |
+| M7-01 | M2-02, M4-04 | 패키지·credential·state 초기화, CLI 백업/교체, 공용 변경·비활성 설치·복구/rollback 절차 | 미해결 상태와 기존 pause 보존, 중복 controller 방지, 실제 Client·gate·Studio 호환 구성의 설치·복구 runbook | 후보 준비 완료: [서버별 절차·점검 도구](llm-model-switch-install-recovery.md#m7-01-대상-서버-실행-순서와-점검-도구--2026-11-10), 상태 이전·credential·백업·복원·startup 해제 절차 및 격리 시험. 실제 설치·복원 명령의 전체 조합과 운영 적용 직전 상태는 M7-02/M8에서 확인. root 자산 출처 인증이나 기존 Studio 배포 방식 유지는 필수 아님 |
 | M7-02 | M1-02, M1-03, M6-01, M6-02, M7-01 | 배포 준비 판정표 | 후보 commit/hash·시험 근거·구체 변경/복구 목록이 일치하고 미확인 해소·fail-closed 확인 | 미완료 |
 | M8-01 | M7-02 | 허용된 운영 단계에서 비활성 설치→준비 확인→단일 CLI/API 경로 활성화 | 원본 CLI 백업, Wiki를 제외한 제어 우회 제거 및 실제 gate/Studio owned 계약 확인. Wiki 예외와 영향 기록 | 미착수: 이 문서 갱신은 운영 실행 승인 아님 |
 | M8-02 | M8-01 | 실제 UI A→B 전환과 B 후속 대화 | 현재 모델 갱신, 같은 모델·CLI/API 일치·이미지/채팅 경합 및 운영 회귀 증거 확보 | 미착수: 사용자 기능의 최종 완료 게이트 |

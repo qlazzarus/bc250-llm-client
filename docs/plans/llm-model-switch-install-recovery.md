@@ -93,3 +93,175 @@ sudo ai-model status --operation <operation-id>
 M5-02 candidate: protocol 3 gate는 입장 전 거절 409에 `X-BC250-Admission: rejected`를 제공하고 upstream의 동일 header를 제거한다. 이 후보 gate와 해당 Client를 함께 설치·검증해야 background의 안전한 대기/재시도가 완성된다. 현재 Client 자동 배포는 gate를 설치하지 않는다.
 
 M5-03: 운영 benchmark.py/run-comparison.py는 아직 직접 8080과 서비스 제어를 사용한다. [검토용 후보](../../deploy/benchmark-candidate/README.md)의 원본 hash를 적용 직전 다시 대조하고 기존 파일을 백업한다. protocol 3 gate·Studio 공용 lock/journal·worker와 함께 두 후보를 설치하고 오래된 직접 경로가 남지 않는지 확인하기 전에는 전환을 활성화하지 않는다. 비교 중 다른 UI/CLI 전환을 실행하지 않는 단일 관리자 절차를 적용한다.
+
+## M7-01 대상 서버 실행 순서와 점검 도구 — 2026-11-10
+
+아래는 검토용 순서다. 이 문서 작성은 운영 설치나 전환 활성화가 아니며, M7-02에서 최종 commit·변경 세트·복구 가능성을 확인한 뒤 M8에서 실행한다. root 명령에서 `SRC`는 **해당 commit을 고정해 root가 검토한 후보 디렉터리**, `BACKUP`은 새 root 전용 백업 디렉터리다. 기존 `/etc` 환경 파일과 credential을 터미널·채팅·로그에 출력하지 않는다. 명령을 실행하는 동안 관리자는 Client 요청, Studio 이미지 작업, 벤치마크, 기존 CLI, 배포 및 다른 제어자의 접근을 중단한다. 아래 읽기는 그 차단을 대신하지 않는다.
+
+### A. 현재 상태와 백업
+
+1. `systemctl is-active`로 Client·Studio·gate·llama가 active인지, `systemctl show ... -p Job -p MainPID`로 진행 중 systemd 작업이 없는지 확인한다. `sudo /usr/bin/python3 "$SRC/scripts/studio_quiescence_status.py"`는 키·작업 내용을 출력하지 않고 전체 Studio 작업 페이지를 두 번 비교한다. `quiescent=true`가 아니거나 조회 오류면 중단한다. 현재 조회는 `nonterminal_jobs=0`, `quiescent=true`였으나 실행 직전 다시 조회해야 한다.
+2. `sudo /usr/bin/python3 "$SRC/scripts/legacy_gate_status.py"`에서 active·waiting이 모두 0인지 확인한다. waiting이 있으면 기존 pause를 풀어 요청을 재전송하지 말고 배포를 중단해 연결 종료를 확인한다. 이미지 작업과 새 Client 요청의 차단은 관리자 절차로 별도 보장한다.
+3. 다음 명령은 **새** root 전용 `BACKUP`을 만들고 unit·환경 파일, 실제 CLI와 symlink, benchmark, Client·Studio 코드/정적 파일, Studio 모델 설정과 현재 active-model 설정을 ACL·SELinux·소유권 정보와 함께 아카이브한다. 환경 파일이 포함되므로 archive 내용을 공개하지 않는다. 필요한 파일 누락이나 기존 `BACKUP`이 있으면 중단한다.
+
+   ```bash
+   sudo /usr/bin/python3 "$SRC/scripts/create_rollout_backup.py" "$BACKUP"
+   ```
+
+   unit enable 상태, 고정한 commit 및 gate/Studio/Client venv의 전체 의존성 버전은 별도 root 전용 기록으로 보관한다. 이 백업은 대화·Studio DB 또는 모델 파일의 백업이 아니며, 기존 gate/Studio venv는 교체하지 않고 보존한다. `active-model.conf`는 조사 기록으로 포함하지만 실행 중 임의 복원하지 않는다. 실제 파일이 없으면 임의로 생성하지 말고 미존재 사실을 기록한다.
+4. 기존 CLI의 실제 실행 파일은 `/opt/ai/scripts/ai-model`, `/usr/local/bin/ai-model`은 그 symlink다. 양쪽 호출이 새 worker를 통하도록 실제 파일 경로를 후보 launcher로 교체하고 symlink를 유지해야 한다. `/opt/ai-benchmark` 두 원본 hash는 각각 `d44a3030911195d8a950542eb588cbe8e7955227b52abe8e1213170db28534d6`, `f7db2d20b5c2b16de38547202c510498dd23c004415c0b7a47a59b708dc208f1`였다. 적용 직전 다시 대조하고 차이가 있으면 후보를 재검토한다. Wiki는 직접 llama를 호출하는 명시적 예외다.
+
+### B. 비밀·패키지·파일 준비
+
+1. 비밀을 출력하지 않는 다음 명령은 **존재하지 않는** root 전용 staging 디렉터리를 만들 뿐 실제 설정을 교체하지 않는다. 기존 Studio API/admin 및 Client 운영자 키가 있으면 보존한다. 운영자 키가 없으면 새 키를 만들며, 관리자는 root 전용 staging의 `client.env`에서 이를 안전한 경로로 확인한다. 서버의 `/health`, `/v1/models`, `/slots`는 11/10 인증 없는 읽기가 가능했으나, 실제 upstream 인증 설정이 다르면 `--upstream-key-file`에 root 전용 기존 키 파일을 지정한다.
+
+   ```bash
+   sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python \
+     "$SRC/scripts/prepare_coordination_credentials.py" /root/bc250-model-credentials-stage
+   ```
+
+   실패한 부분 staging은 원인을 조사하고 새 경로를 사용한다. 기존 staging 또는 credential을 덮어쓰지 않는다. `client.env`는 전환 비활성, 고유 Client hold, Client gate 키 및 운영자 키를 포함하고 `studio.env`는 Studio gate 키·조율 키와 공용 경로를 포함한다. 내용을 출력하지 않고 root 소유 `0600`으로 `/etc/bc250-model-control/`에 설치한다. gate와 worker는 같은 `switch-gate-key`, Studio와 worker는 같은 `studio-coordination-key`, gate와 각 소비자는 동일한 역할 키를 사용한다.
+2. `python scripts/build_model_worker.py <새-lib-경로>`로 고정 의존성과 후보 worker를 별도 staging한 뒤 검증한다. `/opt/bc250-model-control`에 root 소유 bootstrap·CLI bootstrap·lib를 설치하며 실행 트리에는 symlink·`.pth`·`.pyc`가 없어야 한다. gate는 별도 `/opt/bc250-llm-gate`에서 `gate_candidate`와 Python 3.14 가상환경을 사용한다. Python venv를 다른 경로에서 복사해 이동하지 않는다. 서버의 별도 임시 venv에서 [고정 의존성](../../deploy/model-control/gate-requirements.txt) 전체와 [역할·hold·snapshot 시험](../../scripts/check_gate_candidate.py)을 통과했다. 최종 경로에 venv를 만들 때 같은 고정 의존성과 후보를 설치한 다음 import·시험 결과와 hash를 다시 확인한다.
+3. [tmpfiles 후보](../../deploy/model-control/bc250-model-control.tmpfiles.conf)를 `/etc/tmpfiles.d/`에 설치하고 최초 실행 시 `/run/bc250-gpu`의 root 소유 lock `0660 root:ai-studio`, worker lock `0600 root:root`, socket 상위 디렉터리 `0755`를 만든다. 부팅 후에도 같은 tmpfiles 규칙을 사용한다. 기존 lock은 교체하거나 truncate하지 않는다. 별도의 임시 사용자 파일에서 tmpfiles를 두 번 적용해 inode·내용 유지 확인을 마쳤다. 실제 설치 후 worker·Studio 시작 전에 inode 및 그룹 접근을 확인한다.
+4. `/var/lib/bc250-model-control`은 root 소유·Studio 읽기 그룹이 접근 가능한 `0750`, 새 journal은 `0640 root:ai-studio`, 새 DB는 worker가 root 전용으로 만든다. journal `{}`는 경로가 **정말 신규이고 기존 상태가 전혀 없을 때만** 배타적으로 만든다. 이미 존재하는 파일, 불명 journal, gate state/marker 또는 작업 DB를 초기화하지 않는다. 실제 state 경로의 SELinux 정책 라벨과 서비스 생성 임시 파일의 라벨·ACL 일치를 확인한다.
+5. [Studio drop-in](../../deploy/model-control/bc250-ai-studio.service.d/model-control.conf)은 기존 서비스 설정을 유지하면서 root 전용 `studio.env`를 추가하고 `ProtectSystem=strict` 안에서 공용 lock 경로 쓰기를 허용한다. [Client drop-in](../../deploy/model-control/bc250-llm-client.service.d/model-control.conf)은 기존 인증 설정을 유지하면서 `client.env`를 추가한다. 두 파일을 같은 호환 세트로 적용하고 기존 unit·drop-in 백업을 유지한다. 대상 `model-control.conf`가 이미 있으면 덮어쓰지 않고 내용을 검토해 충돌을 해결한다. 아래 롤백의 신규 drop-in 삭제는 기존에 없음을 확인한 경우에만 적용한다.
+
+M8에서 실제 신규 경로를 준비할 때 `WORKER_LIB`는 검증된 새 worker lib staging, `BUNDLE`은 위에서 만든 credential staging이다. **모든 대상이 미존재인 초기 설치**에서만 다음을 순서대로 실행한다. 하나라도 이미 있거나 이전 설치 상태가 불명확하면 아래 블록을 실행하지 않고 조사한다.
+
+```bash
+( set -eu
+sudo test ! -e /opt/bc250-model-control
+sudo test ! -e /opt/bc250-llm-gate
+sudo test ! -e /etc/bc250-model-control
+sudo test ! -e /var/lib/bc250-model-control
+sudo test ! -e /var/lib/bc250-llm-gate
+sudo test ! -e /run/bc250-gpu
+sudo test ! -e /run/bc250-model-control
+sudo test ! -e /etc/tmpfiles.d/bc250-model-control.conf
+for path in /opt/bc250-model-control /opt/bc250-llm-gate /etc/bc250-model-control /var/lib/bc250-model-control /var/lib/bc250-llm-gate /run/bc250-gpu /run/bc250-model-control /etc/tmpfiles.d/bc250-model-control.conf; do
+  sudo test ! -L "$path"
+done
+sudo install -d -m 0755 -o root -g root /opt/bc250-model-control /opt/bc250-llm-gate
+sudo cp -a "$WORKER_LIB" /opt/bc250-model-control/lib
+sudo chown -R root:root /opt/bc250-model-control/lib
+sudo chmod -R go-w /opt/bc250-model-control/lib
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/worker-bootstrap.py" /opt/bc250-model-control/worker-bootstrap.py
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/cli-bootstrap.py" /opt/bc250-model-control/cli-bootstrap.py
+sudo cp -a "$SRC/gate_candidate" /opt/bc250-llm-gate/gate_candidate
+sudo chown -R root:root /opt/bc250-llm-gate/gate_candidate
+sudo /usr/bin/python3 -m venv /opt/bc250-llm-gate/.venv
+sudo /opt/bc250-llm-gate/.venv/bin/python -m pip install -r "$SRC/deploy/model-control/gate-requirements.txt"
+sudo env PYTHONPATH=/opt/bc250-llm-gate /opt/bc250-llm-gate/.venv/bin/python "$SRC/scripts/check_gate_candidate.py"
+sudo install -d -m 0700 -o root -g root /etc/bc250-model-control
+for name in gate-admin-key gate-client-key gate-studio-key switch-gate-key studio-coordination-key llm-key client.env studio.env; do
+  sudo install -m 0600 -o root -g root "$BUNDLE/$name" "/etc/bc250-model-control/$name"
+done
+sudo install -d -m 0750 -o root -g ai-studio /var/lib/bc250-model-control
+sudo install -d -m 0700 -o ai-studio -g ai-studio /var/lib/bc250-llm-gate
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/bc250-model-control.tmpfiles.conf" /etc/tmpfiles.d/bc250-model-control.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/bc250-model-control.conf
+)
+```
+
+위 블록은 journal·gate state·DB를 생성하지 않는다. journal은 다음 배타 생성 명령으로 한 번만 준비하며, 실패하면 기존 파일을 지우거나 덮어쓰지 않는다. `restorecon`은 **방금 새로 만든** 디렉터리에만 적용한다.
+
+```bash
+sudo /usr/bin/python3 - <<'PY'
+import grp, os
+p = '/var/lib/bc250-model-control/switch.json'
+fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
+try:
+    os.fchown(fd, 0, grp.getgrnam('ai-studio').gr_gid)
+    os.fchmod(fd, 0o640)
+    os.write(fd, b'{}')
+    os.fsync(fd)
+finally:
+    os.close(fd)
+directory = os.open('/var/lib/bc250-model-control', os.O_RDONLY | os.O_DIRECTORY)
+try: os.fsync(directory)
+finally: os.close(directory)
+PY
+sudo restorecon -RF /var/lib/bc250-model-control /var/lib/bc250-llm-gate /run/bc250-gpu
+```
+
+이어서 worker service/socket 후보와 두 drop-in을 해당 `/etc/systemd/system/` 경로에 설치한다. 기존 gate unit과 실제 CLI·benchmark는 백업 후 §C의 제어된 중단 구간에서만 교체한다. 새 drop-in·tmpfiles·unit 대상이 이미 있으면 임의로 덮어쓰지 않는다. `systemctl daemon-reload`, socket enable 및 서비스 시작은 §C 순서를 따른다. 부분 실패 시 임의 재실행하지 않고 생성된 파일과 기록을 보존해 조사한다.
+
+### C. gate 이전과 비활성 설치
+
+아래 명령은 M8에서 ingress와 다른 제어자를 중단한 관리자가 실행한다. snapshot 이후 구형 gate stop까지 다른 제어를 허용하지 않는다. snapshot은 순간 관찰이며 이것만으로 경합을 방지하지 않는다.
+
+```bash
+# BACKUP은 새 root 전용 디렉터리, SRC는 고정된 후보 소스다.
+sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python \
+  "$SRC/scripts/migrate_legacy_gate.py" capture "$BACKUP/legacy-gate.json"
+# capture가 성공한 직후에만 관리자가 기존 gate를 정지한다.
+sudo systemctl stop bc250-llm-gate.service
+# /var/lib/bc250-llm-gate는 미리 준비한 ai-studio 소유의 신규 0700 디렉터리다.
+sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python \
+  "$SRC/scripts/migrate_legacy_gate.py" initialize "$BACKUP/legacy-gate.json" /var/lib/bc250-llm-gate/state.json
+```
+
+capture는 인증된 구형 gate의 active/waiting이 모두 0일 때만 root 전용 snapshot을 배타적으로 생성한다. initialize는 gate가 정지·정착했는지 전후로 확인하고 기존 state·lock·uncertainty marker가 없을 때만 초기 `startup`과 원래 pause에 해당하는 `legacy`를 생성한다. 중단 또는 불명 오류 시 생성된 기록을 삭제하거나 재초기화하지 말고 조사한다.
+
+초기 state 생성이 성공한 뒤 **신규 state 파일에만** 정책 라벨을 적용하고, 백업한 기존 gate unit 대신 protocol 3 unit 후보를 설치해 시작한다. 새 worker unit/socket과 두 신규 drop-in의 대상이 미존재인지 확인한다. 아래는 전체 블록이 한 항목이라도 실패하면 중단하는 예시다. Client·Studio 요청과 다른 제어자는 계속 차단하고, 각 재시작 전에 이 문서의 유휴 조건을 다시 확인한다.
+
+```bash
+( set -eu
+sudo restorecon -F /var/lib/bc250-llm-gate/state.json
+for path in /etc/systemd/system/bc250-model-worker.service /etc/systemd/system/bc250-model-worker.socket /etc/systemd/system/bc250-ai-studio.service.d/model-control.conf /etc/systemd/system/bc250-llm-client.service.d/model-control.conf; do
+  sudo test ! -e "$path"
+  sudo test ! -L "$path"
+done
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/bc250-llm-gate-protocol3.service" /etc/systemd/system/bc250-llm-gate.service
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/bc250-model-worker.service" /etc/systemd/system/bc250-model-worker.service
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/bc250-model-worker.socket" /etc/systemd/system/bc250-model-worker.socket
+sudo mkdir -p /etc/systemd/system/bc250-ai-studio.service.d /etc/systemd/system/bc250-llm-client.service.d
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/bc250-ai-studio.service.d/model-control.conf" /etc/systemd/system/bc250-ai-studio.service.d/model-control.conf
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/bc250-llm-client.service.d/model-control.conf" /etc/systemd/system/bc250-llm-client.service.d/model-control.conf
+sudo systemctl daemon-reload
+sudo systemctl start bc250-llm-gate.service
+sudo systemctl is-active --quiet bc250-llm-gate.service
+sudo systemctl restart bc250-ai-studio.service
+sudo systemctl is-active --quiet bc250-ai-studio.service
+sudo systemctl restart bc250-llm-client.service
+sudo systemctl is-active --quiet bc250-llm-client.service
+sudo systemctl enable --now bc250-model-worker.socket
+)
+```
+
+`startup` hold가 유지되고 worker socket/service는 `MODEL_CONTROL_SWITCH_ENABLED=false`, Client는 `MODEL_CONTROL_ENABLED=false`인 상태를 확인한다. 백업과 원본 hash를 다시 대조한 뒤 기존 CLI 실제 파일과 두 benchmark 후보를 함께 전환한다.
+
+```bash
+( set -eu
+sudo install -m 0755 -o root -g root "$SRC/deploy/model-control/ai-model" /opt/ai/scripts/ai-model
+sudo install -m 0755 -o root -g root "$SRC/deploy/benchmark-candidate/benchmark.py" /opt/ai-benchmark/benchmark.py
+sudo install -m 0755 -o root -g root "$SRC/deploy/benchmark-candidate/run-comparison.py" /opt/ai-benchmark/run-comparison.py
+test "$(readlink /usr/local/bin/ai-model)" = /opt/ai/scripts/ai-model
+)
+```
+
+부분 실패 시 다른 직접 제어 경로를 열지 않고 기록과 hold를 보존한다. launcher 교체와 benchmark 교체 사이는 다른 사용자가 실행하지 않는 단일 관리자 중단 구간이어야 한다.
+
+`sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python "$SRC/scripts/coordination_status.py"`는 gate 네 역할 인증, Client 실행 환경의 역할 키·hold·운영자 키, Studio coordination 및 Studio 유휴 상태를 값 노출 없이 확인한다. `holds`에 `startup`과 원래 `legacy`가 예상대로 있는지 확인하고 파일 소유권·SELinux, 두 프로세스 namespace의 inode 및 worker `inspect-recovery` 결과를 별도로 확인한다. 이 정적 검사는 실제 GPU 전환 증거가 아니다.
+
+M7-02는 운영 설치 전 후보·절차와 남은 운영 확인 조건을 판정한다. M8에서 비활성 설치와 정적 확인을 끝내고 관리자가 ingress 통제를 유지한 상태에서만 `sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python "$SRC/scripts/release_startup_hold.py"`를 실행한다. 이 도구는 사전 상태를 재확인하고 startup만 해제한 뒤 다른 hold가 그대로인지 확인한다. 결과 불명 시 자동 재시도하지 않고 재조회한다. `legacy`가 남으면 별도 관리자의 원래 pause로 보존한다. 실제 worker 전체 preflight는 startup 해제 후 M8에서 확인한다. 기능별 실제 모델 검증 전에는 전환을 활성화하지 않는다.
+
+### D. 불명 상태와 롤백
+
+`sudo ai-model inspect-recovery`의 operation·journal·hold 정보를 조사한다. journal과 상관관계가 일치하는 경우에만 `recover`, journal이 비었고 독립 hold 등 검증 조건이 충족된 경우에만 `resolve-verified`를 사용한다. 응답 유실 시 새 전환이나 반복 restart 대신 같은 작업 ID를 조회한다.
+
+롤백 직전 `sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python "$SRC/scripts/rollback_readiness.py"`는 gate가 legacy pause로 표현 가능한 상태인지, worker에 미해결 작업·journal이 없는지, Studio가 유휴이고 llama가 정착했는지 읽기 전용으로 확인한다. 이 결과도 다른 제어자를 막지 않으므로 관리자 차단을 유지한다. 하나라도 불명·실패이거나 `admin-*`/Studio/Client/switch 등 구형 gate로 옮길 수 없는 hold가 있으면 중단하고 해제하지 않는다.
+
+통과 시 ingress와 다른 제어자를 계속 차단하고 worker socket과 Client·Studio·gate 서비스를 정지한다. 기존에 없음을 확인하고 이번에 새로 만든 두 `model-control.conf` drop-in만 제거한다. 나머지 기존 drop-in은 건드리지 않는다. 아래는 root 전용 archive에서 **M7에서 직접 바꾼 기존 파일만** 복원하는 예시다. archive의 전체 풀기나 active-model 설정의 무조건 복원은 하지 않는다. 실행 전 대상 파일·백업을 대조한다.
+
+```bash
+sudo tar --same-owner --same-permissions --acls --xattrs --selinux -C / \
+  -xf "$BACKUP/prechange.tar" -- \
+  etc/systemd/system/bc250-llm-gate.service \
+  etc/bc250-llm-gate.env etc/bc250-ai-studio.env etc/bc250-llm-client.env \
+  opt/ai/scripts/ai-model usr/local/bin/ai-model \
+  opt/ai-benchmark/benchmark.py opt/ai-benchmark/run-comparison.py
+sudo systemctl daemon-reload
+```
+
+기존 unit enable 상태와 각 파일의 소유권·mode·ACL·SELinux 및 CLI symlink를 백업 기록과 대조한다. 새 gate·worker 상태와 journal은 조사 기록으로 보존하고 자동 초기화하거나 삭제하지 않는다. 구형 gate는 시작 시 unpaused이므로 `legacy_pause_to_restore=true`였으면 **ingress를 계속 차단한 상태**에서 구형 gate를 시작하고 `sudo /usr/bin/python3 "$SRC/scripts/restore_legacy_pause.py"`로 기존 관리자 pause를 복원·재조회한다. 결과 불명이면 ingress를 다시 열지 않는다. `false`인 경우에도 구형 gate의 인증된 상태와 활성 모델·Studio·Client를 확인한 후에만 ingress를 연다. 미해결 기록을 지우거나 타 작업 hold를 임의 해제하지 않는다.
