@@ -4,6 +4,18 @@
 
 ## 최신 진행 — 2026-11-10
 
+### M6-01 최종 후보 통합 회귀 — 2026-11-10
+
+후속 검증으로 Edge에서 실제 빌드 UI→Client API→Unix socket worker→protocol 3 gate 후보를 연결해 A→B `succeeded`, 활성 모델 B 표시 및 B의 후속 스트리밍 대화를 확인했다. `BC250_CANDIDATE_BROWSER=1 PYTHONPATH=. .venv/bin/pytest -s -q 'tests/test_final_candidate_flow.py::test_api_cli_worker_gate_and_post_switch_conversation[none]'`와 로컬 `frontend/dist`를 사용했다. 이 수동 시험의 인증은 테스트 전용이며 llama와 Studio preflight 및 peer 신원은 대역이다.
+
+같은 후보의 별도 자식 worker를 `SIGKILL`로 종료하는 `tests/test_cleanup_process_crash.py`에서 journal clear 전·후, 예약 hold release 전·후, terminal DB 기록 직전의 다섯 경계를 시험했다. 실제 프로세스 종료 후 새 worker가 같은 DB·journal과 실제 protocol 3 gate를 사용해 복구하고 별도의 legacy hold를 보존했다. 모델 서비스·Studio preflight는 대역이며 실제 systemd/GPU 장애 시험은 아니다. 같은 경계의 socket worker 취소 및 재시작 시험도 포함한다.
+
+확장 후 로컬 backend **812 통과·5 건너뜀**; 기존 frontend lint·**14 tests**·build 통과. 동일 후보를 서버 `/tmp/bc250-m601-final.PYIdmNqy`에 격리하고 운영 Studio 소스 복사본·fake 엔진 및 서버 Python 의존성으로 선택 시험 **70 통과**했다. 운영 서비스·GPU는 변경하지 않았다. M6-01은 격리 후보 완료로 기록하며 실제 root runtime·systemd·GPU/서비스 경계는 M6-02 및 M7~M8에 남긴다.
+
+`72b3ce5` 후보에 `tests/test_final_candidate_flow.py`를 추가해 실제 Client API·CLI, Unix socket bridge/worker, SQLite 작업 기록, 공유 flock·journal 및 protocol 3 gate 후보를 연결했다. 중복 키 재제출, 동시 전환 거절, 전환 중 snapshot 거절, 독립 legacy hold 보존, 전환 후 선택 모델 대화와 CLI 복귀를 확인했다. systemd 재시작 결과 불명, gate 예약 해제 응답 유실, journal 정리 후 terminal DB 기록 실패를 주입하고 같은 DB·journal·gate에 worker를 재시작해 복구 상태와 관리자 복구, 독립 hold 보존 및 후속 대화를 확인했다. llama 서비스·Studio preflight·peer 신원은 대역이다. 다른 cleanup 실패와 중단 지점의 기존 단위 시험도 전체 회귀에 포함되지만, 모든 지점에서 실제 프로세스를 강제 종료한 통합 시험은 아니다.
+
+첫 회귀 당시 로컬 전체 backend **803 통과·5 건너뜀**, frontend lint·**14 tests**·build 통과. 후보를 서버 `/tmp/bc250-m601.kZR2TJIS`에 격리하고 운영 Studio 소스 복사본·fake 엔진과 기존 Python 의존성을 사용한 선택 시험 **61 통과**. 서버 조회에서 Client·Studio·gate·llama는 active, worker socket은 inactive였다. 당시 미완료였던 브라우저 연결과 cleanup 프로세스 종료 시험은 위 후속 기록을 따른다.
+
 이번 시작점은 깨끗한 `main` (`db96e85`, origin/main과 일치)이었다. 과거 기록의 672/681 등 시험 수와 “Studio 미적용” 설명은 최신 상태가 아니다. 아래 날짜별 기록은 이력으로 보존하고 현재 단계는 통합 계획 §7을 따른다.
 
 - **읽기 전용 서버 확인:** SSH 외부 주소와 기존 키로 접속. Client(PID 1411), Studio(111463), 구형 gate(1014), llama(113928) 모두 active/running. worker socket과 `/run/bc250-gpu`, `/var/lib/bc250-model-control`, `/opt/bc250-model-control`, `/opt/bc250-llm-gate`는 미설치/부재. PID는 조사 순간값이다.

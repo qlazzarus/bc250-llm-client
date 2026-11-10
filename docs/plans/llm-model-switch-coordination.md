@@ -68,7 +68,7 @@ M7은 실제 파일·unit·credential·접근 권한, 백업 및 롤백을 포�
 
 - **M4-02/03:** gate 계정·경로·credential 검사와 root 전용 복구 진입의 기본 후보. **M4-04:** 가정용 공용 전환·복구 경로의 로컬 구현 완료; 불명 orphan은 보존. M2-02 문서 완료가 구현 완료는 아니다.
 - **M5-02/03:** hold와 원자적 admission 및 오래된 요청 거절, Client 재조회·초안, 벤치마크와 Studio 조율. Wiki 예외는 유지한다.
-- **M6-01/02:** 다른 주체의 hold 보존, pause 중 새 요청 거절, 대기 요청·hold 경합, 모든 정리 중단 지점, rollback 검증 및 실제 Linux peer UID·namespace·ACL·SELinux·systemd 경계 시험.
+- **M6-01/02:** 다른 주체의 hold 보존, pause 중 새 요청 거절, 대기 요청·hold 경합, 정리 중단 지점, rollback 검증 및 실제 Linux peer UID·namespace·ACL·SELinux·systemd 경계 시험. 2026-11-10 Edge UI/API/CLI→socket worker→gate 후보 연결 및 cleanup 경계 SIGKILL 후 재시작·복구를 격리 검증했다. llama·Studio preflight·일부 peer 신원은 대역이며 실제 root runtime 및 systemd/GPU 경계는 M6-02/M8에 남는다. [시험 근거](llm-model-switch-tasks.md#m6-01-최종-후보-통합-회귀--2026-11-10).
 - **M7/M8:** 동일 후보의 설치·백업·credential·CLI 전환·복구·롤백 절차와 운영 준비를 검토한 뒤 실제 UI A→B 및 B 대화를 확인한다. 과거 DB fence·유지보수 VM 시험은 재개하지 않는다.
 
 복구 후보 제한: 빈 journal과 영속 DB의 switch hold가 함께 남은 경우에는 root 조사에서 두 식별자를 확인할 수 있지만, 운영 구형 gate API에는 독립 hold를 조건으로 자기 hold를 원자적으로 해제하는 연산이 없다. worker 후보는 아래 조건부 API를 요구하며 미지원·오류 시 `recovery_required`를 유지한다. 조건부 해제의 실제 gate 구현과 검증은 M5-02/M6 작업이다. 손상되거나 읽을 수 없는 journal은 내용을 노출하지 않는 조사 전용 상태로 기동하며 복구 실행과 새 전환은 차단한다. 복구 전용 Studio 검증 계약은 아래 후보이며 Studio 실제 구현과 통합 검증은 남은 과제다.
