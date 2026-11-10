@@ -247,11 +247,25 @@ def create_app(state_path, upstream_url, *, admin_key, studio_key, switch_key, c
         if role != 'switch' or action not in ('release-if-independent', 'release-recovery-reservation'): raise HTTPException(403)
         return await app.state.gate.mutate('conditional' if action == 'release-if-independent' else 'release_reservation', hold, body)
     @app.get('/model-snapshot')
-    async def snapshot():
+    async def snapshot(include_context: bool = False):
         before = await app.state.gate.status()
         if before['paused']: return JSONResponse({'ready': False, 'epoch': before['epoch']}, status_code=409)
         try: upstream = await app.state.client.get(upstream_url.rstrip('/') + '/v1/models', headers={'Authorization': 'Bearer ' + upstream_api_key} if upstream_api_key else {})
         except httpx.HTTPError: raise HTTPException(503, 'Upstream unavailable')
+        context_tokens = None
+        if include_context:
+            try:
+                slots_response = await app.state.client.get(upstream_url.rstrip('/') + '/slots',
+                    headers={'Authorization': 'Bearer ' + upstream_api_key} if upstream_api_key else {})
+                slots_response.raise_for_status()
+                slots = slots_response.json()
+                if (not isinstance(slots, list) or not slots
+                        or any(not isinstance(slot, dict) or type(slot.get('n_ctx')) is not int
+                               or slot['n_ctx'] <= 0 for slot in slots)):
+                    raise ValueError('Invalid slot context')
+                context_tokens = min(slot['n_ctx'] for slot in slots)
+            except (httpx.HTTPError, ValueError):
+                raise HTTPException(503, 'Slot context unavailable')
         after = await app.state.gate.status()
         if after['paused'] or after['epoch'] != before['epoch']: raise HTTPException(409, 'model_epoch_mismatch')
         if upstream.status_code != 200: raise HTTPException(503, 'Upstream unavailable')
@@ -260,7 +274,18 @@ def create_app(state_path, upstream_url, *, admin_key, studio_key, switch_key, c
         if (not isinstance(models, dict) or not isinstance(models.get('data'), list) or not models['data']
             or any(not isinstance(m, dict) or not isinstance(m.get('id'), str) or not m['id'].strip() for m in models['data'])):
             raise HTTPException(503, 'Invalid upstream models')
-        return {'ready': True, 'epoch': after['epoch'], 'models': models}
+        result = {'ready': True, 'epoch': after['epoch'], 'models': models}
+        if include_context:
+            # This worker controls one loaded model; never attach slots to an
+            # ambiguous multi-model list or use the training context as a limit.
+            if len(models['data']) != 1:
+                raise HTTPException(503, 'Ambiguous loaded model')
+            meta = models['data'][0].get('meta')
+            configured = meta.get('n_ctx') if isinstance(meta, dict) else None
+            if type(configured) is not int or configured <= 0:
+                raise HTTPException(503, 'Loaded model context unavailable')
+            result['context_tokens'] = min(configured, context_tokens)
+        return result
     @app.api_route('/{path:path}', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'])
     async def proxy(path: str, request: Request, x_model_epoch: str | None = Header(None)):
         if path == 'control' or path.startswith('control/'): raise HTTPException(404)

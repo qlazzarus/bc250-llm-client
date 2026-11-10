@@ -70,7 +70,7 @@ def test_unknown_write_result_is_not_retried(tmp_path, monkeypatch):
     monkeypatch.setattr(main.httpx, 'AsyncClient', Client)
     main.app.state.wiki_memory_lock = asyncio.Lock()
     main.app.state.generation_limiter = asyncio.Semaphore(1)
-    settings = SimpleNamespace(database_path=path, llm_context_tokens=16384, llm_context_safety_tokens=512, max_completion_tokens=1024, llm_gate_url='http://localhost', llm_gate_api_key='x', llm_timeout_seconds=1)
+    settings = SimpleNamespace(model_control_enabled=False, database_path=path, llm_context_tokens=16384, llm_context_safety_tokens=512, max_completion_tokens=1024, llm_gate_url='http://localhost', llm_gate_api_key='x', llm_timeout_seconds=1)
     asyncio.run(main.run_wiki_memory_job(settings, 'g'))
     asyncio.run(main.run_wiki_memory_job(settings, 'g'))
     with connect(path) as db:

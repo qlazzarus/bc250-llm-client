@@ -15,7 +15,8 @@ from gate_candidate.gate import create_app, provision
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stream', [False, True])
 @pytest.mark.parametrize('stale', [False, True])
-async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream, stale):
+@pytest.mark.parametrize('context', [4096, 600])
+async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream, stale, context):
     requests = []
     class Body(httpx.AsyncByteStream):
         def __init__(self, data): self.data = data
@@ -23,7 +24,9 @@ async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream,
 
     def upstream(request):
         if request.url.path == '/v1/models':
-            return httpx.Response(200, json={'data': [{'id': 'candidate-model'}]})
+            return httpx.Response(200, json={'data': [{'id': 'candidate-model', 'meta': {'n_ctx': 16384}}]})
+        if request.url.path == '/slots':
+            return httpx.Response(200, json=[{'n_ctx': context}])
         requests.append(json.loads(request.content))
         if stream:
             return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=Body(b'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'))
@@ -60,6 +63,16 @@ async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream,
                 headers = {'Authorization': 'Bearer client-key'}
                 cid = (await client.post('/api/v1/conversations', headers=headers, json={})).json()['id']
                 response = await client.post(f'/api/v1/conversations/{cid}/messages', headers=headers, json={'content': 'question', 'stream': stream})
+                if context == 600:
+                    assert response.status_code == 422
+                    assert response.json()['error']['code'] == 'context_budget_exceeded'
+                    assert not requests and not observed
+                    from backend.app.db import connect
+                    with connect(settings.database_path) as db:
+                        row = db.execute('SELECT status,error_code FROM generation_requests WHERE conversation_id=?', (cid,)).fetchone()
+                        assert row['status'] == 'failed' and row['error_code'] == 'context_budget_exceeded'
+                    assert settings.llm_context_tokens == 16384
+                    return
                 assert observed == [(epoch, 'candidate-model')]
                 if stale:
                     assert not requests

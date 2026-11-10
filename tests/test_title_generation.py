@@ -14,7 +14,7 @@ def test_title_generation_and_manual_rename_are_safe(tmp_path, monkeypatch):
     initialize(database)
     with connect(database) as db:
         db.execute("INSERT INTO conversations (id,title,created_at,updated_at,title_pending) VALUES ('c','새 대화','t','t',1)")
-    settings = SimpleNamespace(database_path=database, llm_gate_url="http://127.0.0.1:8081", llm_gate_api_key="key", llm_timeout_seconds=5)
+    settings = SimpleNamespace(model_control_enabled=False, database_path=database, llm_gate_url="http://127.0.0.1:8081", llm_gate_api_key="key", llm_timeout_seconds=5)
     main.app.state.generation_limiter = asyncio.Semaphore(1)
     async def model(_settings):
         return "model"

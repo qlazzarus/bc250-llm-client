@@ -2,7 +2,7 @@ import re
 from functools import lru_cache
 from typing import Literal
 from pathlib import Path
-from pydantic import model_validator
+from pydantic import PrivateAttr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from .imagegen import validate_imagegen_url
 
@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     model_control_socket: str = "/run/bc250-model-control/control.sock"
     operator_key: str = ""
     llm_model_id: str = ""
+    _model_context_ceiling: int | None = PrivateAttr(default=None)
     llm_context_tokens: int = 16384
     llm_context_safety_tokens: int = 512
     response_length_short_tokens: int = 512

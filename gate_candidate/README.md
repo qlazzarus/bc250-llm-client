@@ -13,3 +13,5 @@ This is **not ready for deployment**: migrating the operating gate state require
 Run the local tests with `PYTHONPATH=. .venv/bin/pytest -q tests/test_gate_candidate_protocol3.py tests/test_worker_gate.py tests/test_worker_recovery_reservation.py`.
 
 Client pause uses a configured durable `client-<32hex>` hold and a separate client key. It cannot alter legacy/startup or another role’s holds. Client holds block worker admission/reservation; existing reservations block new Client holds. Resume removes only the Client hold, so the gate may remain paused.
+
+`GET /model-snapshot?include_context=true` also reads upstream `/slots` inside the before/after epoch check. It requires one model with positive integer `meta.n_ctx` and nonempty slots with positive integer `n_ctx`, returning their minimum as `context_tokens`. Training context is never substituted. The Client requires this extension when switching is enabled. It supplies a runtime upper limit, not exact token counting or model capability certification.

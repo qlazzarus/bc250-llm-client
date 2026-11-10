@@ -22,6 +22,14 @@ Linux 추가 검증: 커밋 `f5b0209`를 `/tmp/bc250-contract-f5b0209.g80y9uzN`�
 
 Client main 배포는 backend와 frontend/dist만 교체하고 Client만 재시작한다. gate_candidate·worker unit·root runtime·Studio 패치는 패키지에 포함되지 않는다. 따라서 Client 배포 확인과 M8 모델 전환 성공을 구분한다.
 
+### M5-01-01 후속 구현 — 2026-11-10
+
+M0~M2는 계획/조사/설계 완료, M3~M4는 로컬 구현·계약 검증 완료다. 특히 M4 완료가 운영 worker 설치나 실제 GPU 복구 완료를 뜻하지 않으며 그 검증은 M6~M8에 남아 있다. 다음 구현 대상 M5-01을 [모델 정책의 세부 ID](llm-model-switch-model-policy.md#m5-01-구현-분할--2026-11-10)로 나눴다.
+
+M5-01-01에서 gate의 `include_context=true` snapshot에 실제 slot context와 로드 모델 meta context의 최솟값을 epoch와 결합했다. Client는 전환 활성 시 이를 필수로 요구하고 요청별 설정 복사본에 운영 상한과의 최솟값을 적용한다. 모든 completion 전송과 재시도 직전에 최종 messages·schema·template 옵션·출력 예약·safety를 포함해 추정 예산을 검사한다. 전역 설정 및 다음 모델의 상한은 이전 요청의 작은 context에 고정되지 않는다. snapshot 도중 전환, context 누락/잘못된 값, 작은 context의 채팅 거절과 작업 실패 상태, schema/재시도 지시의 예산 포함, 제목 예산 실패 시 fallback을 시험했다.
+
+정확한 tokenizer 계산, 요약 청크 재선정, root registry conf 결합과 모델별 옵션 검증은 M5-01-02/03으로 남겼다. 현재 실패 처리는 자동 재전송·내용 삭제 대신 오류/기존 데이터 보존이다. 검증은 백엔드 733개 통과·4개 건너뜀, 별도 Unix socket 통합 3개 통과(합산 736개)다. 프런트 변경은 없으며 이번에 프런트 검사를 재실행하지 않았다. 운영 전환은 비활성이며 이번 후보는 아직 배포하지 않았다.
+
 ## M1 운영 읽기 전용 조사
 
 - `/usr/local/bin/ai-model`은 root 소유 `/opt/ai/scripts/ai-model`을 가리킨다. llama unit은 root로 `/opt/ai/scripts/start-llama.sh`를 실행하며 8080 loopback을 사용한다. 설정의 `ACTIVE_MODEL`과 개별 모델 conf를 source하고 `MODEL_PATH`를 `-m`으로 전달한다. 재시작 on-failure, stop timeout 60초다.

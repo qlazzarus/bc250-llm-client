@@ -58,3 +58,13 @@ M5-01은 선택된 실제 모델·template에 대응하는 검증된 token 계�
 이 문서 작성 중 모델 전환, 서버 재시작, GPU 추론 요청 및 운영 설정 변경은 하지 않았다.
 
 2026-11-10 읽기 전용 재확인: 운영 Qwen3.6 IQ2_M의 `/v1/models` meta `n_ctx=16384`와 `/slots` slot 0 `n_ctx=16384`가 일치했다. health는 ok, 해당 순간 슬롯은 유휴였다. 이는 해당 로드 모델 context 근거이며 다른 세 모델의 실제 context나 JSON schema/reasoning 호환 시험은 아니다.
+
+## M5-01 구현 분할 — 2026-11-10
+
+| ID | 범위 | 상태 |
+| --- | --- | --- |
+| M5-01-01 | 실제 runtime context와 epoch 결합, 모든 Client 추론 경로의 요청별 상한 | 로컬 완료. `include_context=true` snapshot에서 단일 로드 모델의 meta `n_ctx`와 모든 slot `n_ctx`의 최솟값을 사용하고 조회 전후 epoch/hold를 대조. 누락·불명 값이면 거절. Client 설정 상한도 함께 적용 |
+| M5-01-02 | 실제 template/tokenizer 기반 최종 payload 계산, 출력 예약 검증, 요약 범위 재선정 | 미완료. 현재는 메시지·role·schema·template 옵션의 JSON을 포함한 추정 검사이며 정확한 토큰 상한을 보증하지 않음. 요약이 넘치면 기존 요약/cursor를 유지하고 실패, 더 작은 청크를 재선정하지는 않음 |
+| M5-01-03 | registry 설정과 runtime 프로필 결합, 모델별 reasoning/JSON schema 검증 상태 | 미완료. 현재 runtime meta와 slot 값은 확인하지만 root 모델 conf와 기능 증거까지 묶은 프로필은 아님. 네 모델 실제 추론은 M6/M8에서 검증 |
+
+Client는 전환 활성 시에만 context 확장 snapshot을 요구한다. 비활성 기존 gate 호환은 유지한다. 전역 Settings는 수정하지 않고 요청별 복사본에 예산을 적용하며, 다음 백그라운드 작업에서 새 모델이 커지면 원래 Client 상한 안에서 다시 계산한다. 채팅·제목·요약·Wiki 메모리/초안·이미지 의도/프롬프트의 각 전송(재시도 포함)에 검사를 적용했다. 실제 전환 활성화나 M5-01 전체 완료를 의미하지 않는다.
