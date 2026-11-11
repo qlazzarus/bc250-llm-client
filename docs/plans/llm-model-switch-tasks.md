@@ -20,6 +20,8 @@ M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47d
 
 후속 사용자 root 실행으로 Qwen3.6 기능 기록을 설치하고 공용 worker만 활성화했다. worker profile의 해당 기록과 현재 모델·준비 상태는 확인됐으며 Client 전환 기능은 비활성이다. 관리자 CLI의 Qwen3.5 전환 작업 `a6cb416118bf45398a0aac7c62efd3f1`은 `failed/admission_blocked`로 종료됐다. 작업의 이전·현재 모델은 모두 Qwen3.6이고 gate hold·활성/대기 요청·복구 예약은 없었다. 기존 `/opt/ai/config/active-model.conf`는 `unconfined_u:object_r:usr_t:s0`, SELinux 정책 기대값은 `system_u:object_r:usr_t:s0`로 다르다. 이것이 사전 교체 검사 실패의 원인인지는 동일 권한의 root 일회성 service에서 확인 전까지 확정하지 않는다. 새 전환을 반복하거나 기록·설정을 변경하지 않았다.
 
+원인 확인: 사용자 root 일회성 service가 worker와 같은 capability·sandbox 및 공용 GPU lock을 사용해 검사한 결과, journal 교체 검사는 통과했고 활성 모델 파일 교체 검사는 실패했다. 실제 파일은 `unconfined_u:object_r:usr_t:s0`, service가 같은 소유권·mode로 생성한 임시 파일은 `system_u:object_r:usr_t:s0`였으며 두 파일 모두 확장 ACL은 없었다. 기존 파일 내용 변경이나 모델 재시작은 없었다. 기존 백업과 파일 identity를 확인한 뒤 해당 파일만 정책 라벨로 복원하고 같은 검사로 재확인할 예정이다.
+
 후속 확인: 실제 gate 후보를 이용한 준비 조회→startup hold 해제→rollback 판정 연계와 해제 응답 유실 시 독립 legacy hold 보존을 추가 검증했다. Studio·worker 신원은 대역이다. 로컬 관련 시험 **55 통과·1 건너뜀**, 서버 Linux 관련 시험 **56 통과**. 별도 임시 user systemd socket service에서 직접 service restart 후에도 socket FD가 전달됨을 확인했다. M7-02의 설치 전 준비 판정은 끝났지만, 실제 설치 후 공용 계약·모델 기능 검증이 남으므로 전체 상태는 부분 완료로 유지한다. 선행 관계를 명확히 해 M8-01은 우선 비활성 설치와 검사만 수행한다.
 
 [준비 판정표](llm-model-switch-readiness.md)를 작성했다. 코드 후보 `deebf5d6d609cef2135df3f8573e105841f997f6` 기준 로컬 backend **849 통과·6 건너뜀**, frontend lint·**14 tests**·build 통과, 서버 격리 Linux **110 통과**. 실제 user systemd의 Client EnvironmentFile 및 worker Environment 우선순위도 통과했다. snapshot capture 실패 시 기존 gate 정지로 넘어가지 않도록 명령 블록을 수정했고, worker 전용 검증과 Client 활성화를 분리한 opt-in drop-in 후보를 추가했다.
