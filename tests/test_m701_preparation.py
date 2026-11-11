@@ -104,6 +104,20 @@ def test_gate_status_requires_drained_durable_unreserved_protocol3():
         assert not coordination.valid_gate({**gate, name: value})
 
 
+@pytest.mark.parametrize('value', [b'1', b'true', b'YES', b'On', b'y', b'T'])
+def test_client_switch_setting_recognizes_supported_true_values(value):
+    assert coordination.client_switch_enabled(value)
+
+
+@pytest.mark.parametrize('value', [b'', b'0', b'false', b'NO', b'Off', b'n', b'F'])
+def test_client_switch_setting_recognizes_supported_false_values(value):
+    assert not coordination.client_switch_enabled(value)
+
+
+def test_client_switch_setting_rejects_unrecognized_values():
+    with pytest.raises(RuntimeError): coordination.client_switch_enabled(b'unknown')
+
+
 def test_private_credential_bundle_preserves_existing_operator_and_never_overwrites(tmp_path):
     dest = tmp_path / 'bundle'
     assert credentials.prepare(dest, {b'OPERATOR_KEY': b'prior-operator'},

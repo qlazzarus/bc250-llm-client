@@ -13,6 +13,15 @@ from studio_quiescence_status import identity as studio_identity, read_status as
 KEYS = Path('/etc/bc250-model-control')
 
 
+def client_switch_enabled(value):
+    enabled = value.lower()
+    if enabled in {b'1', b'true', b'yes', b'on', b'y', b't'}:
+        return True
+    if enabled in {b'', b'0', b'false', b'no', b'off', b'n', b'f'}:
+        return False
+    raise RuntimeError('Invalid Client switch setting')
+
+
 def get(url, key):
     req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key})
     with urllib.request.urlopen(req, timeout=5) as response:
@@ -62,7 +71,7 @@ def read_status():
     if (client_env.get(b'LLM_GATE_API_KEY', b'').decode() != keys['client']
             or not re.fullmatch(rb'client-[0-9a-f]{32}', client_env.get(b'LLM_GATE_HOLD_ID', b''))
             or not client_env.get(b'OPERATOR_KEY')
-            or (client_env.get(b'MODEL_CONTROL_ENABLED', b'').lower() in {b'true', b'1'}
+            or (client_switch_enabled(client_env.get(b'MODEL_CONTROL_ENABLED', b''))
                 and client_env.get(b'LLM_MODEL_ID', b''))):
         raise RuntimeError('Client configuration mismatch')
     base = 'http://127.0.0.1:8081'
