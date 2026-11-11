@@ -8,6 +8,8 @@
 
 M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47dfcf8de285a290`를 서버 `/tmp/bc250-m801-candidate.UR7TTA7a`에, 같은 후보의 고정 의존성 worker lib를 `/tmp/bc250-m801-worker.Zw6wppAk/lib`에 격리 준비했다. 서버 Python 3.14의 `-I -S` import와 모든 worker 고정 의존성 버전 일치를 확인했다. 이 경로들은 임시 staging이며 운영 설치·서비스 변경·GPU 전환은 아직 하지 않았다. 다음은 root의 최신 유휴 확인 및 root 전용 백업·credential staging이다.
 
+후속 사용자 root 실행: 기존 CLI·benchmark hash 일치, worker 격리 import, gate·Studio·llama 유휴 확인 후 root 전용 `/root/bc250-m801.18JCO2Zj/backup`과 `/root/bc250-m801.18JCO2Zj/credentials`를 준비했다. 백업 선택 경로 17개, credential bundle 생성·권한 확인 성공. 기존 Client 운영자 키는 없어 신규 생성되었다. 키나 백업 내용은 출력하지 않았다. 이 단계에서 운영 서비스·gate·GPU는 변경하지 않았다. 다음은 새 경로의 패키지·공유 파일을 준비하고 상태를 검증하는 비활성 설치다.
+
 후속 확인: 실제 gate 후보를 이용한 준비 조회→startup hold 해제→rollback 판정 연계와 해제 응답 유실 시 독립 legacy hold 보존을 추가 검증했다. Studio·worker 신원은 대역이다. 로컬 관련 시험 **55 통과·1 건너뜀**, 서버 Linux 관련 시험 **56 통과**. 별도 임시 user systemd socket service에서 직접 service restart 후에도 socket FD가 전달됨을 확인했다. M7-02의 설치 전 준비 판정은 끝났지만, 실제 설치 후 공용 계약·모델 기능 검증이 남으므로 전체 상태는 부분 완료로 유지한다. 선행 관계를 명확히 해 M8-01은 우선 비활성 설치와 검사만 수행한다.
 
 [준비 판정표](llm-model-switch-readiness.md)를 작성했다. 코드 후보 `deebf5d6d609cef2135df3f8573e105841f997f6` 기준 로컬 backend **849 통과·6 건너뜀**, frontend lint·**14 tests**·build 통과, 서버 격리 Linux **110 통과**. 실제 user systemd의 Client EnvironmentFile 및 worker Environment 우선순위도 통과했다. snapshot capture 실패 시 기존 gate 정지로 넘어가지 않도록 명령 블록을 수정했고, worker 전용 검증과 Client 활성화를 분리한 opt-in drop-in 후보를 추가했다.
