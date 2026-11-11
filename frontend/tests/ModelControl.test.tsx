@@ -16,7 +16,6 @@ beforeEach(() => { sessionStorage.clear(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function authorizeAndLoad() {
-  fireEvent.change(screen.getByLabelText('운영자 인증'), { target: { value: 'operator-test' } });
   fireEvent.click(screen.getByRole('button', { name: '상태 조회' }));
   await screen.findByText(/로드된 모델:/);
 }
@@ -33,7 +32,6 @@ describe('model control UI', () => {
       throw new Error('unexpected request');
     }));
     render(<ModelControl />);
-    expect((screen.getByLabelText('운영자 인증') as HTMLInputElement).value).toBe('');
     await authorizeAndLoad();
     expect(screen.getByText(/작업 beta: succeeded/)).toBeTruthy();
     expect(screen.getByText(/로드된 모델: beta/)).toBeTruthy();
@@ -65,8 +63,6 @@ describe('model control UI', () => {
     expect(JSON.stringify(sessionStorage)).not.toContain('operator-test');
     view.unmount();
     render(<ModelControl />);
-    expect((screen.getByLabelText('운영자 인증') as HTMLInputElement).value).toBe('');
-    fireEvent.change(screen.getByLabelText('운영자 인증'), { target: { value: 'operator-test' } });
     fireEvent.click(screen.getByRole('button', { name: '같은 요청으로 접수 확인' }));
     await waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[1]).toEqual(posted[0]);
@@ -97,7 +93,6 @@ describe('model control UI', () => {
   it('keeps the switch button disabled when current status cannot be verified', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => response({ error: { message: 'unavailable' } }, 503)));
     render(<ModelControl />);
-    fireEvent.change(screen.getByLabelText('운영자 인증'), { target: { value: 'operator-test' } });
     fireEvent.click(screen.getByRole('button', { name: '상태 조회' }));
     await screen.findByText(/일부 상태를 확인하지 못했습니다/);
     expect(screen.queryByRole('button', { name: '전환' })).toBeNull();
@@ -167,7 +162,6 @@ describe('model control UI', () => {
     first.unmount();
 
     render(<ModelControl />);
-    fireEvent.change(screen.getByLabelText('운영자 인증'), { target: { value: 'operator-test' } });
     fireEvent.click(screen.getByRole('button', { name: '같은 요청으로 접수 확인' }));
     await screen.findByText(/작업 beta: succeeded/);
     await screen.findByText(/로드된 모델: beta/);

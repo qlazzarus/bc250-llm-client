@@ -1964,22 +1964,22 @@ async def gate_control(body: GateControl, settings: Settings = Depends(get_setti
 
 
 
-@app.get("/api/v1/llm/models", dependencies=[Depends(require_operator)])
+@app.get("/api/v1/llm/models", dependencies=[Depends(require_key)])
 async def managed_models(client=Depends(get_model_control)):
     return await worker_request(client, "models")
 
 
-@app.get("/api/v1/llm/switches/current", dependencies=[Depends(require_operator)])
+@app.get("/api/v1/llm/switches/current", dependencies=[Depends(require_key)])
 async def current_switch(client=Depends(get_model_control)):
     return await worker_request(client, "current")
 
 
-@app.get("/api/v1/llm/switches/{operation_id}", dependencies=[Depends(require_operator)])
+@app.get("/api/v1/llm/switches/{operation_id}", dependencies=[Depends(require_key)])
 async def get_switch(operation_id: UUID, client=Depends(get_model_control)):
     return await worker_request(client, "get", id=operation_id.hex)
 
 
-@app.post("/api/v1/llm/switches", status_code=202, dependencies=[Depends(require_operator)])
+@app.post("/api/v1/llm/switches", status_code=202, dependencies=[Depends(require_key)])
 async def submit_switch(body: ModelSwitchRequest, request: Request, client=Depends(get_model_control)):
     key = request.headers.get("idempotency-key", "")
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", key):

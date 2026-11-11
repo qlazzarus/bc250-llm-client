@@ -18,7 +18,6 @@ function readPending(): PendingRequest | null {
 }
 
 export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => void } = {}) {
-  const [key, setKey] = useState('');
   const [models, setModels] = useState<Models | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
   const [selection, setSelection] = useState('');
@@ -34,7 +33,6 @@ export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => 
   const mounted = useRef(false);
   const refreshController = useRef<AbortController | null>(null);
   const submitController = useRef<AbortController | null>(null);
-  const headers = useCallback(() => ({ 'X-BC250-Operator-Key': key }), [key]);
 
   useEffect(() => {
     mounted.current = true;
@@ -47,7 +45,7 @@ export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => 
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!key || pending || refreshing.current) return;
+    if (pending || refreshing.current) return;
     refreshing.current = true;
     const version = ++generation.current;
     const controller = new AbortController();
@@ -55,7 +53,7 @@ export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => 
     const timeout = window.setTimeout(() => controller.abort(), 10000);
     setStatusVerified(false);
     try {
-      const options = { headers: headers(), signal: controller.signal };
+      const options = { signal: controller.signal };
       const active = await request<{ operation: Operation | null }>('/llm/switches/current', options);
       const id = active.operation?.id || operation?.id || sessionStorage.getItem(operationStorage);
       const value = active.operation || (id ? await request<Operation>(`/llm/switches/${id}`, options) : null);
@@ -74,20 +72,20 @@ export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => 
       window.clearTimeout(timeout); refreshing.current = false;
       if (refreshController.current === controller) refreshController.current = null;
     }
-  }, [key, headers, operation, pending, onSwitchSucceeded]);
+  }, [operation, pending, onSwitchSucceeded]);
 
   useEffect(() => {
-    if (!key || !operation || terminal.has(operation.state)) return;
+    if (!operation || terminal.has(operation.state)) return;
     const timer = window.setInterval(() => { void refresh(); }, 2000);
     return () => window.clearInterval(timer);
-  }, [key, operation, refresh]);
+  }, [operation, refresh]);
 
   useEffect(() => {
-    if (!key || pending || !operation || !terminal.has(operation.state) || terminalRefreshed.current === operation.id) return;
+    if (pending || !operation || !terminal.has(operation.state) || terminalRefreshed.current === operation.id) return;
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, 2000);
     return () => window.clearInterval(timer);
-  }, [key, pending, operation, refresh]);
+  }, [pending, operation, refresh]);
 
   const submit = async (saved?: PendingRequest) => {
     if (submitting.current) return;
@@ -102,7 +100,7 @@ export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => 
     submitController.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 15000);
     try {
-      const result = await request<Operation>('/llm/switches', { method: 'POST', headers: { ...headers(), 'Idempotency-Key': requestInfo.id }, body: JSON.stringify({ model: requestInfo.model }), signal: controller.signal });
+      const result = await request<Operation>('/llm/switches', { method: 'POST', headers: { 'Idempotency-Key': requestInfo.id }, body: JSON.stringify({ model: requestInfo.model }), signal: controller.signal });
       const current = readPending();
       if (!mounted.current || current?.id !== requestInfo.id || current.model !== requestInfo.model) return;
       sessionStorage.setItem(operationStorage, result.id); setOperation(result);
@@ -127,12 +125,11 @@ export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => 
   };
 
   return <section><h3>LLM 모델 전환</h3><p>이 변경은 서버 전체에 적용됩니다. 진행 중인 대화와 이미지 작업에 영향을 줄 수 있습니다.</p>
-    <label>운영자 인증 <input type="password" autoComplete="off" disabled={pending} value={key} onChange={event => { ++generation.current; setStatusVerified(false); setKey(event.target.value); setModels(null); setOperation(null); terminalRefreshed.current = ''; }} /></label>
-    <button onClick={() => void refresh()} disabled={!key || pending}>상태 조회</button>
+    <button onClick={() => void refresh()} disabled={pending}>상태 조회</button>
     {error && <p role="alert">{error}</p>}
     {uncertain && <div role="alert"><p>접수 결과를 확인할 수 없습니다. 관리자가 작업 기록을 확인해야 합니다.</p>
       {unknownRequest && <><p>모델: {unknownRequest.model} · 요청 키: <code>{unknownRequest.id}</code></p>
-        <button onClick={() => void submit(unknownRequest)} disabled={!key || pending}>같은 요청으로 접수 확인</button>
+        <button onClick={() => void submit(unknownRequest)} disabled={pending}>같은 요청으로 접수 확인</button>
         <p>같은 키로 확인하며, 접수되지 않았다면 전환이 시작될 수 있습니다.</p></>}
     </div>}
     {models && <><p>설정된 모델: {models.configured_model || '확인 불가'} · 로드된 모델: {models.loaded_model || '확인 불가'} · 준비: {models.ready ? '완료' : '확인 불가'}</p>
