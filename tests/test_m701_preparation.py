@@ -123,6 +123,19 @@ def test_environment_fragment_rejects_control_characters():
     with pytest.raises(ValueError): credentials.env_line('KEY', 'secret\nOTHER=oops')
 
 
+def test_activation_fragments_override_only_explicit_opt_in():
+    base = ROOT / 'deploy/model-control'
+    client_dir = base / 'bc250-llm-client.service.d'
+    initial = client_dir / 'model-control.conf'
+    enable = client_dir / 'zz-model-control-enable.conf'
+    assert initial.name < enable.name
+    assert 'EnvironmentFile=/etc/bc250-model-control/client.env' in initial.read_text()
+    assert 'EnvironmentFile=/etc/bc250-model-control/client-activation.env' in enable.read_text()
+    assert (base / 'client-activation.env').read_text().strip() == 'MODEL_CONTROL_ENABLED=true'
+    assert 'MODEL_CONTROL_SWITCH_ENABLED=false' in (base / 'bc250-model-worker.service').read_text()
+    assert 'Environment=MODEL_CONTROL_SWITCH_ENABLED=true' in (base / 'bc250-model-worker.service.d/zz-switch-enable.conf').read_text()
+
+
 def test_rollback_requires_empty_and_readable_worker_records():
     worker = {'operation': None, 'hold_id': None, 'journal': {}, 'journal_error': None, 'reconciliation_error': None}
     assert rollback.validate_worker(worker)

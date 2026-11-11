@@ -191,6 +191,7 @@ sudo restorecon -RF /var/lib/bc250-model-control /var/lib/bc250-llm-gate /run/bc
 아래 명령은 M8에서 ingress와 다른 제어자를 중단한 관리자가 실행한다. snapshot 이후 구형 gate stop까지 다른 제어를 허용하지 않는다. snapshot은 순간 관찰이며 이것만으로 경합을 방지하지 않는다.
 
 ```bash
+( set -eu
 # BACKUP은 새 root 전용 디렉터리, SRC는 고정된 후보 소스다.
 sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python \
   "$SRC/scripts/migrate_legacy_gate.py" capture "$BACKUP/legacy-gate.json"
@@ -199,6 +200,7 @@ sudo systemctl stop bc250-llm-gate.service
 # /var/lib/bc250-llm-gate는 미리 준비한 ai-studio 소유의 신규 0700 디렉터리다.
 sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python \
   "$SRC/scripts/migrate_legacy_gate.py" initialize "$BACKUP/legacy-gate.json" /var/lib/bc250-llm-gate/state.json
+)
 ```
 
 capture는 인증된 구형 gate의 active/waiting이 모두 0일 때만 root 전용 snapshot을 배타적으로 생성한다. initialize는 gate가 정지·정착했는지 전후로 확인하고 기존 state·lock·uncertainty marker가 없을 때만 초기 `startup`과 원래 pause에 해당하는 `legacy`를 생성한다. 중단 또는 불명 오류 시 생성된 기록을 삭제하거나 재초기화하지 말고 조사한다.
@@ -244,7 +246,45 @@ test "$(readlink /usr/local/bin/ai-model)" = /opt/ai/scripts/ai-model
 
 `sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python "$SRC/scripts/coordination_status.py"`는 gate 네 역할 인증, Client 실행 환경의 역할 키·hold·운영자 키, Studio coordination 및 Studio 유휴 상태를 값 노출 없이 확인한다. `holds`에 `startup`과 원래 `legacy`가 예상대로 있는지 확인하고 파일 소유권·SELinux, 두 프로세스 namespace의 inode 및 worker `inspect-recovery` 결과를 별도로 확인한다. 이 정적 검사는 실제 GPU 전환 증거가 아니다.
 
-M7-02는 운영 설치 전 후보·절차와 남은 운영 확인 조건을 판정한다. M8에서 비활성 설치와 정적 확인을 끝내고 관리자가 ingress 통제를 유지한 상태에서만 `sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python "$SRC/scripts/release_startup_hold.py"`를 실행한다. 이 도구는 사전 상태를 재확인하고 startup만 해제한 뒤 다른 hold가 그대로인지 확인한다. 결과 불명 시 자동 재시도하지 않고 재조회한다. `legacy`가 남으면 별도 관리자의 원래 pause로 보존한다. 실제 worker 전체 preflight는 startup 해제 후 M8에서 확인한다. 기능별 실제 모델 검증 전에는 전환을 활성화하지 않는다.
+M7-02는 운영 설치 전 후보·절차와 남은 운영 확인 조건을 판정한다. M8에서 비활성 설치와 정적 확인을 끝내고 관리자가 ingress 통제를 유지한 상태에서만 `sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python "$SRC/scripts/release_startup_hold.py"`를 실행한다. 이 도구는 사전 상태를 재확인하고 startup만 해제한 뒤 다른 hold가 그대로인지 확인한다. 결과 불명 시 자동 재시도하지 않고 재조회한다. `legacy`가 남으면 별도 관리자의 원래 pause로 보존한다. 실제 worker 전체 preflight는 startup 해제 후 M8에서 확인한다. 기능별 실제 모델 검증 전에는 Client 모델 전환 UI를 활성화하지 않는다.
+
+### C-1. 실제 모델 기능 확인 후 활성화
+
+이 단계는 비활성 설치 후 gate·Studio·worker의 실제 계약과 복구 검사를 통과한 뒤에만 실행한다. 현재 로드하지 않은 모델의 실제 context와 기능을 확인하려면 공용 worker로 해당 모델을 먼저 로드해야 한다. 따라서 M8에서 먼저 worker만 활성화해 관리자가 공용 CLI로 각 모델을 제한적으로 검증하고, Client의 모델 전환 UI는 그동안 비활성으로 유지한다. 각 모델의 실제 context 및 필요한 기능 기록을 확인한 후에만 Client를 활성화한다. 기본 대화의 `enable_thinking=false`도 모델별 reasoning 제어 기록이 필요하다. `LLM_MODEL_ID`가 비어 있는지, 작업·journal·예약이 미해결이 아닌지, 새 요청·다른 CLI·배포가 중단됐는지 다시 확인한다.
+
+Client는 기존 `client.env`의 `MODEL_CONTROL_ENABLED=false`를 나중에 읽는 별도 EnvironmentFile로 재정의한다. systemd의 EnvironmentFile은 Environment보다 우선하며 drop-in 이름순으로 읽히므로 `zz-model-control-enable.conf`와 `client-activation.env`를 함께 사용한다. worker는 별도 drop-in의 `MODEL_CONTROL_SWITCH_ENABLED=true`로 활성화한다. 아래는 각 대상이 이전에 없음을 확인한 초기 설치 예시다.
+
+```bash
+( set -eu
+for path in /etc/bc250-model-control/client-activation.env /etc/systemd/system/bc250-model-worker.service.d/zz-switch-enable.conf /etc/systemd/system/bc250-llm-client.service.d/zz-model-control-enable.conf; do
+  sudo test ! -e "$path"
+  sudo test ! -L "$path"
+done
+sudo mkdir -p /etc/systemd/system/bc250-model-worker.service.d
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/bc250-model-worker.service.d/zz-switch-enable.conf" /etc/systemd/system/bc250-model-worker.service.d/zz-switch-enable.conf
+sudo systemctl daemon-reload
+sudo systemctl restart bc250-model-worker.service
+sudo systemctl is-active --quiet bc250-model-worker.service
+)
+```
+
+이제 관리자만 공용 CLI로 각 대상 모델의 로드·slot context·필요한 reasoning/JSON schema 기능을 확인하고, 결과와 정확한 모델·설정·runtime에 결부된 기록을 준비한다. 이 기간 Client 모델 전환 UI와 다른 제어자는 비활성 상태를 유지한다. 실패나 결과 불명 시 조사·복구하고 다음 모델로 넘어가지 않는다. 모델별 검증이 완료되고 현재 모델도 준비된 뒤에만 다음 Client 활성화 단계를 진행한다.
+
+```bash
+( set -eu
+for path in /etc/bc250-model-control/client-activation.env /etc/systemd/system/bc250-llm-client.service.d/zz-model-control-enable.conf; do
+  sudo test ! -e "$path"
+  sudo test ! -L "$path"
+done
+sudo install -m 0600 -o root -g root "$SRC/deploy/model-control/client-activation.env" /etc/bc250-model-control/client-activation.env
+sudo install -m 0644 -o root -g root "$SRC/deploy/model-control/bc250-llm-client.service.d/zz-model-control-enable.conf" /etc/systemd/system/bc250-llm-client.service.d/zz-model-control-enable.conf
+sudo systemctl daemon-reload
+sudo systemctl restart bc250-llm-client.service
+sudo systemctl is-active --quiet bc250-llm-client.service
+)
+```
+
+적용 후 두 프로세스의 유효 설정과 worker·Client의 모델/작업 조회를 비밀값 없이 확인하고 M8의 실제 UI 전환과 후속 대화를 검증한다. 중간 실패나 전환 결과 불명 시 새 전환을 중단하고 기록·hold를 보존한다. 비활성화나 롤백은 실행 중·불명 작업이 없음을 확인한 후 Client 활성화 drop-in부터 해제하고, 그다음 worker 활성화 drop-in을 해제한다. 미해결 작업이 있으면 설정 변경·서비스 재시작 대신 복구 경로를 따른다.
 
 ### D. 불명 상태와 롤백
 
@@ -252,7 +292,7 @@ M7-02는 운영 설치 전 후보·절차와 남은 운영 확인 조건을 판�
 
 롤백 직전 `sudo env PYTHONPATH="$SRC" /opt/bc250-llm-client/.venv/bin/python "$SRC/scripts/rollback_readiness.py"`는 gate가 legacy pause로 표현 가능한 상태인지, worker에 미해결 작업·journal이 없는지, Studio가 유휴이고 llama가 정착했는지 읽기 전용으로 확인한다. 이 결과도 다른 제어자를 막지 않으므로 관리자 차단을 유지한다. 하나라도 불명·실패이거나 `admin-*`/Studio/Client/switch 등 구형 gate로 옮길 수 없는 hold가 있으면 중단하고 해제하지 않는다.
 
-통과 시 ingress와 다른 제어자를 계속 차단하고 worker socket과 Client·Studio·gate 서비스를 정지한다. 기존에 없음을 확인하고 이번에 새로 만든 두 `model-control.conf` drop-in만 제거한다. 나머지 기존 drop-in은 건드리지 않는다. 아래는 root 전용 archive에서 **M7에서 직접 바꾼 기존 파일만** 복원하는 예시다. archive의 전체 풀기나 active-model 설정의 무조건 복원은 하지 않는다. 실행 전 대상 파일·백업을 대조한다.
+통과 시 ingress와 다른 제어자를 계속 차단하고 worker socket과 Client·Studio·gate 서비스를 정지한다. 기존에 없음을 확인하고 이번에 새로 만든 활성화 drop-in과 두 `model-control.conf` drop-in만 제거한다. 나머지 기존 drop-in은 건드리지 않는다. 아래는 root 전용 archive에서 **M7에서 직접 바꾼 기존 파일만** 복원하는 예시다. archive의 전체 풀기나 active-model 설정의 무조건 복원은 하지 않는다. 실행 전 대상 파일·백업을 대조한다.
 
 ```bash
 sudo tar --same-owner --same-permissions --acls --xattrs --selinux -C / \
