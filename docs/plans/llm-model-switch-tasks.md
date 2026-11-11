@@ -4,6 +4,14 @@
 
 ## 최신 진행 — 2026-11-10
 
+### M7-02 준비 판정 — 2026-11-11
+
+[준비 판정표](llm-model-switch-readiness.md)를 작성했다. 코드 후보 `deebf5d6d609cef2135df3f8573e105841f997f6` 기준 로컬 backend **849 통과·6 건너뜀**, frontend lint·**14 tests**·build 통과, 서버 격리 Linux **110 통과**. 실제 user systemd의 Client EnvironmentFile 및 worker Environment 우선순위도 통과했다. snapshot capture 실패 시 기존 gate 정지로 넘어가지 않도록 명령 블록을 수정했고, worker 전용 검증과 Client 활성화를 분리한 opt-in drop-in 후보를 추가했다.
+
+11/11 root 읽기 전용 조회에서 구형 gate는 paused=false·active/waiting=0, Studio는 nonterminal=0·quiescent=true였다. Client 전환은 비활성이고 고정 모델 ID는 비었으며 Client↔구형 gate 키 불일치, Studio↔구형 gate 키 일치, Client 운영자 키·Studio coordination 키 및 owned hold는 미설정이었다. 현재 `qwen36-35b-a3b-uncensored` slot context는 16384이며 네 모델의 reasoning/schema 기록은 모두 unknown이다. 이는 조회 시점의 정보다.
+
+**현재 Client 전환 활성화는 불가**, M8의 비활성 설치는 적용 직전 상태·백업·키·단일 관리자 차단을 확인하는 조건으로 준비 가능하다. 다른 모델을 공용 worker로 로드하기 전에는 실제 기능 검증을 완료할 수 없으므로 M8-01에서 Client UI를 비활성으로 유지한 채 관리자 공용 CLI로 모델별 검증을 진행한다. 운영 공용 계약과 모든 필요한 모델 기능이 확인되기 전 M7-02의 전체 미확인 해소 및 UI 활성화는 미완료다. 운영 서비스·GPU는 변경하지 않았다.
+
 ### M7-01 설치·복구 준비 — 2026-11-10
 
 운영을 읽기 전용으로 재확인했다. Client·Studio·gate·llama는 active이고 worker/runtime 공유 경로는 없다. gate는 `/etc/bc250-llm-gate.env`와 Studio venv의 기존 factory, Studio와 Client는 각자의 `/etc` 환경 파일을 사용한다. 기존 `/usr/local/bin/ai-model`은 `/opt/ai/scripts/ai-model`을 가리키므로 실제 파일 경로도 공용 CLI로 전환해야 우회가 남지 않는다. Studio의 `ProtectSystem=strict`에 공용 lock 쓰기 경로를 추가하는 drop-in, Client 환경 drop-in 및 재부팅용 tmpfiles 후보를 추가했다. 임시 사용자 경로에서 tmpfiles 재실행이 lock inode·내용을 보존함을 확인했다.
