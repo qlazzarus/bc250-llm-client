@@ -4,6 +4,10 @@
 
 ## 최신 진행 — 2026-11-10
 
+2026-11-11 운영 활성화: 사용자 root 실행에서 gate와 Studio가 유휴이고 hold가 없으며 네 기능 기록과 worker가 준비됐음을 확인한 후 Client 모델 전환을 활성화했다. Client 모델 제어 API 조회와 실제 이미지 분석 schema 요청, profile 및 token count 검사가 통과했다. gate protocol 3·역할·Studio coordination·빈 journal과 원래 Qwen3.6 준비 상태도 재확인했다. CLI의 네 모델 전환은 앞서 확인했으나 Client API/UI를 통한 실제 전환과 전환 후 대화는 아직 검증하지 않았다. 사용자와의 UI 검증을 위해 운영자 키는 채팅에 전달하지 않는다.
+
+후속 실제 UI 검증: 사용자가 운영자 인증을 직접 입력했다. Client에서 `qwen35-35b-a3b-uncensored`를 선택해 Qwen3.6에서 전환했고 작업이 `succeeded`, 설정·로드 모델과 UI 활성 모델이 모두 Qwen3.5이며 준비 완료로 표시됐다. 새 일반 대화에서 `2 + 3`에 `5`, 이어서 이전 답에 4를 더하라는 질문에 `9`를 답했다. 이후 공용 CLI도 설정·로드 모델 Qwen3.5와 `ready=True`를 반환했고 Client·gate·Studio·worker socket은 active, Client health는 정상이다. 현재 모델은 검증한 Qwen3.5다. 같은 모델 재요청과 이미지/채팅 경합 등 나머지 M8-02 회귀와 M8-03 정리는 아직 남는다.
+
 ### M7-02 준비 판정 — 2026-11-11
 
 M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47dfcf8de285a290`를 서버 `/tmp/bc250-m801-candidate.UR7TTA7a`에, 같은 후보의 고정 의존성 worker lib를 `/tmp/bc250-m801-worker.Zw6wppAk/lib`에 격리 준비했다. 서버 Python 3.14의 `-I -S` import와 모든 worker 고정 의존성 버전 일치를 확인했다. 이 경로들은 임시 staging이며 운영 설치·서비스 변경·GPU 전환은 아직 하지 않았다. 다음은 root의 최신 유휴 확인 및 root 전용 백업·credential staging이다.
