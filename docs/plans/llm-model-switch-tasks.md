@@ -14,6 +14,8 @@ M8-01 상태 정정 및 M8-02 후속: 설치·공용 연결·활성화 완료 �
 
 M8-02 운영 회귀: Gemma에서 gate를 통한 실제 스트리밍 채팅이 진행 중일 때 Qwen3.5 전환 `78495777be0a4a999588d1542ece7c99`을 요청했다. 새 요청은 기존 스트림이 끝나기 전에 409로 거절됐고 기존 스트림은 정상 완료됐으며 작업은 `draining`을 거쳐 `succeeded`가 됐다. 이전 epoch 요청도 전환 후 409였다. 같은 중복 방지 키를 재요청했을 때 동일 작업을 반환했고, 미설치 모델과 무인증 Client API 전환은 각각 거절됐다(후자는 403). 별도 실제 동시 전환에서 첫 작업 `09c921deacdf4d5a8e15ecdc1e7657d7`은 성공하고 다른 모델 요청은 `switch_busy_or_recovery_required`로 거절됐다. 각 시험 후 원래 Gemma로 복귀해 설정·로드 모델과 준비 상태를 확인했다. 복구 실패·불명 상태·독립 hold 보존 관련 로컬 대역 시험은 52 통과·1 건너뜀이다. 실제 이미지 작업 경합, 운영 장애 주입 및 UI 같은 모델 재선택은 시험하지 않았고, 운영 장애 복구 증거와 잔여 위험 정리는 M8-03에 남긴다.
 
+M8-03 정리 진행: 운영 `/usr/local/bin/ai-model`은 `/opt/ai/scripts/ai-model`을 가리키며 이 파일은 공용 worker launcher다. 운영 benchmark 두 파일과 launcher의 SHA-256이 저장소의 설치 후보와 각각 일치했다. benchmark 추론은 gate 8081, 비교 전환은 공용 `ai-model`을 사용하고 systemd 직접 제어는 상태 확인에만 사용한다. 관련 systemd unit 목록에서 별도 모델 worker 서비스는 확인되지 않았다. 네 모델 목록과 현재 gate snapshot ready를 확인했다. Wiki 직접 호출은 합의된 예외이며 알려지지 않은 외부 호출이 없다는 증명은 아니다. Client main 자동 배포가 root runtime을 갱신하지 않는 점, 실제 백업 전체 복원과 이미지 경합·운영 장애 주입 미시험을 운영 문서에 명시했다. root 전용 원본 백업 및 복구 기록의 읽기 전용 확인은 대기 중이며 어떤 보존물도 삭제하지 않았다.
+
 ### M7-02 준비 판정 — 2026-11-11
 
 M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47dfcf8de285a290`를 서버 `/tmp/bc250-m801-candidate.UR7TTA7a`에, 같은 후보의 고정 의존성 worker lib를 `/tmp/bc250-m801-worker.Zw6wppAk/lib`에 격리 준비했다. 서버 Python 3.14의 `-I -S` import와 모든 worker 고정 의존성 버전 일치를 확인했다. 이 경로들은 임시 staging이며 운영 설치·서비스 변경·GPU 전환은 아직 하지 않았다. 다음은 root의 최신 유휴 확인 및 root 전용 백업·credential staging이다.

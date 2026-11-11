@@ -1,14 +1,15 @@
 # Benchmark coordination candidates
 
-These are reviewable candidates derived from the read-only operating files at
-`/opt/ai-benchmark`; they are **not installed**. The observed source SHA-256s are:
+These candidates were derived from the original operating files at
+`/opt/ai-benchmark` and installed as part of the M8 coordinated rollout. The
+pre-rollout source SHA-256s were:
 
 - `benchmark.py`: `d44a3030911195d8a950542eb588cbe8e7955227b52abe8e1213170db28534d6`
 - `run-comparison.py`: `f7db2d20b5c2b16de38547202c510498dd23c004415c0b7a47a59b708dc208f1`
 
-Recheck the installed files before adopting the candidates. Back up the exact
-operating originals and install both candidates together only as part of the
-M7 coordinated protocol 3 gate/Studio/worker rollout. The existing
+The original files are included in the root-only pre-rollout backup; an actual
+full production restore has not been tested. Recheck installed versions and
+coordination before any later replacement. The existing
 `benchmark-memory.py` launches `benchmark.py`; its observation-only systemd
 queries do not need a separate model-control path. No prompt file or benchmark
 results are included here.
