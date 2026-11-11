@@ -94,3 +94,5 @@ count 실패·미지원·형식 오류나 epoch 불일치에는 추론하지 않
 추가 진행: Qwen3.5 기록도 root 설치 후 worker profile에서 확인했다. `gemma4-e4b-hauhaucs`는 공용 전환 후 실제 slot context 16384, 동일한 네 요청 형태와 token count/usage를 확인했고 후보 기록의 root 설치가 남는다. `gemma4-e4b-heretic-rp`는 미검증이다.
 
 추가 진행: `gemma4-e4b-hauhaucs` 기록 설치 후 `gemma4-e4b-heretic-rp`를 공용 worker로 전환해 실제 context 16384와 동일한 네 요청 형태·token count/usage를 확인했다. 마지막 모델 기록은 임시 후보로 생성됐으며 root 설치 후 원래 Qwen3.6으로 복귀할 예정이다.
+
+최신 운영 확인: 마지막 Gemma 기록도 설치하고 공용 worker로 Qwen3.6에 복귀했다. 네 모델의 저장된 기능 기록과 현재 Qwen3.6의 실제 gate runtime identity·epoch를 재확인했다. 각 모델별 slot context는 Qwen3.5 4096, 나머지 세 모델 16384였다. 위 검증은 고정된 소비 경로의 사례이며 모든 입력이나 schema의 보장은 아니다. Client UI 활성화 및 실제 UI 후속 대화는 별도 검증이다.

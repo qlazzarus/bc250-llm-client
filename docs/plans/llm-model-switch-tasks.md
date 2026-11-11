@@ -30,6 +30,8 @@ M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47d
 
 추가 root 실행에서 `gemma4-e4b-hauhaucs` 기록을 설치하고 worker profile을 확인했다. 공용 CLI 작업 `8340893106de49c78bdd86e28a13d618`으로 `gemma4-e4b-heretic-rp` 전환이 성공했고 실제 slot context 16384, 비사고 일반 응답·이미지 의도·이미지 프롬프트·기존 구조화 schema와 각 token count/usage가 통과했다. 마지막 모델 기록은 `/tmp/bc250-m801-verify.k4X3h1Ig/gemma-heretic-candidate.json`에 있으며 현재 모델에서 root 설치를 기다린다. Client UI 전환은 여전히 비활성이고 원래 Qwen3.6 복귀 및 실제 UI 검증은 남는다.
 
+후속 root 실행에서 마지막 Gemma 기록을 설치하고 worker profile을 확인했다. 공용 CLI 작업 `3ffd9f2a63c5457b9573afe5c1bd8f52`로 원래 `qwen36-35b-a3b-uncensored`에 복귀했다. 네 모델의 기록을 다시 읽어 각 설정 context와 `reasoning_control`·`json_schema` supported를 확인했으며, 현재 모델의 runtime identity·gate epoch와 slot context 16384도 일치했다. 이는 각 모델에서 시험한 요청 형태에 한정되며 모든 가능한 schema의 보장은 아니다. gate·Studio·Client·worker·llama는 active, worker 미해결 작업은 없고 Client UI 전환은 아직 비활성이다.
+
 후속 확인: 실제 gate 후보를 이용한 준비 조회→startup hold 해제→rollback 판정 연계와 해제 응답 유실 시 독립 legacy hold 보존을 추가 검증했다. Studio·worker 신원은 대역이다. 로컬 관련 시험 **55 통과·1 건너뜀**, 서버 Linux 관련 시험 **56 통과**. 별도 임시 user systemd socket service에서 직접 service restart 후에도 socket FD가 전달됨을 확인했다. M7-02의 설치 전 준비 판정은 끝났지만, 실제 설치 후 공용 계약·모델 기능 검증이 남으므로 전체 상태는 부분 완료로 유지한다. 선행 관계를 명확히 해 M8-01은 우선 비활성 설치와 검사만 수행한다.
 
 [준비 판정표](llm-model-switch-readiness.md)를 작성했다. 코드 후보 `deebf5d6d609cef2135df3f8573e105841f997f6` 기준 로컬 backend **849 통과·6 건너뜀**, frontend lint·**14 tests**·build 통과, 서버 격리 Linux **110 통과**. 실제 user systemd의 Client EnvironmentFile 및 worker Environment 우선순위도 통과했다. snapshot capture 실패 시 기존 gate 정지로 넘어가지 않도록 명령 블록을 수정했고, worker 전용 검증과 Client 활성화를 분리한 opt-in drop-in 후보를 추가했다.
