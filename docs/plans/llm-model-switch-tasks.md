@@ -12,6 +12,8 @@ M8-01 상태 정정 및 M8-02 후속: 설치·공용 연결·활성화 완료 �
 
 이후 별도 읽기 전용 확인에서는 설정·로드 모델이 `gemma4-e4b-hauhaucs`, `ready=True`로 바뀌어 있었고 Client·gate·Studio·worker socket은 active, Client health는 200이었다. 이 모델 변경의 주체와 시점은 확인하지 못했으며 추가 전환은 요청하지 않았다. gate `/health`에 대한 직접 요청은 409였으나 해당 요청만으로 gate 또는 작업 상태를 판정하지 않는다. 동시 사용 가능성이 있어 운영 경합 시험은 실행하지 않았다.
 
+M8-02 운영 회귀: Gemma에서 gate를 통한 실제 스트리밍 채팅이 진행 중일 때 Qwen3.5 전환 `78495777be0a4a999588d1542ece7c99`을 요청했다. 새 요청은 기존 스트림이 끝나기 전에 409로 거절됐고 기존 스트림은 정상 완료됐으며 작업은 `draining`을 거쳐 `succeeded`가 됐다. 이전 epoch 요청도 전환 후 409였다. 같은 중복 방지 키를 재요청했을 때 동일 작업을 반환했고, 미설치 모델과 무인증 Client API 전환은 각각 거절됐다(후자는 403). 별도 실제 동시 전환에서 첫 작업 `09c921deacdf4d5a8e15ecdc1e7657d7`은 성공하고 다른 모델 요청은 `switch_busy_or_recovery_required`로 거절됐다. 각 시험 후 원래 Gemma로 복귀해 설정·로드 모델과 준비 상태를 확인했다. 복구 실패·불명 상태·독립 hold 보존 관련 로컬 대역 시험은 52 통과·1 건너뜀이다. 실제 이미지 작업 경합, 운영 장애 주입 및 UI 같은 모델 재선택은 시험하지 않았고, 운영 장애 복구 증거와 잔여 위험 정리는 M8-03에 남긴다.
+
 ### M7-02 준비 판정 — 2026-11-11
 
 M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47dfcf8de285a290`를 서버 `/tmp/bc250-m801-candidate.UR7TTA7a`에, 같은 후보의 고정 의존성 worker lib를 `/tmp/bc250-m801-worker.Zw6wppAk/lib`에 격리 준비했다. 서버 Python 3.14의 `-I -S` import와 모든 worker 고정 의존성 버전 일치를 확인했다. 이 경로들은 임시 staging이며 운영 설치·서비스 변경·GPU 전환은 아직 하지 않았다. 다음은 root의 최신 유휴 확인 및 root 전용 백업·credential staging이다.
