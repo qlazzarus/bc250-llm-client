@@ -24,6 +24,8 @@ M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47d
 
 라벨 복원 첫 시도는 사전 확인 단계에서 중단됐다. SELinux xattr 원시값 끝의 NUL 바이트를 확인 명령이 고려하지 않아 비교가 실패한 것으로, `restorecon` 실행 전이었다. 이후 읽기 전용 확인에서 파일은 여전히 기존 라벨·동일 inode이고 Qwen3.6 및 모든 서비스가 정상임을 확인했다. 원시 라벨의 마지막 NUL을 제외해 비교한 뒤 같은 절차를 재시도한다.
 
+후속 root 실행에서 GPU lock을 보유한 채 활성 모델 설정의 내용·소유권·mode·inode와 사전 백업 일치를 확인하고 해당 파일만 SELinux 정책 라벨로 복원했다. worker와 같은 권한의 일회성 service에서 journal 및 활성 모델 설정의 교체 검사가 모두 통과했다. 공용 CLI의 새 요청 `f77d722f9050456ba761ff6383594faf`로 Qwen3.5 전환이 `succeeded`였고, 실제 slot context는 4096이다. 동일 gate epoch에서 일반 비사고 응답, 이미지 의도·이미지 프롬프트·기존 구조화 schema와 각 tokenizer count/usage가 통과했다. 후보 기록은 `/tmp/bc250-m801-verify.k4X3h1Ig/qwen35-candidate.json`이며 root 설치 전이라 worker profile의 기능은 여전히 unknown이다. Client 모델 전환 UI는 비활성이다.
+
 후속 확인: 실제 gate 후보를 이용한 준비 조회→startup hold 해제→rollback 판정 연계와 해제 응답 유실 시 독립 legacy hold 보존을 추가 검증했다. Studio·worker 신원은 대역이다. 로컬 관련 시험 **55 통과·1 건너뜀**, 서버 Linux 관련 시험 **56 통과**. 별도 임시 user systemd socket service에서 직접 service restart 후에도 socket FD가 전달됨을 확인했다. M7-02의 설치 전 준비 판정은 끝났지만, 실제 설치 후 공용 계약·모델 기능 검증이 남으므로 전체 상태는 부분 완료로 유지한다. 선행 관계를 명확히 해 M8-01은 우선 비활성 설치와 검사만 수행한다.
 
 [준비 판정표](llm-model-switch-readiness.md)를 작성했다. 코드 후보 `deebf5d6d609cef2135df3f8573e105841f997f6` 기준 로컬 backend **849 통과·6 건너뜀**, frontend lint·**14 tests**·build 통과, 서버 격리 Linux **110 통과**. 실제 user systemd의 Client EnvironmentFile 및 worker Environment 우선순위도 통과했다. snapshot capture 실패 시 기존 gate 정지로 넘어가지 않도록 명령 블록을 수정했고, worker 전용 검증과 Client 활성화를 분리한 opt-in drop-in 후보를 추가했다.

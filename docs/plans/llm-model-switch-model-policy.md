@@ -88,3 +88,5 @@ count 실패·미지원·형식 오류나 epoch 불일치에는 추론하지 않
 2026-11-10 현재 Qwen3.6에 **기존 gate를 통한 짧은 실제 요청 1회**를 실행했다. `enable_thinking=false`, 간단한 정수 JSON schema의 값·형식, stop 및 빈 reasoning content를 확인했고 count와 실제 prompt usage는 각각 23이었다. 0.5초였다. 이는 해당 모델·빌드의 단일 사례이며 이미지/위키에서 사용하는 모든 schema나 다른 세 모델에 대한 인증이 아니다. 프로필/기록 경로는 미설치이고 이 시험으로 운영 증거 파일을 생성하거나 supported로 승격하지 않았다.
 
 11/11 후속으로 실제 protocol 3 gate와 동일 epoch를 사용해 Qwen3.6의 일반 응답, 이미지 의도·이미지 프롬프트·기존 구조화 schema 및 tokenizer count/usage를 확인했다. [probe](../../scripts/probe_model_capabilities.py)는 모델 파일·conf·runtime identity·worker profile을 전후 대조하고 성공한 구체적 요청 형태의 후보 기록만 별도 파일로 만든다. 이는 임의의 모든 schema에 대한 보장은 아니며, 운영 기록은 [installer](../../scripts/install_model_capability.py)가 GPU lock·gate/Studio·현재 worker/model/epoch를 재검증하고 기존 기록을 덮어쓰지 않을 때에만 설치한다. 다른 모델은 각자 실제 로드 후 검증해야 한다.
+
+운영 후속: Qwen3.6 기록은 실제 lock 및 현재 모델 재검증 후 설치됐다. 공용 worker로 Qwen3.5 전환 후 실제 slot context 4096과 동일한 네 가지 요청 형태·토큰 계산이 통과했다. Qwen3.5 기록은 임시 후보이며 현재 모델이 일치할 때 root 설치를 기다린다. 두 Gemma 모델의 실제 로드 및 기능은 아직 확인하지 않았다.
