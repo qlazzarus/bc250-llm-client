@@ -8,6 +8,10 @@
 
 후속 실제 UI 검증: 사용자가 운영자 인증을 직접 입력했다. Client에서 `qwen35-35b-a3b-uncensored`를 선택해 Qwen3.6에서 전환했고 작업이 `succeeded`, 설정·로드 모델과 UI 활성 모델이 모두 Qwen3.5이며 준비 완료로 표시됐다. 새 일반 대화에서 `2 + 3`에 `5`, 이어서 이전 답에 4를 더하라는 질문에 `9`를 답했다. 이후 공용 CLI도 설정·로드 모델 Qwen3.5와 `ready=True`를 반환했고 Client·gate·Studio·worker socket은 active, Client health는 정상이다. 현재 모델은 검증한 Qwen3.5다. 같은 모델 재요청과 이미지/채팅 경합 등 나머지 M8-02 회귀와 M8-03 정리는 아직 남는다.
 
+M8-01 상태 정정 및 M8-02 후속: 설치·공용 연결·활성화 완료 조건을 충족하므로 M8-01을 완료로 표시한다. 공용 CLI로 현재 Qwen3.5를 다시 선택한 작업 `9b752cdf8cf347198e6a98ecd03c0ed1`은 `succeeded`였고 전후 llama-server PID `145646`이 같았으며 설정·로드 모델도 Qwen3.5, `ready=True`였다. 이는 CLI의 실제 같은 모델 재요청 증거이며 UI 재선택이나 이미지/채팅 경합 검증을 뜻하지 않는다.
+
+이후 별도 읽기 전용 확인에서는 설정·로드 모델이 `gemma4-e4b-hauhaucs`, `ready=True`로 바뀌어 있었고 Client·gate·Studio·worker socket은 active, Client health는 200이었다. 이 모델 변경의 주체와 시점은 확인하지 못했으며 추가 전환은 요청하지 않았다. gate `/health`에 대한 직접 요청은 409였으나 해당 요청만으로 gate 또는 작업 상태를 판정하지 않는다. 동시 사용 가능성이 있어 운영 경합 시험은 실행하지 않았다.
+
 ### M7-02 준비 판정 — 2026-11-11
 
 M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47dfcf8de285a290`를 서버 `/tmp/bc250-m801-candidate.UR7TTA7a`에, 같은 후보의 고정 의존성 worker lib를 `/tmp/bc250-m801-worker.Zw6wppAk/lib`에 격리 준비했다. 서버 Python 3.14의 `-I -S` import와 모든 worker 고정 의존성 버전 일치를 확인했다. 이 경로들은 임시 staging이며 운영 설치·서비스 변경·GPU 전환은 아직 하지 않았다. 다음은 root의 최신 유휴 확인 및 root 전용 백업·credential staging이다.
