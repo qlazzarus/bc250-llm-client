@@ -90,3 +90,5 @@ count 실패·미지원·형식 오류나 epoch 불일치에는 추론하지 않
 11/11 후속으로 실제 protocol 3 gate와 동일 epoch를 사용해 Qwen3.6의 일반 응답, 이미지 의도·이미지 프롬프트·기존 구조화 schema 및 tokenizer count/usage를 확인했다. [probe](../../scripts/probe_model_capabilities.py)는 모델 파일·conf·runtime identity·worker profile을 전후 대조하고 성공한 구체적 요청 형태의 후보 기록만 별도 파일로 만든다. 이는 임의의 모든 schema에 대한 보장은 아니며, 운영 기록은 [installer](../../scripts/install_model_capability.py)가 GPU lock·gate/Studio·현재 worker/model/epoch를 재검증하고 기존 기록을 덮어쓰지 않을 때에만 설치한다. 다른 모델은 각자 실제 로드 후 검증해야 한다.
 
 운영 후속: Qwen3.6 기록은 실제 lock 및 현재 모델 재검증 후 설치됐다. 공용 worker로 Qwen3.5 전환 후 실제 slot context 4096과 동일한 네 가지 요청 형태·토큰 계산이 통과했다. Qwen3.5 기록은 임시 후보이며 현재 모델이 일치할 때 root 설치를 기다린다. 두 Gemma 모델의 실제 로드 및 기능은 아직 확인하지 않았다.
+
+추가 진행: Qwen3.5 기록도 root 설치 후 worker profile에서 확인했다. `gemma4-e4b-hauhaucs`는 공용 전환 후 실제 slot context 16384, 동일한 네 요청 형태와 token count/usage를 확인했고 후보 기록의 root 설치가 남는다. `gemma4-e4b-heretic-rp`는 미검증이다.
