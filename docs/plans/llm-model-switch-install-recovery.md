@@ -4,6 +4,8 @@
 
 운영 장애 시 새 전환을 중단하고 `ai-model status`와 작업 ID를 먼저 확인한다. 결과가 불명확하면 §3의 root 조사 경로를 사용하고, journal이나 다른 주체의 hold를 지우지 않는다. 타임아웃은 작업 취소가 아니다. root 전용 사전 변경 백업은 `/root/bc250-m801.18JCO2Zj/backup/prechange.tar`에 보존한다. Client main 자동 배포는 worker·gate·Studio/root runtime을 설치하지 않는다. 실제 이미지 작업과 전환의 경합 및 운영 장애 주입은 미시험이다.
 
+2026-11-11 root 읽기 전용 확인에서 백업 archive를 읽을 수 있었고 Studio 작업이 끝난 뒤 worker의 미해결 작업·journal 오류가 없고 Studio·llama가 정착했으며 gate 상태가 구형 pause로 표현 가능했다. 작업 진행 중에는 Studio 소유 hold와 비종결 작업으로 평가가 중단됐고 hold는 그대로 보존됐다. 이 결과는 조회 시점에만 유효하며 실제 롤백이나 전체 복원 시험은 아니다.
+
 ## 당시 구성과 비밀값
 
 아래 표는 설치 전 조사 당시의 상태다. 현재 운영 상태는 위 단락을 따른다.

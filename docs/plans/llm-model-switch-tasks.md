@@ -16,6 +16,12 @@ M8-02 운영 회귀: Gemma에서 gate를 통한 실제 스트리밍 채팅이 �
 
 M8-03 정리 진행: 운영 `/usr/local/bin/ai-model`은 `/opt/ai/scripts/ai-model`을 가리키며 이 파일은 공용 worker launcher다. 운영 benchmark 두 파일과 launcher의 SHA-256이 저장소의 설치 후보와 각각 일치했다. benchmark 추론은 gate 8081, 비교 전환은 공용 `ai-model`을 사용하고 systemd 직접 제어는 상태 확인에만 사용한다. 관련 systemd unit 목록에서 별도 모델 worker 서비스는 확인되지 않았다. 네 모델 목록과 현재 gate snapshot ready를 확인했다. Wiki 직접 호출은 합의된 예외이며 알려지지 않은 외부 호출이 없다는 증명은 아니다. Client main 자동 배포가 root runtime을 갱신하지 않는 점, 실제 백업 전체 복원과 이미지 경합·운영 장애 주입 미시험을 운영 문서에 명시했다. root 전용 원본 백업 및 복구 기록의 읽기 전용 확인은 대기 중이며 어떤 보존물도 삭제하지 않았다.
 
+후속 root 읽기 전용 확인: 원본 백업 archive는 root 소유·비공개이며 tar 목록을 읽을 수 있었다. worker 복구 조회는 operation/hold 없음, journal `{}`, 오류 없음이었다. 다만 별도 롤백 준비 평가는 원인을 숨기는 일반 오류로 실패했으므로 성공으로 간주하지 않고 원인 분리 중이다. 이후 비특권 확인에서 Gemma 설정·로드 일치 및 ready, Client·gate·Studio·worker socket·llama active, gate snapshot HTTP 200이었다. 이 정보는 롤백 준비 실패의 원인이나 롤백 가능성을 증명하지 않는다.
+
+원인 분리 root 조회 시 Studio 비종결 작업 1개, GPU/복구 미정착, Studio 소유 hold 1개와 gate paused=true, active/waiting=0이었다. Studio coordination과 llama 정착 검사가 따라서 통과하지 않았고 worker operation·hold는 없으며 journal은 비어 있었다. 이는 조회 당시 실제 Studio 작업과 일관된 차단 상태로, 상태를 인위적으로 변경하거나 hold를 해제하지 않았다. 작업 완료 후 롤백 준비 평가는 별도로 다시 확인해야 한다.
+
+작업 완료 후 root 읽기 전용 재검사에서 gate의 구형 상태 표현 가능, 복원할 legacy pause=false, Studio 유휴, llama 정착, worker 미해결 작업 없음이 모두 확인됐다. 별도 worker 복구 조회도 operation·hold 없음, 빈 journal과 오류 없음이었다. 원본 백업은 root 전용이고 tar 목록을 읽을 수 있었다. 이 결과는 조회 시점의 상태이며 다른 제어자를 배제하지 않고 백업 전체 복원이나 실제 롤백 성공을 증명하지 않는다. M8-03의 문서·진입점 및 복구 근거 정리를 완료한다.
+
 ### M7-02 준비 판정 — 2026-11-11
 
 M8-01 비활성 설치 준비: 최종 코드 후보 `d51e2af610d5f8a24b809c5c47dfcf8de285a290`를 서버 `/tmp/bc250-m801-candidate.UR7TTA7a`에, 같은 후보의 고정 의존성 worker lib를 `/tmp/bc250-m801-worker.Zw6wppAk/lib`에 격리 준비했다. 서버 Python 3.14의 `-I -S` import와 모든 worker 고정 의존성 버전 일치를 확인했다. 이 경로들은 임시 staging이며 운영 설치·서비스 변경·GPU 전환은 아직 하지 않았다. 다음은 root의 최신 유휴 확인 및 root 전용 백업·credential staging이다.
