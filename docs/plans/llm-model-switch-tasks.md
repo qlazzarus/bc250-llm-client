@@ -6,6 +6,8 @@
 
 ### M7-02 준비 판정 — 2026-11-11
 
+후속 확인: 실제 gate 후보를 이용한 준비 조회→startup hold 해제→rollback 판정 연계와 해제 응답 유실 시 독립 legacy hold 보존을 추가 검증했다. Studio·worker 신원은 대역이다. 로컬 관련 시험 **55 통과·1 건너뜀**, 서버 Linux 관련 시험 **56 통과**. 별도 임시 user systemd socket service에서 직접 service restart 후에도 socket FD가 전달됨을 확인했다. M7-02의 설치 전 준비 판정은 끝났지만, 실제 설치 후 공용 계약·모델 기능 검증이 남으므로 전체 상태는 부분 완료로 유지한다. 선행 관계를 명확히 해 M8-01은 우선 비활성 설치와 검사만 수행한다.
+
 [준비 판정표](llm-model-switch-readiness.md)를 작성했다. 코드 후보 `deebf5d6d609cef2135df3f8573e105841f997f6` 기준 로컬 backend **849 통과·6 건너뜀**, frontend lint·**14 tests**·build 통과, 서버 격리 Linux **110 통과**. 실제 user systemd의 Client EnvironmentFile 및 worker Environment 우선순위도 통과했다. snapshot capture 실패 시 기존 gate 정지로 넘어가지 않도록 명령 블록을 수정했고, worker 전용 검증과 Client 활성화를 분리한 opt-in drop-in 후보를 추가했다.
 
 11/11 root 읽기 전용 조회에서 구형 gate는 paused=false·active/waiting=0, Studio는 nonterminal=0·quiescent=true였다. Client 전환은 비활성이고 고정 모델 ID는 비었으며 Client↔구형 gate 키 불일치, Studio↔구형 gate 키 일치, Client 운영자 키·Studio coordination 키 및 owned hold는 미설정이었다. 현재 `qwen36-35b-a3b-uncensored` slot context는 16384이며 네 모델의 reasoning/schema 기록은 모두 unknown이다. 이는 조회 시점의 정보다.
