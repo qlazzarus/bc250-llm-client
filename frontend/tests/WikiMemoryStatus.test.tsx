@@ -42,7 +42,7 @@ it('keeps completed source text out of the default panel and exposes it only in 
   expect(showModal).toHaveBeenCalled();
   expect(document.activeElement).toBe(screen.getByRole('button', { name: '닫기' }));
   expect(screen.getByText('내 휴대폰은 예시 기기입니다.')).toBeTruthy();
-  fireEvent.cancel(screen.getByRole('dialog'));
+  fireEvent(screen.getByRole('dialog'), new Event('cancel', { bubbles: false, cancelable: true }));
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(document.activeElement).toBe(trigger);
 });
