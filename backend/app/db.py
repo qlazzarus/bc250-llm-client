@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-LATEST_SCHEMA_VERSION = 15
+LATEST_SCHEMA_VERSION = 16
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -94,6 +94,7 @@ def initialize(path: str) -> None:
         if "source_message_id" not in columns:
             connection.execute("ALTER TABLE wiki_memory_jobs ADD COLUMN source_message_id TEXT")
         _apply_wiki_memory_metadata_migration(connection)
+        _apply_memory_repository_migration(connection)
 
 
 def _apply_conversation_mode_migration(connection: sqlite3.Connection) -> None:
@@ -297,3 +298,54 @@ def _apply_wiki_memory_metadata_migration(connection: sqlite3.Connection) -> Non
         if name not in columns:
             connection.execute(f"ALTER TABLE wiki_memory_jobs ADD COLUMN {name} {definition}")
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (15)")
+
+
+def _apply_memory_repository_migration(connection: sqlite3.Connection) -> None:
+    """Add inert memory metadata tables without importing existing Wiki content."""
+    statements = [
+        """CREATE TABLE IF NOT EXISTS memory_records (
+            id TEXT PRIMARY KEY, scope_key TEXT NOT NULL CHECK(scope_key = 'shared'),
+            subject_key TEXT NOT NULL CHECK(length(trim(subject_key)) > 0),
+            predicate_key TEXT NOT NULL CHECK(length(trim(predicate_key)) > 0),
+            kind TEXT NOT NULL CHECK(kind IN ('fact','preference','plan')),
+            value TEXT, normalized_value TEXT, fingerprint TEXT,
+            source_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+            source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+            source_start INTEGER, source_end INTEGER, wiki_document_id INTEGER, wiki_revision TEXT,
+            state TEXT NOT NULL CHECK(state IN ('candidate','active','superseded','quarantined','redacted')),
+            supersedes_id TEXT REFERENCES memory_records(id) ON DELETE RESTRICT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            CHECK((state = 'redacted' AND value IS NULL AND normalized_value IS NULL AND fingerprint IS NULL
+                   AND source_start IS NULL AND source_end IS NULL)
+               OR (state <> 'redacted' AND value IS NOT NULL AND normalized_value IS NOT NULL AND fingerprint IS NOT NULL
+                   AND source_conversation_id IS NOT NULL AND source_message_id IS NOT NULL
+                   AND source_start IS NOT NULL AND source_start >= 0 AND source_end IS NOT NULL AND source_end > source_start)),
+            CHECK(state <> 'active' OR (wiki_document_id IS NOT NULL AND wiki_revision IS NOT NULL)))""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS memory_one_active_slot ON memory_records(scope_key,subject_key,predicate_key) WHERE state = 'active'",
+        "CREATE INDEX IF NOT EXISTS memory_fingerprint_lookup ON memory_records(scope_key,fingerprint) WHERE fingerprint IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS memory_source_lookup ON memory_records(source_message_id)",
+        "CREATE INDEX IF NOT EXISTS memory_document_lookup ON memory_records(wiki_document_id)",
+        """CREATE TABLE IF NOT EXISTS memory_operations (
+            id TEXT PRIMARY KEY, record_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE RESTRICT,
+            scope_key TEXT NOT NULL, subject_key TEXT NOT NULL, predicate_key TEXT NOT NULL,
+            operation_type TEXT NOT NULL CHECK(operation_type IN ('create','supersede')),
+            request_hash TEXT NOT NULL, expected_revision TEXT, wiki_document_id INTEGER,
+            state TEXT NOT NULL CHECK(state IN ('claimed','prepared','sending','unknown','confirmed','applied','rejected','cancelled')),
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS memory_one_open_operation ON memory_operations(scope_key,subject_key,predicate_key) WHERE state IN ('claimed','prepared','sending','unknown','confirmed')",
+        "CREATE INDEX IF NOT EXISTS memory_operation_record ON memory_operations(record_id)",
+        """CREATE TABLE IF NOT EXISTS memory_document_quarantine (
+            wiki_document_id INTEGER PRIMARY KEY,
+            reason TEXT NOT NULL CHECK(reason IN ('owned','source_deleted','external_change','unknown_write')),
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
+    ]
+    connection.execute("SAVEPOINT memory_repository_migration")
+    try:
+        for statement in statements:
+            connection.execute(statement)
+        connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (16)")
+        connection.execute("RELEASE SAVEPOINT memory_repository_migration")
+    except Exception:
+        connection.execute("ROLLBACK TO SAVEPOINT memory_repository_migration")
+        connection.execute("RELEASE SAVEPOINT memory_repository_migration")
+        raise

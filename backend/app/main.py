@@ -36,6 +36,7 @@ from .image_jobs import (
 from .prompting import ContextBudgetExceeded, build_prompt, estimate_tokens, summary_candidate, to_turns
 from .wiki import wiki_request, excerpts
 from .wiki_memory import MEMORY_POLICY_VERSION, MemoryDecision, automatic_memory_skip_reason, candidate_text_is_safe, parse_decision, explicit_memory_request, replace_once, search_query
+from .memory_repository import redact_conversation_memory
 
 logger = logging.getLogger("bc250_llm_client")
 
@@ -1293,8 +1294,10 @@ def update_conversation(conversation_id: str, body: ConversationUpdate, settings
 @app.delete("/api/v1/conversations/{conversation_id}", status_code=204, dependencies=[Depends(require_key)])
 def delete_conversation(conversation_id: str, settings: Settings = Depends(get_settings)):
     with connect(settings.database_path) as db:
+        db.execute("BEGIN IMMEDIATE")
         if has_active_image_jobs(db, conversation_id):
             raise fail("active_image_jobs", "진행 중이거나 확인이 필요한 이미지 작업이 있어 대화를 삭제할 수 없습니다.", 409)
+        redact_conversation_memory(db, conversation_id, now())
         if not db.execute("DELETE FROM conversations WHERE id=?", (conversation_id,)).rowcount: raise fail("not_found", "대화를 찾을 수 없습니다.", 404)
 
 

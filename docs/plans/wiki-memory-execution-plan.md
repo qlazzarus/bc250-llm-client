@@ -132,6 +132,105 @@ W12~W14를 시작하려면 다음 중 하나가 필요하다.
 - 외부 Wiki 편집/삭제가 감지되면 revision 불일치를 보류하고 메타데이터를 최신이라고 단정하지 않는다.
 - 대화 삭제 시 source 연결 해제/원문 보존/개인정보 처리 정책을 W08에서 명시한다. 조용한 cascade로 활성 기억 인덱스가 사라지거나 원문을 무조건 영구 복제하는 구현을 피한다.
 
+#### 4.2.1 W08 확정 계약 — 소유·표현·출처
+
+아래는 **구현할 제안 계약**이며 현재 운영 동작이 아니다. 기존 Wiki 문서와 W04 이전 작업을 읽거나 재분류해 backfill하지 않는다. 기존 Client SQLite를 재사용하므로 새 DB·상주 서비스는 필요하지 않다. 다만 이 DB와 Wiki는 별도 트랜잭션이므로 Client SQLite의 unique 제약만으로 Wiki 전체의 중복이나 원자성을 보장할 수 없다.
+
+**범위 정정:** 개인 기억 및 여러 기기·선호 지원은 사용자가 요청한 후속 TODO다. 현재 W09 구현 범위에 넣지 않는다. 아래 W08의 `shared` 단일 scope와 단일 활성 값 계약은 현재 W09 초안의 기준으로 유지하며, 기존 W02~W04 writer가 개인·공유 분리를 제공하거나 이를 강제한다고 간주하지 않는다. 향후 확장 시 기존 기억의 소유자를 임의 추정해 일괄 이전하지 않는다.
+
+#### 4.2.1a 후속 TODO — 개인 기억과 가족 확장 (현재 범위 아님)
+
+- [ ] 현재 1인 사용이라는 맥락을 보존하고, 향후 사용자 발언의 `나`에 대한 개인 기억 및 공유 서버·프로젝트 기억을 분리하는 방법을 설계한다. 현재 개인 scope·인증·소유자 식별이 구현됐다고 가정하지 않는다.
+- [ ] 가족에게 사용을 열기 전에 사용자별 신원 확인, 개인 기억 접근 범위, 기존 기억의 귀속·이전 및 공유 기억 편집 정책을 별도 설계하고 검증한다. 단순 프로필 선택을 인증으로 간주하지 않는다.
+- [ ] 향후 `현재 사용하는 기기`, `명시적인 선호`, `날짜가 분명한 계획`과 공유 서버·프로젝트 정보를 지원할 범위를 확정한다. 자연어 해석·소유자·대상이 모호하면 보류하고 비밀·민감정보 및 저장 거부 우선 원칙을 유지한다.
+- [ ] 여러 기기·선호와 계획을 덮어쓰지 않고 구분할 다중값 식별·중복·정정 정책을 설계한다. 서비스별 포트처럼 대상이 다른 값도 섞지 않는다.
+- [ ] 후속 구현 시 migration 16의 `scope_key='shared'` 제약과 단일 active index를 검토한다. 기존 데이터 보존, 단일·다중값의 유일성·동시 claim·정정 및 사용자별 접근을 별도로 검증한다. 적용 여부를 추정해 기존 DB를 변경하지 않는다.
+- [ ] W12~W15의 Wiki 원자성·멱등성·검색 분리 조건을 충족한 뒤 별도로 활성화 여부를 판단한다. 이 TODO는 현재 W09 완료 범위가 아니다.
+
+#### 4.2.1b 현재 W08 초안 — 개인·다중값은 후속 범위
+
+- `scope_key`는 초기 버전에서 고정 문자열 `shared`뿐이다. 이는 공유 접근 범위이며 개인 인증·개인 소유를 뜻하지 않는다. `subject_key`는 관리 사전에 등록된 비인격 대상의 불투명한 안정 ID만 허용하며 이름·기기 시리얼 등 사용자 원문을 포함하지 않는다. `me`, `나`, 대화 ID, Wiki 제목, 발화자의 암묵적 신원을 개인 식별자로 변환하지 않는다. 현재 인증된 사용자 식별 기능이 없으므로 사람을 주체로 하는 기억은 명시적 기억 요청을 포함해 보류하고 UI에 이유를 표시한다. 개인 scope 도입은 별도 인증·동의 설계 후에만 가능하다.
+- 첫 버전의 `predicate_key`는 서버가 관리하는 고정 사전에서 명확히 매핑된 단일 속성만 쓴다. LLM이 임의 키를 만들거나 여러 의미의 속성을 합치지 않는다. 허용 키·정규화 사전이 아직 정해지지 않았으므로 **그 사전과 모호성 회귀가 확정되기 전 W09의 claim/유일성 구현 완료 판정, W10 연동 및 새 writer 활성화는 차단**한다. 키가 없으면 보류하고 제목이나 의미 유사도로 대체하지 않는다.
+- 값은 검증된 사용자 원문 절 그대로 보관하고 비교용 값은 Unicode NFC와 양끝·연속 공백 정규화만 한다. 대소문자, 부정, 숫자, 단위, 날짜를 지우거나 동의어를 합치지 않는다. 날짜 없는 계획이나 기준일·주체가 모호한 표현은 보류한다. fingerprint는 버전 태그와 길이가 지정된 UTF-8 필드 `(scope_key, subject_key, predicate_key, kind, normalized_value)`를 순서대로 SHA-256 처리한다. 비교 전 원 필드도 확인해 해시 충돌을 안전하게 보류한다.
+- 원문 메시지 및 대화 참조는 nullable FK `ON DELETE SET NULL`이다. 기억 본문을 원문 복제 저장소로 취급하지 않고, 출처 삭제 시 해당 기록은 활성 검색에서 즉시 제외하고 값·정규화 값·fingerprint와 출처 span을 NULL로 지운다. 문서 ID와 격리 사유만 비식별 tombstone으로 유지한다. 삭제된 대화의 작업 본문은 기존 cascade 정책을 유지한다. Wiki 본문 삭제나 수정은 자동 수행하지 않으며, 사용자가 Wiki에서 별도 처리할 수 있도록 해당 문서 ID를 격리한다. 즉 대화 삭제만으로 Wiki 원문까지 삭제됐다고 주장하지 않는다.
+- 여러 출처를 자동으로 합치지 않는다. 중복 발견 시 기존 출처를 바꾸지 않고 새 job에 duplicate 결과만 기록한다. 출처 삭제가 여러 버전에 영향을 미치면 그 출처를 참조하는 각 버전을 위 규칙으로 처리하며 이전 버전을 자동 재활성화하지 않는다.
+
+#### 4.2.2 W08 DDL 초안 — W09의 이행 대상
+
+다음 DDL은 migration 15 이후의 **초안**이다. `created_at`/`updated_at`은 기존 Client의 UTC ISO 문자열, ID는 서버가 발급한 UUID 문자열이다. `subject_key`/`predicate_key`는 사용자 원문 자체가 아닌 검증된 canonical 식별자이며 공백 문자열을 금지한다. SQLite FK를 켜고, 신규 테이블 생성과 migration 기록은 하나의 트랜잭션에서 처리한다. 구현은 기존 데이터·DB 파일을 변경하거나 삭제하지 않는 additive migration만 허용한다.
+
+```sql
+CREATE TABLE memory_records (
+ id TEXT PRIMARY KEY,
+ scope_key TEXT NOT NULL CHECK(scope_key = 'shared'),
+ subject_key TEXT NOT NULL CHECK(length(subject_key) > 0),
+ predicate_key TEXT NOT NULL CHECK(length(predicate_key) > 0),
+ kind TEXT NOT NULL CHECK(kind IN ('fact','preference','plan')),
+ value TEXT, normalized_value TEXT, fingerprint TEXT,
+ source_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+ source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+ source_start INTEGER, source_end INTEGER,
+ wiki_document_id INTEGER, wiki_revision TEXT,
+ state TEXT NOT NULL CHECK(state IN ('candidate','active','superseded','quarantined','redacted')),
+ supersedes_id TEXT REFERENCES memory_records(id) ON DELETE RESTRICT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ CHECK((state = 'redacted' AND value IS NULL AND normalized_value IS NULL AND fingerprint IS NULL
+        AND source_start IS NULL AND source_end IS NULL)
+    OR (state <> 'redacted' AND value IS NOT NULL AND normalized_value IS NOT NULL AND fingerprint IS NOT NULL
+        AND source_conversation_id IS NOT NULL AND source_message_id IS NOT NULL
+        AND source_start IS NOT NULL AND source_end > source_start)),
+ CHECK(state <> 'active' OR (wiki_document_id IS NOT NULL AND wiki_revision IS NOT NULL))
+);
+CREATE UNIQUE INDEX memory_one_active_slot ON memory_records(scope_key,subject_key,predicate_key)
+ WHERE state = 'active';
+CREATE INDEX memory_fingerprint_lookup ON memory_records(scope_key,fingerprint) WHERE fingerprint IS NOT NULL;
+CREATE INDEX memory_source_lookup ON memory_records(source_message_id);
+CREATE INDEX memory_document_lookup ON memory_records(wiki_document_id);
+
+CREATE TABLE memory_operations (
+ id TEXT PRIMARY KEY,
+ record_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE RESTRICT,
+ scope_key TEXT NOT NULL, subject_key TEXT NOT NULL, predicate_key TEXT NOT NULL,
+ operation_type TEXT NOT NULL CHECK(operation_type IN ('create','supersede')),
+ request_hash TEXT NOT NULL, expected_revision TEXT, wiki_document_id INTEGER,
+ state TEXT NOT NULL CHECK(state IN ('claimed','prepared','sending','unknown','confirmed','applied','rejected','cancelled')),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX memory_one_open_operation ON memory_operations(scope_key,subject_key,predicate_key)
+ WHERE state IN ('claimed','prepared','sending','unknown','confirmed');
+CREATE INDEX memory_operation_record ON memory_operations(record_id);
+
+CREATE TABLE memory_document_quarantine (
+ wiki_document_id INTEGER PRIMARY KEY,
+ reason TEXT NOT NULL CHECK(reason IN ('owned','source_deleted','external_change','unknown_write')),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+```
+
+`source_start`/`source_end`는 원본 메시지의 Unicode code point 기준 0 이상·끝 제외 인덱스다. repository는 같은 대화의 user 메시지이며 span 원문이 value와 정확히 같은지 transaction 안에서 확인한다. NULL이 허용되는 SQLite CHECK 동작을 고려해 구현에서 각 NULL을 명시 검증한다. 출처 삭제는 FK 동작만으로 위 CHECK를 만족하지 않으므로 **대화·메시지 삭제 transaction에서 먼저 redaction과 quarantine을 수행한 뒤 삭제**해야 한다. 다른 삭제 경로도 같은 repository를 경유하게 하고 직접 SQL 삭제 시 실패하도록 테스트한다. tombstone의 subject/predicate가 사람을 식별할 수 있는 환경은 이 버전에서 허용하지 않으며, 개인 식별 도입 시 삭제 설계를 다시 승인해야 한다.
+
+`memory_one_active_slot`은 동일 scope/subject/predicate에서 활성 값 하나만 허용한다. 사전에 다중값 속성은 포함하지 않는다. `memory_one_open_operation`은 unknown을 포함해 같은 슬롯의 새 쓰기를 막으며, 명시적 운영 복구 전 timeout으로 claim을 해제하지 않는다. `request_hash`는 정규화된 operation ID·메서드·대상·expected revision·요청 body의 버전 지정 canonical bytes SHA-256이다. 내용이나 URL·credential을 로그에 남기지 않는다. `supersedes_id`는 동일 슬롯의 활성 버전만 가리키고 순환·자기 참조를 repository가 거절한다.
+
+#### 4.2.3 작업 상태·검색·시나리오
+
+- `claimed → prepared → sending → confirmed → applied`: claim/후보 생성과 상태 변경은 짧은 Client DB transaction이다. `sending`과 request hash를 커밋한 뒤에만 Wiki에 전송한다. `confirmed`는 Wiki가 operation ID·body hash·문서 ID·revision을 확인해 준 경우에만 기록한다. 확인된 문서 ID의 `owned` 격리 등록과 confirmed 기록은 같은 transaction에서 처리한다. `confirmed → applied`에서는 Wiki 응답을 재확인한 다음 기존 활성 버전 superseded와 새 active 전환을 하나의 transaction으로 수행한다. HTTP/LLM await 중 DB 연결이나 transaction을 유지하지 않는다.
+- 전송 전 확정 거절은 `rejected` 또는 `cancelled`이며 새 claim은 새 operation ID로 가능하다. 전송 후 응답 유실·timeout·불명 오류·재시작 중 sending은 `unknown`이다. unknown은 결과 조회만 허용하고 자동 POST/PUT 재전송이나 새 operation 생성은 금지한다. 같은 ID의 안전한 재전송도 W13의 서버 멱등성 계약이 실제 검증되기 전 금지한다. 확인된 미적용과 실패가 서버에서 입증되면 명시적 복구로 rejected 처리한다.
+- 현재 Wiki는 CAS·operation ID·결과 조회가 확인되지 않았다(W00). **W09의 로컬 repository 구현은 가능하지만 새 writer 연결·활성화는 W12~W14 검증 전 차단**한다. W09 자체는 기존 writer를 변경하지 않는다. W04 현행 경로는 이 보장을 제공하지 않으므로 운영에서 현재 쓰기가 계속 가능하다는 사실과 목표 보장을 혼동하지 않는다.
+- 새로운 관리 기억은 문서당 하나의 immutable 버전으로 생성하고, 일반 Wiki 문서에 append/replace하지 않는다. 관리 기억의 모든 문서 ID는 `memory_document_quarantine`에 `owned`로 남긴다. RAG에서는 해당 ID를 일반 Wiki 검색 결과에서 제외한 뒤 검증된 active 버전만 별도 기억 채널에 넣는다. superseded·quarantined·redacted·unknown 문서는 주입하지 않는다. 생성 응답 유실로 문서 ID를 모르면 그 ID를 제외할 수 없으므로 operation 결과 조회로 식별할 때까지 일반 Wiki 검색 주입 전체를 보류하고 사용자에게 알린다. 제외 후 결과 부족은 빈 결과로 처리하며 무제한 추가 검색하지 않는다. 검색 결과 수 제한으로 인한 recall 저하는 측정한다. W15에서 이 필터가 구현되기 전 새 writer 활성화는 차단한다.
+- legacy 문서는 일반 Wiki 자료로만 검색하며 제목·내용·category로 기억 소유권을 추정하거나 새 메타데이터로 승격하지 않는다. 일반 문서와 legacy 기억이 섞인 경우 자동 분리하지 않는다. Client에서 한정된 Wiki 검색 후보를 조회해 정확 중복 가능성을 보류할 수는 있지만, 검색 누락이 없다는 보장은 없다. 따라서 **legacy 전체에 대한 전역 중복 방지는 미보장**이며 불확실하면 새 쓰기를 보류한다.
+- 외부 편집/삭제 감지는 Wiki 서버가 제공하는 검증 가능한 revision 비교를 요구한다. mismatch·404·검증 불가는 active를 `quarantined`로 바꾸고 문서 tombstone을 유지한다. 단순 타임스탬프 비교나 캐시만으로 변경 없음이 증명됐다고 간주하지 않는다. 검증 시점과 이후 외부 편집 사이의 경합은 W12 CAS 및 조회 경로 설계가 해결해야 하며, 실제 계약이 없으면 활성 쓰기/주입은 차단한다.
+
+| 시나리오 | 결정 및 transaction 경계 |
+| --- | --- |
+| 신규 생성 | 신원·단일 속성·출처 검증 → 슬롯 claim → Wiki 성공 확인 → active 전환 |
+| 정확 중복 | 동일 슬롯·정규화 값 및 원 필드 확인 후 Wiki 쓰기 없이 기존 active 유지 |
+| 명시 정정 | 동일 슬롯의 기존 active와 명확한 새 값 확인; 새 문서 확인 후 이전 superseded와 새 active를 원자 전환 |
+| 상충·모호 | 자동 덮어쓰기 없이 conflict/ambiguous 보류; unknown claim도 해제하지 않음 |
+| 대화/출처 삭제 | 같은 DB transaction에서 관련 값 redaction·문서 격리 후 대화 삭제; Wiki 문서는 보존 |
+| Wiki 외부 편집/삭제 | revision 불일치/404/검증 실패 시 격리; 자동 재작성·이전 버전 복원 금지 |
+| 응답 유실/부분 성공 | operation unknown 유지, Wiki 결과 조회로만 확인; 기존 active 유지, 새 문서 일반 검색 제외 |
+| Wiki 성공 후 Client commit 실패 | confirmed 또는 unknown을 유지해 재조회 후 단일 transaction 적용; 임의 재전송 금지 |
+
 ### 4.3 API와 출처
 
 - 기존 문서 CRUD, draft, wiki-memory 기본 요청/응답 유지.
@@ -255,21 +354,30 @@ W12~W14를 시작하려면 다음 중 하나가 필요하다.
 
 ### 2차: 중복·갱신과 Wiki 계약
 
-#### W08 [ ] 기억 메타데이터 스키마·소유 범위 계약 확정
+#### W08 [x] 기억 메타데이터 스키마·소유 범위 계약 확정
 
 - 의존: W00, W03, W04.
 - 대상: 이 문서 §4.2, [wiki-integration.md](wiki-integration.md). 이 Task는 설계 문서만 수정.
 - 작업: 기존 DB 보조 테이블 DDL 초안, unique/index, scope/subject 판정, source 삭제 정책, operation 상태 전이, legacy 검색 방식을 확정. 일반 문서와 기억 간 경계 명시.
 - 완료: 이후 구현자가 필드·삭제 정책·개인 식별 규칙을 새로 결정할 필요 없음. 신규 저장소 불필요 근거 기록.
 - 검증: 생성/중복/갱신/충돌/대화 삭제/Wiki 외부 편집/부분 성공 시나리오를 표로 점검. 미확정 정책은 W09 차단 조건.
+- 결과: §4.2.1~4.2.3에 소유 범위, 삭제·격리, DDL/index, operation 상태 및 검색 경계를 명세했다. 고정 predicate 사전은 미확정으로 남기고 W09 claim/유일성 완료 판정과 W10 연동·writer 활성화를 차단한다. Wiki CAS/멱등성·결과 조회와 검색 필터가 없으므로 W12~W15 검증 전 새 writer를 활성화하지 않는다. W09는 로컬 repository만 구현한다.
+- 검증: 생성·정확 중복·정정·충돌·출처 삭제·외부 편집·부분 성공을 설계 표로 점검했다. 이 작업은 문서만 변경하며 migration·운영 DB·서비스·Wiki를 실행하거나 변경하지 않았다.
 
-#### W09 [ ] 기존 DB에 메타데이터와 repository 구현
+#### W09 [ ] 기존 DB에 메타데이터와 repository 구현 — 진행 중
 
 - 의존: W08.
 - 대상: [db.py](../../backend/app/db.py), 신규 `backend/app/memory_repository.py`, 신규 `tests/test_memory_repository.py`.
 - 작업: 추가 migration·조회·claim·유일성 제약·활성 전환 transaction 구현. 기존 문서 import/backfill 금지.
 - 완료: 과거 데이터 불변, 새 DB 파일 없음, DB 연결을 잡은 채 HTTP/LLM await하지 않음.
 - 검증: old-schema upgrade 반복, 동시 claim/unique 충돌, rollback, source 삭제 정책, 비활성 버전 조회 제외.
+- 기반: [db.py](../../backend/app/db.py)에 기존 DB에만 추가되는 migration 16과 W08 테이블·인덱스를 작성했다. 이후 아래와 같이 repository 및 대화 삭제 처리를 추가했다. 새 writer에는 연결하지 않았다.
+- 범위 정정: 개인 기억 및 여러 기기·선호 지원은 §4.2.1a의 후속 TODO이며 현재 W09 범위에 넣지 않는다. 현행 초안의 공유 scope·단일 active 제약을 적용하고, 고정 속성 사전 미확정 차단 조건은 유지한다.
+- 추가 진행: [memory_repository.py](../../backend/app/memory_repository.py)에 공유 대상 `bc250_server`의 `operating_system`, `backup_path`, `backup_frequency`와 `bc250_client`의 `service_port`만 허용하는 초기 키 사전 및 짧은 transaction의 claim·상태 전이·활성 전환을 추가했다. 사용자 원문 span을 검증하고 출처 삭제 시 [main.py](../../backend/app/main.py)의 대화 삭제 transaction에서 redaction·Wiki 문서 격리를 수행한다. 현재는 writer/API의 새 기억 경로에 연결하지 않았다. 향후 개인 scope·다중값은 후속 migration과 별도 계약으로 확장하며 기존 공유 slot의 의미를 자동 변경하지 않는다.
+- 미완료: 위 사전은 자연어에서 해당 키로의 안전한 매핑·모호성 회귀가 아직 없으므로 확정된 자동 분류 사전이 아니다. 동시 claim·정정 rollback과 출처 삭제를 검증했지만 서버 operation 증거 검증, 삭제 중 쓰기 결과 불명 복구, 메시지 단독 삭제 경로의 redaction 계약, 서버 CAS/멱등성, 활성화 전 통합 검증이 남아 W09 완료 및 새 writer 연결은 보류한다. `confirmed`/`apply_confirmed`는 서버 증거 확인을 호출자에게 위임하는 내부 부품이며 현재 엔드포인트에서 사용할 수 없다.
+- 추가 검증: 임시 SQLite·mock만 이용한 repository, 기존 기억 및 모델 전환 회귀 **46 passed**. 동시 claim 1건 허용, 출처가 assistant인 후보 거부, unknown 재전송 전이 거부, 명시 정정의 활성 대상 변경 시 rollback과 대화 삭제 시 redaction·격리를 확인했다. 운영 DB·Wiki·서비스는 변경하지 않았다.
+- 후속 안전성 검증: 사용자 메시지 범위를 벗어난 span·boolean index와 이미 격리된 Wiki 문서의 재사용을 거절한다. 전송 중 대화 삭제 시 결과를 unknown으로 남기며 삭제된 출처를 다시 활성화하지 않는다. 이 경우 결과 조회·문서 격리 복구는 Wiki 서버 계약이 준비될 때까지 미구현이다. 관련 임시 DB 회귀 **51 passed**. 자연어→속성 매핑과 모호성 검증은 W10 이후, 서버 결과 증거·복구는 W12~W14 이후에 연결하며 현재 저장소를 운영 writer에 연결하지 않는다.
+- 검증: 임시 DB에서 v15 형태로 되돌린 fixture의 반복 upgrade, legacy 내용 보존, active unique 충돌, 비활성 조회 제외, 직접 대화 삭제 실패를 확인했다. `.venv/bin/python -m pytest tests/test_memory_repository.py tests/test_wiki_memory.py tests/test_api.py::test_legacy_database_migrates_without_losing_conversation_data -q` **35 passed**. 운영 migration·서비스 재시작·Wiki 쓰기는 수행하지 않았다. 향후 이 코드 배포 후 startup에서는 migration 16이 실행된다.
 
 #### W10 [ ] 정확 중복·충돌 판정 순수 함수
 
@@ -321,11 +429,20 @@ W12~W14를 시작하려면 다음 중 하나가 필요하다.
 - 완료: legacy 문서 불변, 삭제/만료/비활성 기억 오주입 방지, 불충분 근거 안내, 실제 context 준수.
 - 검증: 한국어 조사·후속 질문·긴 문서·무관한 제목·검색 없음·오류·문서 지시 injection·4K/16K profile mock. 기존 대비 Recall@3/무관 근거율 기록.
 
+##### W15-Q0~Q6 [ ] 검색어 정규화·Alias 세부 작업
+
+- 사용자 보고: `bc250 ai 서버가 뭐야?`는 성공하지만 `bc250 이 뭐야?`는 실패한다. 운영 재현은 미실시다.
+- [검색어 정규화·Alias 개선 계획](wiki-query-alias-plan.md)에 Client 코드 근거, FTS5의 조건부 토큰화 분석, 정확 Alias→FTS5→제한 확장 전략, 신구 응답 호환, 단계별 수정 대상·의존·완료 조건·테스트·롤백을 기록했다.
+- 순서: Q0 서버 계약 조사 → Q1 질문/표기 정규화 → Q2 Alias 수명주기 → Q3 단계 검색 → Q4 Client/발췌 → Q5 근거 메타데이터(W16 연계) → Q6 평가. 각 Task는 별도로 실행하며 서버 수정 경로는 Q0 확인 전 확정하지 않는다.
+- Q0~Q3의 검색 설계·격리 검증은 W14와 독립적으로 진행 가능하다. W15의 기억 문서 격리와 새 writer 활성화 차단 조건은 유지한다.
+- 완료 기준: `bc250`, `bc-250`, `BC 250`, `bc250 ai 서버`가 비충돌 Alias fixture에서 같은 문서 Top1; 기존 성공 질의 Recall@3·무관 결과율·지연 회귀 기준 충족. 새 LLM/벡터 DB 도입 없음. 현재는 계획만 반영했고 코드·DB·운영 설정은 변경하지 않았다.
+
 #### W16 [ ] 출처 메타데이터 API·본문 분리
 
 - 의존: W15.
 - 대상: [main.py](../../backend/app/main.py), [db.py](../../backend/app/db.py), [api.ts](../../frontend/src/api.ts), [test_api.py](../../tests/test_api.py).
 - 작업: 새 요청의 명시적 opt-in 계약과 저장 출처 스키마 구현. retrieved/provided/cited 구분. 기존 답변 수정 없음. 새 모드의 다음 턴에는 출처 JSON 본문 재주입 없음.
+- W15-Q5 연계: 검색 일치 단계·Alias는 retrieved 진단이며 답변 근거가 아니다. provided는 최종 payload 기준, cited는 전달한 문서 ID와 대조한다. ID 일치만으로 주장과 발췌의 의미 일치까지 검증됐다고 표시하지 않는다. 상세 계약은 [Alias 계획 §5](wiki-query-alias-plan.md#5-기존-문서인덱스api-호환)를 따른다.
 - 완료: stream/nonstream·이력 조회 동일 출처, 구형 요청 기본 형식 유지. 문서 버전/발췌는 답변 생성 시점 기준.
 - 검증: 전달되지 않은 ID 인용, 최종 프롬프트에서 제거된 자료, 문서 사후 변경/삭제, 구형 클라이언트, 재로딩·request 중복. 기존 legacy 답변의 자동 재작성/문자열 휴리스틱 삭제 금지.
 
@@ -399,6 +516,11 @@ Python 실행기는 저장소에 이미 준비된 테스트 환경에 맞춘다.
 | 2026-11-12 | W05 기억 결과 UI 축소·상세화 | 완료(실행 검증 일부 미완료) | [WikiMemoryStatus.tsx](../../frontend/src/components/WikiMemoryStatus.tsx)로 기본 상태와 대화상자 상세를 분리하고, [WikiMemoryStatus.test.tsx](../../frontend/tests/WikiMemoryStatus.test.tsx)를 추가. Problems·diff 검사 통과. `node`/`npm` 부재로 Vitest·lint·build 및 브라우저 시각 검증은 미실행 | W06 |
 | 2026-11-12 | W06 메시지 viewport·최신 이동·표 스크롤 | 완료(시각 검증 미완료) | [MessageList.tsx](../../frontend/src/components/MessageList.tsx)의 viewport 오버레이와 [MarkdownContent.tsx](../../frontend/src/components/MarkdownContent.tsx)의 표 스크롤 컨테이너를 추가. Problems·diff 검사 통과. `node`/`npm`, Client 서버, 브라우저 실행기 부재로 Vitest·lint·build·네 viewport 시각 검증은 미실행 | W07 |
 | 2026-11-12 | W07 1차 통합 회귀·상태 기록 | 완료(Frontend/stream 시각 검증 미완료) | fake Wiki·mock LLM 이력 연결 [test_wiki_memory_integration.py](../../tests/test_wiki_memory_integration.py)를 추가하고 관련 backend 회귀 **41 passed**. snapshot/invalid epoch API 테스트 2건 통과. stale-epoch stream은 20초 무출력 시간 제한, frontend 실행·시각 검증은 환경 부재로 미실행 | W08 |
+| 2026-11-12 | W08 기억 메타데이터·소유 범위 설계 | 완료(후속 차단 조건 명시) | §4.2에 SQLite DDL, 삭제·격리, 동시성·unknown·legacy 검색 계약과 시나리오 표를 작성. predicate 사전 미확정으로 W09 claim 완료 판정 차단; Wiki 원자성·검색 필터 전 writer 활성화 차단. 문서 검토만 수행 | predicate 사전 확정 후 W09 |
+| 2026-11-12 | W09 repository 기반 | 진행 중 | migration 16 및 비활성 writer의 활성 조회 추가. 임시 DB 관련 회귀 **35 passed**. claim·활성 전환 및 출처 redaction/정상 삭제 미구현, predicate 사전 확정 전 완료 차단 | 사전 확정 및 W09 잔여 구현 |
+| 2026-11-12 | 개인 기억 범위 결정 | 후속 TODO로 범위 정정 | 현 시점 1인 사용 맥락과 향후 가족 식별·개인 기억·여러 기기/선호 지원을 §4.2.1a에 보존. 현재 W09 구현 범위에는 포함하지 않음 | 현재 W09 범위 유지; 후속 작업 별도 착수 |
+| 2026-11-12 | W09 repository 추가 구현 | 진행 중 | 공유 단일값 사전 초안, claim·상태 전이·활성 전환·대화 삭제 시 redaction/격리. 관련 테스트 **46 passed**. 자동 매핑 모호성·서버 증거 및 단독 메시지 삭제 등 미완료 | W09 차단 항목 해소 후 완료 판단 |
+| 2026-11-12 | W09 저장소 안전성 후속 검증 | 진행 중 | span 경계 및 격리된 문서 ID 재사용 거절, 전송 중 출처 삭제 시 unknown 보존 회귀 추가. 관련 테스트 **51 passed**. 자연어 매핑과 서버 결과 증거·unknown 복구는 후속 계약 필요 | W10 매핑 설계 및 W12~W14 서버 계약 확인 |
 
 Task 완료 시 아래 형식으로 덧붙인다:
 
