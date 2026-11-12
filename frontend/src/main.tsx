@@ -1,8 +1,9 @@
 import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ApiError, newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength } from './api';
+import { ApiError, newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength, type WikiMemoryJob } from './api';
 import { MessageList } from './components/MessageList';
 import { ModelControl } from './components/ModelControl';
+import { WikiMemoryStatus } from './components/WikiMemoryStatus';
 import './image-prompt.css';
 import './style.css';
 import './scroll.css';
@@ -111,7 +112,7 @@ export function App() {
   const [systemView, setSystemView] = useState(false);
   const [wikiEnabled, setWikiEnabled] = useState(() => { try { return localStorage.getItem('bc250-wiki-search') === 'true'; } catch { return false; } });
   const [wikiAutoUpdate, setWikiAutoUpdate] = useState(() => { try { return localStorage.getItem('bc250-wiki-auto') !== 'false'; } catch { return true; } });
-  const [wikiMemory, setWikiMemory] = useState<{ generation_id: string; status: string; action: string | null; title: string | null; document_id: number | null; source_text: string | null; explicit: number; previous_content: string | null; proposed_content: string | null; error_message: string | null }[]>([]);
+  const [wikiMemory, setWikiMemory] = useState<WikiMemoryJob[]>([]);
   const [newDialog, setNewDialog] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
@@ -470,13 +471,7 @@ export function App() {
           {active.mode === 'quick' && <div><label><input type="checkbox" checked={wikiEnabled} disabled={busy} onChange={event => { const value = event.target.checked; setWikiEnabled(value); try { localStorage.setItem('bc250-wiki-search', String(value)); } catch { /* Storage may be disabled. */ } }} /> Wiki 검색 참고</label>{' '}
             <label><input type="checkbox" checked={wikiAutoUpdate} disabled={busy} onChange={event => { const value = event.target.checked; setWikiAutoUpdate(value); try { localStorage.setItem('bc250-wiki-auto', String(value)); } catch { /* Storage may be disabled. */ } }} /> Wiki 자동 기억</label>
             <small> 켜면 사용자 발언에서 LLM이 고른 원문을 Wiki에 저장할 수 있습니다. 명시적인 기억 요청은 꺼져 있어도 처리합니다.</small>
-            {wikiMemory.length > 0 && <p role="status">최근 기억 처리: {({ pending: '대기 중', running: '판단 중', writing: '저장 중', completed: '저장 완료', skipped: '저장할 내용 없음', failed: '처리 실패', unknown: '저장 결과 확인 필요' } as Record<string, string>)[wikiMemory[0].status] || wikiMemory[0].status}{wikiMemory[0].source_text ? ' · ' + wikiMemory[0].source_text : ''}{wikiMemory[0].error_message ? ' · ' + wikiMemory[0].error_message : ''}</p>}
-            {wikiMemory.length > 0 && <details><summary>Wiki 자동 기억 기록</summary>{wikiMemory.map(job => <div key={job.generation_id}>
-              <p>{({ pending: '대기 중', running: '판단 중', writing: '저장 중', completed: '저장 완료', skipped: '저장할 내용 없음', failed: '처리 실패', unknown: '저장 결과 확인 필요' } as Record<string, string>)[job.status] || job.status}{job.title ? ' · ' + job.title : ''}{job.document_id ? ' (문서 ' + job.document_id + ')' : ''}</p>
-              {job.source_text && <p>저장할 발언: {job.source_text}</p>}{job.error_message && <p>{job.error_message}</p>}
-              {job.previous_content && <details><summary>변경 전 본문</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{job.previous_content}</pre></details>}
-              {job.proposed_content && <details><summary>저장 시도한 본문</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{job.proposed_content}</pre></details>}
-            </div>)}</details>}
+            <WikiMemoryStatus jobs={wikiMemory} />
           </div>}
           {active.mode === 'image_prompt' && <details className="image-compose-disclosure"><summary>프롬프트 설정 · {promptMode === 'ai_optimized' ? 'AI 최적화' : promptMode === 'direct_translation' ? '직접 번역' : '원본 그대로'} · {imageCapabilities?.models.find(model => model.model_id === imageModelId)?.display_name || '추천받기'}</summary><div className="image-compose-settings" aria-label="이미지 프롬프트 작성 설정">
             <div className="image-compose-heading"><span className="image-compose-icon" aria-hidden="true">✦</span><div><strong>프롬프트 설정</strong><small>원하는 방식과 모델을 선택하세요</small></div></div>

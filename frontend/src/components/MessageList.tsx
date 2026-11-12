@@ -77,22 +77,24 @@ export function MessageList({ mode, messages, hasMore, onLoadOlder, scrollSignal
     }
   };
 
-  return <div className="messages" ref={parentRef} onScroll={() => {
-    const element = parentRef.current;
-    if (!element) return;
-    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_THRESHOLD_PX;
-    followingRef.current = atBottom;
-    setFollowing(atBottom);
-    if (element.scrollTop < FOLLOW_THRESHOLD_PX) void loadOlder();
-  }}>
-    <div className="virtual-spacer" style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-      {virtualizer.getVirtualItems().map(item => {
-        const message = messages[item.index];
-        return <div key={message.id} ref={virtualizer.measureElement} data-index={item.index} className="virtual-message" style={{ transform: 'translateY(' + item.start + 'px)' }}>
-          <ChatMessage message={message} mode={mode} conversationId={conversationId}
-            imageCards={{ capabilities: imageCapabilities, drafts: imageDrafts, onEnsureDraft: onEnsureImageDraft, onUpdateDraft: onUpdateImageDraft, onPersistDraft: onPersistImageDraft, onSubmitImageJob, jobs: imageJobs, onCancelImageJob }} />
-        </div>;
-      })}
+  return <div className="message-viewport">
+    <div className="messages" ref={parentRef} onScroll={() => {
+      const element = parentRef.current;
+      if (!element) return;
+      const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_THRESHOLD_PX;
+      followingRef.current = atBottom;
+      setFollowing(atBottom);
+      if (element.scrollTop < FOLLOW_THRESHOLD_PX) void loadOlder();
+    }}>
+      <div className="virtual-spacer" style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {virtualizer.getVirtualItems().map(item => {
+          const message = messages[item.index];
+          return <div key={message.id} ref={virtualizer.measureElement} data-index={item.index} className="virtual-message" style={{ transform: 'translateY(' + item.start + 'px)' }}>
+            <ChatMessage message={message} mode={mode} conversationId={conversationId}
+              imageCards={{ capabilities: imageCapabilities, drafts: imageDrafts, onEnsureDraft: onEnsureImageDraft, onUpdateDraft: onUpdateImageDraft, onPersistDraft: onPersistImageDraft, onSubmitImageJob, jobs: imageJobs, onCancelImageJob }} />
+          </div>;
+        })}
+      </div>
     </div>
     {!following && <button className="jump-latest" onClick={scrollToLatest}>최신 메시지로</button>}
   </div>;

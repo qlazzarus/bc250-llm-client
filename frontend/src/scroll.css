@@ -1,5 +1,7 @@
-.jump-latest{position:sticky;bottom:12px;left:50%;transform:translateX(-50%);display:block;margin:0 auto;background:#284b72;box-shadow:0 3px 16px #0008}
-.virtual-message{position:absolute;top:0;left:0;width:100%}.virtual-message article{max-width:760px;margin:0 0 18px;padding:12px 16px;border-radius:10px;background:#1a222d}.virtual-message .user{margin-left:auto;background:#1c416d}
+.message-viewport{position:relative;display:flex;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
+.message-viewport .messages{flex:1 1 auto;height:100%;min-width:0;padding-bottom:84px}
+.jump-latest{position:absolute;z-index:1;bottom:16px;left:50%;transform:translateX(-50%);background:#284b72;box-shadow:0 3px 16px #0008;white-space:nowrap}
+.virtual-message{position:absolute;top:0;left:0;width:100%;min-width:0}.virtual-message article{max-width:760px;min-width:0;margin:0 0 18px;padding:12px 16px;border-radius:10px;background:#1a222d}.virtual-message .user{margin-left:auto;background:#1c416d}
 
 /* Keep the application in the viewport; each pane owns its scrolling. */
 .layout{height:100vh;height:100dvh;min-height:0;overflow:hidden}
@@ -7,7 +9,7 @@
 .layout aside> :not(nav){flex-shrink:0}
 .layout aside nav{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .chat{min-height:0;overflow:hidden}
-.messages{min-height:0;overscroll-behavior:contain}
+.messages{min-height:0;overscroll-behavior:contain;overflow-x:hidden}
 .composer-panel{flex-shrink:0;border-top:1px solid #293443;padding:14px 5% 16px;background:#10151c}
 .composer-panel .composer{border:0;padding:0}
 
@@ -26,6 +28,9 @@
 .modal-dialog{padding:0;border:0;background:transparent;color:inherit;max-width:calc(100% - 24px);max-height:calc(100dvh - 24px);overflow:visible}
 .modal-dialog::backdrop{background:#000a}
 .modal-dialog .modal{max-height:calc(100dvh - 24px)}
+.wiki-memory-dialog{width:min(760px,calc(100% - 24px))}
+.wiki-memory-history{width:100%;overflow:hidden}
+.wiki-memory-records{min-height:0;overflow-y:auto;overscroll-behavior:contain;display:grid;gap:10px}
 .image-compose-disclosure,.image-options-disclosure{min-width:0}
 .image-compose-disclosure>summary,.image-options-disclosure>summary{cursor:pointer;padding:8px 10px;color:#c7ddf5;overflow-wrap:anywhere}
 .image-compose-settings{margin-bottom:8px}

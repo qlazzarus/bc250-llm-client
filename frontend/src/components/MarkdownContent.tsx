@@ -54,6 +54,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
     components={{
       a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noreferrer">{children}</a> : <>{children}</>,
       img: ({ alt }) => <span className="markdown-image-blocked">[이미지 미리보기 비활성화{alt ? ': ' + alt : ''}]</span>,
+      table: ({ children }) => <div className="markdown-table-scroll"><table>{children}</table></div>,
       pre: ({ children }) => <>{children}</>,
       code: ({ className, children }) => <CodeBlock className={className}>{children}</CodeBlock>,
     }}

@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-LATEST_SCHEMA_VERSION = 14
+LATEST_SCHEMA_VERSION = 15
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS wiki_memory_jobs (
  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
  status TEXT NOT NULL, action TEXT, document_id INTEGER, title TEXT, source_text TEXT,
  previous_content TEXT, proposed_content TEXT, error_message TEXT,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ explicit INTEGER NOT NULL DEFAULT 0, source_message_id TEXT,
+ memory_kind TEXT, reason_code TEXT, needs_attention INTEGER, policy_version INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_wiki_memory_conversation ON wiki_memory_jobs(conversation_id, created_at);
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -91,6 +93,7 @@ def initialize(path: str) -> None:
             connection.execute("ALTER TABLE wiki_memory_jobs ADD COLUMN explicit INTEGER NOT NULL DEFAULT 0")
         if "source_message_id" not in columns:
             connection.execute("ALTER TABLE wiki_memory_jobs ADD COLUMN source_message_id TEXT")
+        _apply_wiki_memory_metadata_migration(connection)
 
 
 def _apply_conversation_mode_migration(connection: sqlite3.Connection) -> None:
@@ -280,3 +283,17 @@ def _apply_title_migration(connection: sqlite3.Connection) -> None:
     if "title_pending" not in columns:
         connection.execute("ALTER TABLE conversations ADD COLUMN title_pending INTEGER NOT NULL DEFAULT 0")
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (14)")
+
+
+def _apply_wiki_memory_metadata_migration(connection: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(wiki_memory_jobs)")}
+    additions = {
+        "memory_kind": "TEXT",
+        "reason_code": "TEXT",
+        "needs_attention": "INTEGER",
+        "policy_version": "INTEGER",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE wiki_memory_jobs ADD COLUMN {name} {definition}")
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (15)")

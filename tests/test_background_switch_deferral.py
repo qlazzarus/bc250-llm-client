@@ -46,7 +46,7 @@ async def test_background_preflight_waits_for_switch_and_uses_new_epoch(tmp_path
         assert request.headers.get('x-model-epoch') == 'b' * 32
         if request.url.path.endswith('/input_tokens'): return httpx.Response(200, json={'input_tokens': 20})
         if job == 'title': result = 'new title'
-        else: result = json.dumps({'action': 'none', 'source_text': '', 'title': '', 'document_id': None, 'old_text': None})
+        else: result = json.dumps({'action': 'none', 'kind': 'uncertain', 'reason': 'insufficient_context', 'source_text': '', 'source_message_id': None, 'title': '', 'document_id': None, 'old_text': None})
         return httpx.Response(200, json={'choices': [{'message': {'content': result}}]})
     original = httpx.AsyncClient
     monkeypatch.setattr(main, 'resolve_gate_model', resolve)
@@ -66,7 +66,8 @@ async def test_background_preflight_waits_for_switch_and_uses_new_epoch(tmp_path
     if job == 'wiki':
         assert len(wiki_calls) >= 2  # Re-read search results after waiting.
         with connect(settings.database_path) as db:
-            assert db.execute("SELECT status FROM wiki_memory_jobs WHERE generation_id='g'").fetchone()[0] == 'skipped'
+            row = db.execute("SELECT status,memory_kind,reason_code,needs_attention,policy_version FROM wiki_memory_jobs WHERE generation_id='g'").fetchone()
+        assert tuple(row) == ('skipped', 'uncertain', 'insufficient_context', 0, 1)
     else:
         with connect(settings.database_path) as db:
             assert db.execute("SELECT title FROM conversations WHERE id='c'").fetchone()[0] == 'new title'

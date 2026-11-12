@@ -18,3 +18,20 @@
 기억 테스트: 명시 요청, 현재 발언만으로 기억, 직전 발언을 가리키는 명시 요청, 정정 대상이 한 번만 존재하는 경우와 여러 번 존재하는 경우, 중복, 관련 문서 없음, 서버 연결 실패, 쓰기 응답 유실, 이미지·롤플레잉 제외를 각각 검증한다. 생성 결과뿐 아니라 실제 저장된 본문과 변경 전 기록을 확인한다. 비밀번호·인증정보 및 민감정보 요청의 저장 여부를 확인하되 모델의 지시 준수만으로 완전한 차단을 보장하지 않는다.
 
 BC-250의 실제 문서와 질문 20~30개를 별도로 추가해 상위 3개 검색 성공률, 무관한 문서와 응답 지연을 기록한다. 민감한 운영 문서는 테스트 데이터에 복사하지 않는다. 실제 서버 결과는 아직 수집하지 않았다.
+
+## 1차 회귀 실행 기록 (2026-11-12)
+
+임시 SQLite, fake Wiki, mock LLM으로 Client의 기억 작업과 `GET /conversations/{id}/wiki-memory` 라우트 함수를 연결해 확인했다. 운영 Wiki 문서·운영 DB·모델에는 요청하지 않았다.
+
+| 시나리오 | 결과 | 근거 |
+| --- | --- | --- |
+| 사실 선호 저장 → UI 이력 입력 | 통과 | fake Wiki `POST` 1회와 `completed`/`preference`/`stored` 이력 응답 확인 |
+| 질문 원문 자동 저장 차단 → UI 이력 입력 | 통과 | 완료 처리 뒤 작업·이력 모두 0건 |
+| 혼합 추천 요청 전체 원문 | 통과 | 작업은 `skipped`, Wiki 쓰기 0회 |
+| 혼합 발언의 최소 사실 절 | 통과 | 최소 절만 `completed`, fake Wiki에 그 절만 전달 |
+| unknown 쓰기 결과 재시도 | 통과 | 최초 `GET`/`POST` 뒤 `unknown`으로 남고 재전송 없음 |
+| 모델 epoch 전환 중 백그라운드 기억 | 통과 | 대기 후 새 epoch에서 추론 1회, Wiki 재검색 |
+
+실행 결과: `.venv/bin/python -m pytest tests/test_wiki.py tests/test_wiki_memory.py tests/test_wiki_memory_integration.py tests/test_background_switch_deferral.py -q`는 **41 passed**였다. API snapshot 충돌·잘못된 epoch 두 건도 별도 실행에서 통과했다. `test_stale_epoch_fails_stream_without_retry`와 전체 `test_api.py`는 20초 이상 무출력으로 시간 제한 종료되어 미완료다.
+
+프런트엔드 Vitest/lint/build와 실제 네 viewport의 입력·전송·스크롤 검증은 이 환경의 `node`/`npm` 및 실행 중인 Client 서버 부재로 미실행이다. 이 기록은 UI가 받는 이력 데이터 계약만 확인하며 실제 브라우저 레이아웃 통과를 의미하지 않는다.

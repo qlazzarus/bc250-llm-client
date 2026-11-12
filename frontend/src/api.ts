@@ -19,6 +19,12 @@ export type Generation = {
   error: { code: string; message: string } | null; model_id: string | null; requested_max_tokens: number | null;
   estimated_input_tokens: number | null; usage: Record<string, number> | null; queue_duration_ms: number | null; generation_duration_ms: number | null;
 };
+export type WikiMemoryJob = {
+  generation_id: string; status: string; action: string | null; document_id: number | null; title: string | null;
+  source_text: string | null; source_message_id: string | null; previous_content: string | null; proposed_content: string | null;
+  error_message: string | null; explicit: number; memory_kind: 'fact' | 'preference' | 'plan' | 'question' | 'uncertain' | null;
+  reason_code: string | null; needs_attention: number | null; policy_version: number | null; created_at: string; updated_at: string;
+};
 export type GenerationOption = { mode: string; default?: number | string | null; allowed_values?: (number | string)[]; minimum?: number; maximum?: number; note?: string; requires?: Record<string, (number | string)[]> };
 export type ImageModel = {
   model_id: string; display_name: string; supported_resolutions: number[][]; execution_enabled: boolean;

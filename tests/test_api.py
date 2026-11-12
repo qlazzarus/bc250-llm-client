@@ -323,7 +323,7 @@ def test_legacy_database_migrates_without_losing_conversation_data(tmp_path):
     assert old_image["mode_settings"] == '{"style": "legacy"}'
     assert old_image["summary"] == "old summary"
     assert old_roleplay["context_policy"] == "recent"
-    assert [row["version"] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    assert [row["version"] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 
 def test_image_draft_revision_validation_and_image_job_deletion_guard(monkeypatch):
