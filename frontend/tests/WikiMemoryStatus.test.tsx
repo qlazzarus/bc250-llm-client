@@ -11,15 +11,36 @@ const base = (overrides: Partial<WikiMemoryJob> = {}): WikiMemoryJob => ({
   needs_attention: 0, policy_version: 1, created_at: '2026-11-12T00:00:00Z', updated_at: '2026-11-12T00:00:00Z', ...overrides,
 });
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+const showModalDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal');
+const closeDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close');
+
+function installDialogMocks() {
+  const showModal = vi.fn(function (this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    this.querySelector<HTMLElement>('button')?.focus();
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, writable: true, value: showModal });
+  Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, writable: true, value: function (this: HTMLDialogElement) { this.removeAttribute('open'); } });
+  return showModal;
+}
+
+afterEach(() => {
+  cleanup();
+  if (showModalDescriptor) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', showModalDescriptor);
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
+  if (closeDescriptor) Object.defineProperty(HTMLDialogElement.prototype, 'close', closeDescriptor);
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
+  vi.restoreAllMocks();
+});
 
 it('keeps completed source text out of the default panel and exposes it only in the detail dialog', () => {
-  const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal').mockImplementation(function (this: HTMLDialogElement) { this.setAttribute('open', ''); });
+  const showModal = installDialogMocks();
   render(<WikiMemoryStatus jobs={[base()]} />);
   expect(screen.queryByText('내 휴대폰은 예시 기기입니다.')).toBeNull();
   const trigger = screen.getByRole('button', { name: /Wiki 자동 기억 기록/ });
   trigger.focus(); fireEvent.click(trigger);
   expect(showModal).toHaveBeenCalled();
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: '닫기' }));
   expect(screen.getByText('내 휴대폰은 예시 기기입니다.')).toBeTruthy();
   fireEvent.cancel(screen.getByRole('dialog'));
   expect(screen.queryByRole('dialog')).toBeNull();
@@ -36,7 +57,7 @@ it('prioritizes an earlier unknown result over a newer skipped result', () => {
 });
 
 it('keeps a long history behind the detail dialog', () => {
-  vi.spyOn(HTMLDialogElement.prototype, 'showModal').mockImplementation(function (this: HTMLDialogElement) { this.setAttribute('open', ''); });
+  installDialogMocks();
   const jobs = Array.from({ length: 30 }, (_, index) => base({ generation_id: `g${index}`, title: `기록 ${index}`, source_text: `원문 ${index}` }));
   render(<WikiMemoryStatus jobs={jobs} />);
   expect(screen.queryByText('원문 0')).toBeNull();
