@@ -35,8 +35,8 @@ def cases():
          'negative_prompt empty, recommendation_reason simple.',
          text_response_format(['z-image-nsfw-v2']),
          lambda content: apply_balanced_preset(content, ['z-image-nsfw-v2'])),
-        ('memory_schema', 'Return JSON with action none, source_text empty, title empty, '
-         'document_id null and old_text null.', memory_schema,
+        ('memory_schema', 'Return JSON with action none, kind uncertain, reason insufficient_context, '
+         'source_text empty, source_message_id null, title empty, document_id null and old_text null.', memory_schema,
          lambda content: MemoryDecision.model_validate_json(content)),
     ]
 

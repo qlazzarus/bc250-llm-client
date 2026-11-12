@@ -34,7 +34,8 @@ def make_transport(*, fail=None):
                 'aspect_ratio': None}),
             'image_prompt_text': json.dumps({'model_id': 'z-image-nsfw-v2', 'prompt': 'blue sky',
                                               'negative_prompt': '', 'recommendation_reason': 'simple'}),
-            'wiki_memory': json.dumps({'action': 'none', 'source_text': '', 'title': '',
+            'wiki_memory': json.dumps({'action': 'none', 'kind': 'uncertain', 'reason': 'insufficient_context',
+                                       'source_text': '', 'source_message_id': None, 'title': '',
                                        'document_id': None, 'old_text': None}),
         }[name]
         message = {'content': content}
