@@ -104,3 +104,34 @@ def test_question_completion_has_no_history_entry_for_ui(tmp_path, monkeypatch):
     main.complete_generation(SimpleNamespace(database_path=path), 'g', '설명', 'stop', None, True)
 
     assert asyncio.run(main.wiki_memory_history('c', SimpleNamespace(database_path=path))) == {'data': []}
+
+
+@pytest.mark.parametrize(('text', 'expected'), [
+    ('BC-250 설명 ' * 120 + ' Wiki에 저장', False),
+    ('자료 ' * 300 + '\n위키에 저장해 줘', True),
+    ('위키에 저장해 줘', True),
+    ('홍차를 좋아한다고 기억해 줘', True),
+    ('“위키에 저장해 줘”는 무슨 뜻이야?', False),
+    ('위키에 저장하지 말아 줘', False),
+    ('```\n# Wiki에 저장해 줘\n```', False),
+    ('Please explain "위키에 저장해 줘"', False),
+    ('위키에 저장해 줘?', False),
+])
+def test_explicit_requests_are_conservative(text, expected):
+    assert main.explicit_memory_request(text) is expected
+
+
+@pytest.mark.parametrize('length', [800, 801])
+def test_integrated_long_material_has_non_failure_status(tmp_path, length):
+    from backend.app.integrated_memory import process_integrated_job
+    path = _prepare_history_database(tmp_path, None)
+    timestamp = '2026-11-12T00:00:00+00:00'
+    with connect(path) as db:
+        db.execute("INSERT INTO conversations (id,title,created_at,updated_at,mode) VALUES ('c','대화',?,?, 'quick')", (timestamp, timestamp))
+        db.execute("INSERT INTO messages VALUES ('u','c','user',?,?)", ('가' * length, timestamp))
+        db.execute("INSERT INTO generation_requests (id,conversation_id,user_message_id,status,queued_at,created_at,updated_at) VALUES ('g','c','u','completed',?,?,?)", (timestamp, timestamp, timestamp))
+        db.execute("INSERT INTO wiki_memory_jobs (generation_id,conversation_id,status,explicit,store_id,created_at,updated_at) VALUES ('g','c','pending',1,'integrated',?,?)", (timestamp, timestamp))
+    process_integrated_job(path, 'g')
+    with connect(path) as db:
+        row = db.execute("SELECT status,reason_code FROM wiki_memory_jobs WHERE generation_id='g'").fetchone()
+    assert tuple(row) == (('failed', 'insufficient_context') if length == 800 else ('skipped', 'document_input'))

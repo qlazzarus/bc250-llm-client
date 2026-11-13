@@ -67,8 +67,23 @@ def candidate_text_is_safe(decision: MemoryDecision) -> bool:
 
 
 def explicit_memory_request(text: str) -> bool:
-    """Recognize common direct requests; ambiguous language still uses model judgment."""
-    return bool(re.search(r"(?:기억해\s*(?:줘|두|라)?|기억하(?:고|여|도록)|기억(?:에|으로)?\s*(?:저장|남겨|기록)|(?:위키|wiki|기억)에?\s*(?:저장|기록|추가|수정)|(?:저장|기록)해\s*(?:줘|두))", text, re.IGNORECASE))
+    """Recognize direct, unquoted requests, leaving ambiguous material alone."""
+    text = text.strip()
+    if not text or re.search(r'[?？"\'“”‘’`]', text):
+        return False
+    if re.search(r'(?:기억|저장|기록|추가|수정)\s*(?:하지\s*(?:마|말)|안\s*해)|\b(?:do not|don\'t)\s+(?:remember|save|store)\b', text, re.I):
+        return False
+    # Long material may end in a separate request. Never infer one from its body.
+    if len(text) > 800:
+        lines = text.splitlines()
+        text = lines[-1].strip() if len(lines) > 1 else ''
+        if not re.fullmatch(r'(?:이(?:것|걸| 자료를)?\s*)?(?:위키|wiki|기억)에?\s*(?:저장|기록|추가)해\s*(?:줘|주세요)[.!]?', text, re.I):
+            return False
+    if '\n' in text:
+        return False
+    if re.search(r'(?:라는|이라고|라는\s*말|문구|표현|인용|예시|예를\s*들어|설명에서)', text):
+        return False
+    return bool(re.fullmatch(r'.{0,200}?(?:기억해\s*(?:줘|두세요|주세요|둬|라)|기억(?:에|으로)?\s*(?:저장|남겨|기록)해\s*(?:줘|주세요|둬)|(?:위키|wiki|기억)에?\s*(?:저장|기록|추가|수정)해\s*(?:줘|주세요|둬)|(?:저장|기록)해\s*(?:줘|주세요|둬))[.!]?', text, re.I))
 
 
 def automatic_memory_skip_reason(text: str) -> Literal["memory_opt_out", "obvious_question", "greeting_or_simple_request"] | None:

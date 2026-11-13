@@ -960,6 +960,11 @@ async def run_wiki_memory_job(settings: Settings, generation_id: str) -> None:
                 JOIN conversations c ON c.id=j.conversation_id WHERE j.generation_id=? AND j.store_id='legacy_external'""", (generation_id,)).fetchone()
             if not row or row["status"] != "pending" or row["mode"] != "quick":
                 return
+            if len(row["content"]) > 800:
+                db.execute("""UPDATE wiki_memory_jobs SET status='skipped',reason_code='document_input',needs_attention=?,
+                    error_message=?,updated_at=? WHERE generation_id=? AND status='pending'""",
+                    (int(bool(row['explicit'])), '긴 자료는 자동 기억으로 저장할 수 없습니다. 별도로 공유 Wiki 문서에 저장해 주세요.' if row['explicit'] else None, now(), generation_id))
+                return
             source = row["content"][:4000]
             skip_reason = automatic_memory_skip_reason(source)
             if skip_reason:

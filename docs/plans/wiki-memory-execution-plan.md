@@ -586,6 +586,8 @@ CREATE TABLE memory_document_quarantine (
 - 최종 검증: polling 네트워크 오류·늦은 작업 등록 포함 **3 passed**. 통합 기억은 단일 worker가 최대 32개씩 읽고 재시작 대기 작업 35개를 빠짐없이 처리하며 추가 LLM 추론은 없다. 모델 전환과 token budget 관련 격리 테스트 **30 passed**. 고정 자료 품질·검색 p50/p95 및 이력 전송량은 [평가 기록](wiki-search-evaluation.md)에 수치와 한계를 기록했다. 전체 backend는 `PYTHONPATH=.`로 **1043 passed, 3 skipped**, 최종 worker/인용 보완은 별도 집중 테스트로 확인했다. 프런트엔드 전체 **29 passed**, lint/build 통과.
 - 한계·롤백: 실제 BC-250 토크나이저·GPU/foreground 부하, 실제 모델의 인용 정확도와 의미적 근거 일치는 미측정이다. I09 리허설에서 실행 버전·DB 백업·단일 writer와 역전환을 확인한다. 문제가 생기면 통합 writer와 새 출처 opt-in을 비활성화하고 호환 코드를 복구하되, migration 21과 생성된 출처 데이터·대화는 삭제하지 않는다. 운영 전환·서비스 재시작은 수행하지 않았다.
 
+대화의 긴 자료를 공유 Wiki 문서로 저장하는 후속 개선은 별도 [대화 자료 Wiki 저장 실행 계획](wiki-conversation-document-tasks.md)의 D00~D05에서 진행한다. 기존 단일 속성 자동 기억과 운영 전환 단계는 유지한다.
+
 #### I09 [진행 중] 운영 전환 준비와 리허설
 
 - 의존: I08.
@@ -607,6 +609,7 @@ CREATE TABLE memory_document_quarantine (
 - 운영자 제공 설정: Wiki unit은 `/etc/systemd/system/bc250-family-wiki.service`, 작업 디렉터리는 `/opt/bc250-family-wiki`, drop-in은 공통 `/usr/lib/systemd/system/service.d/10-timeout-abort.conf`다. Caddy의 독립 `/wiki` redirect 및 `/wiki/*` reverse proxy가 제거 대상이며 `/llm`, `/api` 및 Studio fallback은 유지한다. 공통 drop-in은 삭제하지 않는다. 운영자가 정리 결과를 보고하기 전 실제 삭제·Caddy 반영 여부는 미확인이다.
 - 운영자가 Caddyfile을 직접 수정하고 Caddy를 reload했다. `caddy validate`는 유효하다고 보고했으며 Caddy·Client·Studio·gate·llama는 모두 active였다. 수정된 설정의 실제 내용은 아직 재확인하지 않았다. Family Wiki는 inactive/disabled지만 unit은 여전히 로드되어 있고, Wiki 디렉터리와 unit 삭제 실행은 아직 확인되지 않았다.
 - 이후 운영자가 `/opt/bc250-family-wiki`와 전용 unit 파일을 삭제하고 daemon-reload했다. `LoadState=not-found`와 디렉터리 부재를 확인했다. 이 디렉터리의 Wiki DB도 삭제된 것으로 취급하며 별도 백업 존재 여부는 미확인이다. 기존 Wiki 복구를 롤백의 전제로 삼지 않는다. Client DB와 구 Client는 유지된다.
+- 운영자 보고로 GitHub Actions 배포를 완료했다. 2026-11-13 터널 브라우저 조회에서 Client 화면과 `/api/v1/health` 200, 인증 헤더를 포함한 Wiki capabilities 200 (`store_id=integrated`, `revision_history=true`), 문서 목록 200 빈 배열, `bc250` 검색 200 빈 배열 및 공유 Wiki 화면을 확인했다. 최초 인증 헤더 없는 직접 조회의 403은 local 인증 정책에 따른 것이며 헤더 추가 후 정상 응답했다. 운영 데이터 작성·기억 저장·LLM 답변·revision 충돌·재시작 후 지속성과 기존 대화 보존은 아직 검증하지 않았다. Client 구버전 재배포는 운영자 절차로 방지한다.
 - 읽기 전용 `sudo -n -l`에서 SSH 계정의 무암호 권한은 Client 서비스 restart와 별도 Studio 배포 wrapper로 제한됐다. 환경 파일의 root 읽기나 Wiki unit 제어가 무암호로 허용된다는 근거는 없다. 이 조사에서 해당 restart나 wrapper는 호출하지 않았다.
 - [deploy.yml](../../.github/workflows/deploy.yml)은 `main` push와 수동 실행에서 checkout된 [deploy-release.sh](../../deploy/deploy-release.sh)를 SSH로 실행하고 서비스를 재시작한다. 따라서 `WIKI_STORE=legacy_external`이어도 새 Client가 시작되면 migration 17~21이 실행될 수 있다. **단순 push도 운영 DB 변경을 유발할 수 있으므로 I09 차단 조건 해소 및 I10 승인 전 이 변경을 운영에 배포하지 않는다.** `/wiki/` 및 기존 8020 API, `/api/ask` 직접 8080 호출과 외부 호출자의 현재 사용 여부는 완전히 확인되지 않았다. 유휴 연결 목록은 호출자 부재의 증거가 아니다.
 - 이 작업에서 최신 배포 스크립트의 파일 교체 후 실패 시 **구버전 자동 복원·재시작을 제거**하고 이전 backend/dist와 배포 archive를 `.deploy.*`에 보존하도록 했다. health는 인증이 필요 없는 `/api/v1/health`만 확인한다. 이는 프로세스 기본 응답 확인이지 저장소 모드·기능 정상성이나 단일 writer 보장이 아니다. 파일 교체 전 실패는 기존 프로세스를 재시작하지 않는다. 실패 후 새 프로세스의 실제 실행 여부는 별도 확인해야 한다. 성공 시 이전 임시 파일은 정리되므로 전환 전 별도 release 백업이 필요하다.

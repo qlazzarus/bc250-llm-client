@@ -16,6 +16,7 @@ const REASON_LABEL: Record<string, string> = {
   not_durable: '일시적이거나 저장하기 부적절함', write_unknown: 'Wiki 저장 결과를 확인할 수 없음',
   processing_failed: '처리 중 오류', processing_interrupted: '서비스 재시작으로 중단됨',
   conflict: '기존 값과 다름', conflict_kept: '기존 값을 유지함',
+  document_input: '긴 자료는 자동 기억 대상이 아님',
 };
 const ACTIVE = new Set(['pending', 'running', 'writing']);
 

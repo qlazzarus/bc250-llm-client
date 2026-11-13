@@ -56,6 +56,16 @@ it('prioritizes an earlier unknown result over a newer skipped result', () => {
   expect(screen.getByRole('status').textContent).toContain('Wiki 문서를 확인해 주세요.');
 });
 
+it('explains an explicitly requested long document without reporting a failure', () => {
+  installDialogMocks();
+  render(<WikiMemoryStatus jobs={[base({ status: 'skipped', explicit: 1, needs_attention: 1,
+    reason_code: 'document_input', error_message: '긴 자료는 자동 기억으로 저장할 수 없습니다.' })]} />);
+  expect(screen.getByRole('status').textContent).toContain('저장하지 않음');
+  expect(screen.getByRole('status').textContent).toContain('긴 자료는 자동 기억으로 저장할 수 없습니다.');
+  fireEvent.click(screen.getByRole('button', { name: /Wiki 자동 기억 기록/ }));
+  expect(screen.getByText('긴 자료는 자동 기억 대상이 아님')).toBeTruthy();
+});
+
 it('keeps a long history behind the detail dialog', () => {
   installDialogMocks();
   const jobs = Array.from({ length: 30 }, (_, index) => base({ generation_id: `g${index}`, title: `기록 ${index}`, source_text: `원문 ${index}` }));

@@ -210,6 +210,54 @@ def test_streaming_reasoning_only_response_is_not_saved(monkeypatch):
         directory.cleanup()
 
 
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize(('source', 'auto_update', 'expected_explicit'), [
+    ('BC-250 자료 설명 Wiki에 저장 ' * 60, False, None),
+    ('BC-250 자료 설명 Wiki에 저장 ' * 60, True, 0),
+    ('위키에 저장해 줘', False, 1),
+    ('“위키에 저장해 줘”는 무슨 뜻이야?', False, None),
+])
+def test_memory_request_classification_on_response_paths(monkeypatch, stream, source, auto_update, expected_explicit):
+    async def model(_settings): return 'mock-model'
+    async def fit(*_args, **_kwargs): return None
+    class GateResponse:
+        def raise_for_status(self): pass
+        def json(self): return {'choices': [{'message': {'content': '답변'}, 'finish_reason': 'stop'}]}
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"답변"},"finish_reason":"stop"}]}'
+            yield 'data: [DONE]'
+    class Gate:
+        def __init__(self, **_kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+        async def post(self, *_args, **_kwargs): return GateResponse()
+        def stream(self, *_args, **_kwargs): return GateResponse()
+    monkeypatch.setattr(main, 'resolve_gate_model', model)
+    monkeypatch.setattr(main, 'fit_chat_payload', fit)
+    monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
+    monkeypatch.setattr(main, 'start_wiki_memory_task', lambda *_args: None)
+    monkeypatch.setattr(main.httpx, 'AsyncClient', Gate)
+    monkeypatch.setattr(main.settings, 'wiki_store', 'integrated')
+    monkeypatch.setattr(main.settings, 'model_control_enabled', False)
+    client, directory = make_client(monkeypatch)
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers,
+                                   json={'content': source, 'wiki_auto_update': auto_update, 'stream': stream})
+            assert response.status_code == 200
+            if stream:
+                assert 'event: done' in response.text
+            with connect(main.get_settings().database_path) as db:
+                job = db.execute('SELECT explicit FROM wiki_memory_jobs').fetchone()
+            assert (job['explicit'] if job else None) == expected_explicit
+    finally:
+        directory.cleanup()
+
+
 def test_mode_create_update_and_validation(monkeypatch):
     client, directory = make_client(monkeypatch)
     try:
