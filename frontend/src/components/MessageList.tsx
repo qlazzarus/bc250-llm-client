@@ -27,6 +27,14 @@ const ChatMessage = memo(function ChatMessage({ message, mode, conversationId, i
             jobs={imageCards.jobs.filter(job => job.source_message_id === message.id)} onCancelImageJob={imageCards.onCancelImageJob} />
         : <div className="markdown-content">{message.content ? <MarkdownContent content={message.content} /> : (message.id.startsWith('stream-') ? '응답 생성 또는 대기열 처리 중…' : '')}</div>
       : <p>{message.content}</p>}
+    {message.role === 'assistant' && message.wiki_evidence && <details className="wiki-evidence"><summary>Wiki 참고 정보</summary>
+      <p>검색 {message.wiki_evidence.retrieved.length}건 · 모델에 전달 {message.wiki_evidence.provided.length}건 · 공유 기억 {message.wiki_evidence.memory_provided.length}건</p>
+      <p>전달된 문서 ID 인용: {message.wiki_evidence.cited.length ? message.wiki_evidence.cited.join(', ') : '없음'}</p>
+      {(message.wiki_evidence.memory_cited?.length ?? 0) > 0 && <p>전달된 공유 기억 ID 인용: {message.wiki_evidence.memory_cited?.join(', ')}</p>}
+      <p>문서 ID 인용만 확인했습니다. 실제 사용 여부와 내용 일치는 검증하지 않았습니다.</p>
+      {message.wiki_evidence.provided.map(item => <div key={item.id}><b>{item.title} (문서 {item.id})</b><p>{item.excerpt}</p></div>)}
+      {message.wiki_evidence.invalid_citations.length > 0 && <p>전달하지 않은 문서 ID 인용: {message.wiki_evidence.invalid_citations.join(', ')}</p>}
+    </details>}
   </article>;
 });
 

@@ -147,3 +147,25 @@ def test_quick_summary_and_recent_history_are_sent():
     assert [message["content"] for message in plan.messages[1:]] == [
         "이전 대화 요약:\n목표: 화성 여행", "최근 질문", "최근 답변", "다음 질문"
     ]
+
+
+def test_wiki_excerpts_are_bounded_and_respect_prompt_budget():
+    import json
+    from backend.app.wiki import excerpts
+    docs = [{'id': index, 'title': '서버', 'content': '가' * 5000} for index in range(1, 6)]
+    references = excerpts(docs, '서버')
+    assert len(references) == 3
+    assert all(len(row['excerpt']) <= 1000 for row in references)
+    prompt = '참고자료: ' + json.dumps(references, ensure_ascii=False) + '\n질문: 서버'
+    outcomes = []
+    for context_size in (4096, 16384):
+        configured = settings(llm_context_tokens=context_size)
+        try:
+            plan = build_prompt(conversation('quick', 'recent'), [], prompt, configured)
+        except ContextBudgetExceeded:
+            # Mandatory reference material is never silently sent over budget.
+            outcomes.append('rejected')
+            continue
+        assert plan.estimated_input_tokens + plan.max_tokens + configured.llm_context_safety_tokens <= context_size
+        outcomes.append('fits')
+    assert outcomes[-1] == 'fits'

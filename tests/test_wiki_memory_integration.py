@@ -3,6 +3,8 @@ import asyncio
 import json
 import os
 from types import SimpleNamespace
+import pytest
+from fastapi import HTTPException
 
 os.environ.setdefault('APP_API_KEY', 'test')
 os.environ.setdefault('LLM_GATE_API_KEY', 'test')
@@ -17,7 +19,8 @@ def _prepare_history_database(tmp_path, monkeypatch):
     return path
 
 
-def test_fake_wiki_memory_write_is_visible_through_history_api(tmp_path, monkeypatch):
+@pytest.mark.parametrize('invalid_write', [False, True])
+def test_fake_wiki_memory_write_is_visible_through_history_api(tmp_path, monkeypatch, invalid_write):
     path = _prepare_history_database(tmp_path, monkeypatch)
     timestamp = '2026-11-12T00:00:00+00:00'
     with connect(path) as db:
@@ -35,6 +38,8 @@ def test_fake_wiki_memory_write_is_visible_through_history_api(tmp_path, monkeyp
             return []
         assert (method, path) == ('POST', '/api/documents')
         writes.append(kwargs['json'])
+        if invalid_write:
+            raise HTTPException(502, {'code': 'wiki_invalid_response', 'message': 'invalid'})
         return {'id': 17}
 
     async def resolve_gate_model(_settings):
@@ -79,9 +84,12 @@ def test_fake_wiki_memory_write_is_visible_through_history_api(tmp_path, monkeyp
 
     row = asyncio.run(main.wiki_memory_history('c', SimpleNamespace(database_path=path)))['data'][0]
     assert writes == [{'title': '차 선호', 'category': 'general', 'content': '홍차를 좋아해'}]
-    assert (row['status'], row['source_text'], row['memory_kind'], row['reason_code'], row['needs_attention']) == (
-        'completed', '홍차를 좋아해', 'preference', 'stored', 0,
-    )
+    if invalid_write:
+        assert (row['status'], row['reason_code'], row['needs_attention']) == ('unknown', 'write_unknown', 1)
+    else:
+        assert (row['status'], row['source_text'], row['memory_kind'], row['reason_code'], row['needs_attention']) == (
+            'completed', '홍차를 좋아해', 'preference', 'stored', 0,
+        )
 
 
 def test_question_completion_has_no_history_entry_for_ui(tmp_path, monkeypatch):

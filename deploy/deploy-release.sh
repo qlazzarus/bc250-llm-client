@@ -12,11 +12,13 @@ cleanup() {
     result=$?
     trap - EXIT
     if (( result != 0 && installed )); then
-        echo 'Deployment failed; restoring application files.' >&2
-        rm -rf "$app/backend" "$app/frontend/dist"
-        mv "$old_backend" "$app/backend"
-        mv "$old_dist" "$app/frontend/dist"
-        sudo -n /usr/bin/systemctl restart bc250-llm-client.service || true
+        # The new process may already have migrated or written the shared DB.
+        # An old binary can ignore store namespaces, so it must not be restarted
+        # automatically. Keep both code versions for a reviewed recovery.
+        echo "Deployment failed after file replacement; automatic rollback is disabled." >&2
+        echo "Previous files retained in $stage; an old or new process may still be running." >&2
+        echo "Inspect and fence writers; preserve the database before recovery." >&2
+        exit "$result"
     fi
     rm -rf "$stage"
     rm -f "$archive"
@@ -41,7 +43,7 @@ mv "$stage/backend" "$app/backend"
 mv "$stage/frontend/dist" "$app/frontend/dist"
 sudo -n /usr/bin/systemctl restart bc250-llm-client.service
 for attempt in {1..15}; do
-    if curl --fail --silent --max-time 2 -H "X-BC250-Client: 1" http://127.0.0.1:8010/api/v1/conversations >/dev/null; then
+    if curl --fail --silent --max-time 2 http://127.0.0.1:8010/api/v1/health >/dev/null; then
         echo 'Deployment completed; API health check passed.'
         exit 0
     fi

@@ -375,7 +375,7 @@ AI 최적화 요청은 먼저 같은 분석을 수행하고 원문과 분석 결
 
 ## GitHub Actions를 통한 배포
 
-`.github/workflows/deploy.yml`은 `main`에 푸시하거나 `main`에서 수동 실행할 때 GitHub 호스팅 runner에서 백엔드 테스트와 프런트엔드 lint/build를 수행한 후 SSH로 배포한다. `production` environment의 배포 브랜치를 `main`으로 제한한다. 외부 PR에서는 배포하지 않는다. 이 워크플로는 서버의 `/etc/bc250-llm-client.env`, Caddy 설정, SQLite DB를 수정하지 않는다.
+`.github/workflows/deploy.yml`은 `main`에 푸시하거나 `main`에서 수동 실행할 때 GitHub 호스팅 runner에서 백엔드 테스트와 프런트엔드 lint/build를 수행한 후 SSH로 배포한다. `production` environment의 배포 브랜치를 `main`으로 제한한다. 외부 PR에서는 배포하지 않는다. 배포 스크립트가 환경 파일이나 Caddy 설정을 직접 바꾸지는 않지만 서비스 재시작 시 SQLite schema migration이 실행될 수 있다. Wiki 저장소가 `legacy_external`이어도 migration은 실행된다. [Wiki 전환 작업](docs/plans/wiki-memory-execution-plan.md)의 백업·writer 차단 조건을 확인하기 전에는 이 변경을 운영 배포하지 않는다.
 
 최초 배포 전에 서버에서 환경 파일에 `APP_AUTH_MODE=local`, `APP_ALLOWED_HOSTS=localhost,127.0.0.1,192.168.0.57`, 빈 `CORS_ORIGINS`를 설정한다. 공유기와 방화벽이 외부 웹 접근을 차단하는지 확인한다. 서버 주소가 바뀌면 허용 Host도 수정해야 한다. 기존 환경 파일과 Caddyfile을 백업하고 기존 설정을 보존한다.
 
@@ -387,9 +387,11 @@ yeppyshiba ALL=(root) NOPASSWD: /usr/bin/systemctl restart bc250-llm-client.serv
 
 배포 전용 SSH 키를 별도로 생성하여 공개키만 서버의 `authorized_keys`에 추가한다. GitHub `production` environment secrets에 `BC250_SSH_PRIVATE_KEY`, `BC250_SSH_HOST`, `BC250_SSH_PORT`, `BC250_SSH_USER`, `BC250_SSH_KNOWN_HOSTS`를 등록한다. `BC250_SSH_KNOWN_HOSTS`는 `[hostname]:port` 형식의 실제 서버 공개 호스트 키 한 줄이다. `ssh-keyscan -p 2222 hostname`의 출력은 반드시 서버에서 직접 확인한 ED25519 fingerprint와 비교한 후 등록한다. `ssh-keyscan` 결과를 검증 없이 신뢰하지 않는다.
 
-수동 실행은 GitHub Actions에서 **Deploy BC-250 client → Run workflow → main**을 선택한다. 실패 시 이전 앱 파일을 복원하고 재시작을 시도하지만 pip 의존성 변경과 DB 마이그레이션은 되돌리지 않는다. 운영 DB 백업을 유지하고, 최초 배포는 사용자가 실행 결과와 웹 접근을 확인한다. 서버 Python 및 실행 중인 가상환경에 `pip`와 인터넷 연결이 필요하다.
+수동 실행은 GitHub Actions에서 **Deploy BC-250 client → Run workflow → main**을 선택한다. 파일 교체 이후 실패하면 이전 앱 파일은 서버의 `.deploy.*` 디렉터리에 보존하고 이전 버전을 자동 복원·재시작하지 않는다. 새 프로세스가 이미 DB를 변경했을 수 있으므로 서비스 상태와 DB를 보존하고 복구 절차를 검토해야 한다. 이 변경은 이전 커밋의 배포 스크립트나 별도 배포 경로를 막지 않는다. 운영 DB 백업을 유지하고 최초 배포의 실행 결과와 웹 접근을 확인한다. 서버 Python 및 실행 중인 가상환경에 `pip`와 인터넷 연결이 필요하다.
 
 ## 가족 Wiki 연동
+
+아래 설명은 기본값인 `WIKI_STORE=legacy_external`의 기존 외부 Wiki 경로에 해당한다. `WIKI_STORE=integrated`에서는 Client 내부 공유 Wiki를 사용하며 자동 기억은 승인된 네 공유 속성만 처리한다. 통합 전환은 [실행 계획](docs/plans/wiki-memory-execution-plan.md)의 I09/I10을 따른다.
 
 같은 서버의 `127.0.0.1:8020`에 사용자가 제공한 BC-250 Family Wiki API가 실행 중이면 채팅에서 Wiki 검색과 자동 기억을 이용할 수 있다. 일반 대화의 **Wiki 검색 참고**를 켜면 각 질문으로 검색해 최대 세 문서의 발췌를 기존 gate를 통해 전달한다. 답변 아래에 검색된 문서의 ID, 제목, 수정 시각과 전달한 발췌를 기록한다. 이는 모델이 실제로 인용한 문서 목록이 아니라 검색 참고자료다. 검색 결과가 없으면 답변에 표시하며, Wiki 연결 실패 시에는 생성이 실패하므로 참조를 끄고 새 요청을 보낼 수 있다. 이미지 프롬프트와 롤플레잉은 Wiki를 검색하지 않는다.
 

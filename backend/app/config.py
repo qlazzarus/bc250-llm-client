@@ -10,6 +10,7 @@ from .imagegen import validate_imagegen_url
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     database_path: str = "./data/bc250-llm-client.db"
+    wiki_store: Literal['legacy_external', 'integrated'] = 'legacy_external'
     app_api_key: str = ""
     app_auth_mode: Literal["key", "local"] = "key"
     app_allowed_hosts: str = "localhost,127.0.0.1"

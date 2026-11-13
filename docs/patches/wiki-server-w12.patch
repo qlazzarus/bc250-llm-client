@@ -1,0 +1,102 @@
+--- a/app/main.py
++++ b/app/main.py
+@@ -1,9 +1,11 @@
++import hashlib
++import json
+ import os
+ import re
+ import sqlite3
+ import unicodedata
+ from contextlib import contextmanager
+-from datetime import datetime, timezone
++from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+ 
+ import httpx
+@@ -26,6 +28,9 @@
+     title: str = Field(min_length=1, max_length=200)
+     content: str = Field(min_length=1, max_length=100000)
+     category: str = Field(default="general", max_length=80)
++
++class ConditionalDocumentInput(DocumentInput):
++    expected_revision: str = Field(min_length=1, max_length=128)
+ 
+ class AskInput(BaseModel):
+     question: str = Field(min_length=1, max_length=4000)
+@@ -99,6 +104,23 @@
+         """).fetchall()
+     return [dict(row) for row in rows]
+ 
++def document_revision(row):
++    fields = [row[k] for k in ("id", "title", "content", "category", "created_at", "updated_at")]
++    encoded = json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
++    return "sha256:" + hashlib.sha256(encoded).hexdigest()
++
++
++def next_updated_at(previous):
++    # Advance even if the system clock moves backwards or updates share a tick.
++    try:
++        old = datetime.fromisoformat(previous)
++        if old.tzinfo is None:
++            raise ValueError("timezone required")
++        return max(datetime.now(timezone.utc), old + timedelta(microseconds=1)).isoformat()
++    except (ValueError, OverflowError) as exc:
++        raise HTTPException(409, detail={"code": "wiki_revision_invalid", "message": "Invalid document timestamp"}) from exc
++
++
+ @app.get("/api/documents/{doc_id}")
+ def get_document(doc_id: int):
+     with connect() as db:
+@@ -107,7 +129,9 @@
+         ).fetchone()
+     if row is None:
+         raise HTTPException(404, "Document not found")
+-    return dict(row)
++    result = dict(row)
++    result["revision"] = document_revision(row)
++    return result
+ 
+ @app.post("/api/documents", status_code=201)
+ def create_document(doc: DocumentInput):
+@@ -121,18 +145,32 @@
+         doc_id = cur.lastrowid
+     return {"id": doc_id, "status": "created"}
+ 
++def update_document_transaction(doc_id: int, doc: DocumentInput, expected_revision: str | None):
++    with connect() as db:
++        db.execute("BEGIN IMMEDIATE")
++        old = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
++        if old is None:
++            raise HTTPException(404, "Document not found")
++        if expected_revision is not None and document_revision(old) != expected_revision:
++            raise HTTPException(409, detail={"code": "wiki_revision_conflict", "message": "Document revision changed"})
++        now = next_updated_at(old["updated_at"])
++        db.execute("""UPDATE documents SET title=?,content=?,category=?,updated_at=? WHERE id=?""",
++                   (doc.title, doc.content, doc.category, now, doc_id))
++        row = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
++        revision = document_revision(row)
++    return revision
++
++
+ @app.put("/api/documents/{doc_id}")
+ def update_document(doc_id: int, doc: DocumentInput):
+-    now = datetime.now(timezone.utc).isoformat()
+-    with connect() as db:
+-        cur = db.execute("""
+-            UPDATE documents
+-            SET title=?,content=?,category=?,updated_at=?
+-            WHERE id=?
+-        """, (doc.title, doc.content, doc.category, now, doc_id))
+-        if cur.rowcount == 0:
+-            raise HTTPException(404, "Document not found")
++    update_document_transaction(doc_id, doc, None)
+     return {"id": doc_id, "status": "updated"}
++
++
++@app.put("/api/documents/{doc_id}/conditional")
++def update_document_conditionally(doc_id: int, doc: ConditionalDocumentInput):
++    revision = update_document_transaction(doc_id, doc, doc.expected_revision)
++    return {"id": doc_id, "status": "updated", "revision": revision}
+ 
+ @app.delete("/api/documents/{doc_id}")
+ def delete_document(doc_id: int):

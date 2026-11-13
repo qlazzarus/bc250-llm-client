@@ -1,5 +1,11 @@
 # 가족 Wiki 연동 계획
 
+## 2026-11-13 방향 확정: Client 내부 공유 Wiki
+
+사용자가 통합 Wiki를 가족이 함께 사용하는 공유 지식 공간으로 확정했다. 현재 사용자별 개인 기억·접근 분리는 범위 밖이다. 기존 Family Wiki는 검증된 전환 후 deprecated 처리한다. 빈 Wiki로 시작할 수 있으나 Client DB와 대화·이력은 보존하며 별도 Wiki DB는 이번 문서 작업에서 삭제하지 않는다.
+
+구현과 전환은 [통합 실행 계획 I00~I10](wiki-client-consolidation-plan.md)을 따른다. Wiki 문서·FTS·기억 메타데이터를 Client SQLite에 두고 단일 트랜잭션으로 처리하며 기존/신규 문서 ID는 저장소 namespace로 구분한다. 아래 내용은 방향 변경 전의 운영 설명 및 이력이다.
+
 ## 2026-11-12 실행 계획
 
 질문 원문 저장 방지, 선별 자동 기억, 중복·갱신, 출처 추적 및 기억 UI/스크롤 개선은 [Wiki RAG·자동 기억 실행 계획](wiki-memory-execution-plan.md)을 따른다. W00~W07은 구현·검증 이력과 남은 검증 제약을 해당 문서에서 확인한다.

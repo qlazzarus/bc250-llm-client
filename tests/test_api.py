@@ -323,7 +323,7 @@ def test_legacy_database_migrates_without_losing_conversation_data(tmp_path):
     assert old_image["mode_settings"] == '{"style": "legacy"}'
     assert old_image["summary"] == "old summary"
     assert old_roleplay["context_policy"] == "recent"
-    assert [row["version"] for row in versions] == list(range(1, 17))
+    assert [row["version"] for row in versions] == list(range(1, 22))
 
 
 def test_image_draft_revision_validation_and_image_job_deletion_guard(monkeypatch):
@@ -2147,5 +2147,204 @@ def test_switching_enabled_rejects_missing_snapshot_without_legacy_fallback(monk
             assert client.get('/api/v1/models', headers=headers).status_code == 503
             assert client.get('/api/v1/admin/gate-status', headers=headers).status_code == 503
             assert len(calls) == 2 and all(url.endswith('/model-snapshot') for url in calls)
+    finally:
+        directory.cleanup()
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_integrated_alias_collision_returns_clarification_without_llm(monkeypatch, stream):
+    async def model(_settings):
+        return 'mock-model'
+    async def no_legacy(*args, **kwargs):
+        raise AssertionError('legacy Wiki called')
+    monkeypatch.setattr(main, 'resolve_gate_model', model)
+    monkeypatch.setattr(main, 'wiki_request', no_legacy)
+    monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
+    monkeypatch.setattr(main.settings, 'wiki_store', 'integrated')
+    monkeypatch.setattr(main.settings, 'model_control_enabled', False)
+    client, directory = make_client(monkeypatch)
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            for title in ('서버 문서', '장비 문서'):
+                created = client.post('/api/v1/wiki/documents', headers=headers, json={'title': title, 'content': '서로 다른 정보'}).json()
+                response = client.put(f"/api/v1/wiki/documents/{created['id']}/aliases?store_id=integrated", headers=headers,
+                                      json={'expected_revision': 1, 'aliases': ['bc250']})
+                assert response.status_code == 200
+            response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers,
+                                   json={'content': 'bc250 이 뭐야?', 'wiki': True, 'wiki_auto_update': True, 'stream': stream})
+            assert response.status_code == 200
+            if stream:
+                assert 'event: delta' in response.text and 'event: done' in response.text
+                assert '어떤 문서' in response.text
+            else:
+                assert '어떤 문서' in response.json()['assistant_message']['content']
+            messages = conversation_messages(client, cid, headers)
+            assert messages[-1]['role'] == 'assistant' and '어떤 문서' in messages[-1]['content']
+            with connect(main.get_settings().database_path) as db:
+                assert db.execute('SELECT COUNT(*) FROM wiki_memory_jobs').fetchone()[0] == 0
+    finally:
+        directory.cleanup()
+
+
+def test_integrated_rag_injects_verified_memory_separately(monkeypatch):
+    from backend.app.integrated_memory import create_initial_memory
+    async def model(_settings): return 'mock-model'
+    async def fit(*args, **kwargs): return None
+    captured = []
+    class Gate:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, **kwargs):
+            captured.append(kwargs['json'])
+            return main.httpx.Response(200, request=main.httpx.Request('POST', url), json={'choices': [{'message': {'content': 'Fedora'}, 'finish_reason': 'stop'}]})
+    monkeypatch.setattr(main, 'resolve_gate_model', model)
+    monkeypatch.setattr(main, 'fit_chat_payload', fit)
+    monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
+    monkeypatch.setattr(main.httpx, 'AsyncClient', Gate)
+    monkeypatch.setattr(main.settings, 'wiki_store', 'integrated')
+    monkeypatch.setattr(main.settings, 'model_control_enabled', False)
+    client, directory = make_client(monkeypatch)
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            with connect(main.get_settings().database_path) as db:
+                db.execute("INSERT INTO messages VALUES ('source',?,'user','BC250 서버 운영체제는 Fedora','2020')", (cid,))
+                db.execute("INSERT INTO generation_requests(id,conversation_id,user_message_id,status,queued_at,created_at,updated_at) VALUES ('source-g',?,'source','completed','2020','2020','2020')", (cid,))
+                db.execute("INSERT INTO wiki_memory_jobs(generation_id,conversation_id,status,created_at,updated_at,store_id) VALUES ('source-g',?,'pending','2020','2020','integrated')", (cid,))
+            create_initial_memory(main.get_settings().database_path, 'source-g')
+            response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers,
+                                   json={'content': 'BC250 운영체제는 뭐야?', 'wiki': True})
+            assert response.status_code == 200
+            prompt = captured[-1]['messages'][-1]['content']
+            assert '공유 기억:' in prompt and 'Fedora' in prompt
+            assert 'Wiki 검색 결과가 없습니다' not in prompt
+            assert '참고자료:' not in prompt
+    finally:
+        directory.cleanup()
+
+
+def test_opt_in_wiki_evidence_is_persisted_and_replayed(monkeypatch):
+    import uuid
+    async def model(_settings): return 'mock-model'
+    async def fit(*args, **kwargs): return None
+    payloads = []
+    class Gate:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, **kwargs):
+            payloads.append(kwargs['json'])
+            return main.httpx.Response(200, request=main.httpx.Request('POST', url), json={'choices': [{'message': {'content': '답 [wiki:1] [wiki:999]'}, 'finish_reason': 'stop'}]})
+    monkeypatch.setattr(main, 'resolve_gate_model', model)
+    monkeypatch.setattr(main, 'fit_chat_payload', fit)
+    monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
+    monkeypatch.setattr(main.httpx, 'AsyncClient', Gate)
+    monkeypatch.setattr(main.settings, 'wiki_store', 'integrated')
+    monkeypatch.setattr(main.settings, 'model_control_enabled', False)
+    client, directory = make_client(monkeypatch)
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            assert client.post('/api/v1/wiki/documents', headers=headers, json={'title': 'Fedora', 'content': 'Fedora 운영'}).status_code == 201
+            request_id = str(uuid.uuid4())
+            body = {'content': 'Fedora', 'wiki': True, 'wiki_evidence': True, 'request_id': request_id}
+            response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers, json=body)
+            assert response.status_code == 200
+            message = response.json()['assistant_message']
+            evidence = message['wiki_evidence']
+            assert evidence['cited'] == [1] and evidence['invalid_citations'] == [999]
+            assert evidence['provided'][0]['revision'] == 1
+            assert '참고자료 (' not in message['content']
+            changed = client.put('/api/v1/wiki/documents/1?store_id=integrated', headers=headers,
+                                 json={'title': 'Fedora', 'content': '변경된 문서', 'expected_revision': 1})
+            assert changed.status_code == 200
+            assert conversation_messages(client, cid, headers)[-1]['wiki_evidence'] == evidence
+            replay = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers, json=body)
+            assert replay.json()['replayed'] and replay.json()['assistant_message']['wiki_evidence'] == evidence
+            following = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers, json={'content': '다음 질문'})
+            assert following.status_code == 200
+            assistant_history = [item['content'] for item in payloads[-1]['messages'] if item['role'] == 'assistant']
+            assert assistant_history == ['답 [wiki:1] [wiki:999]']
+    finally:
+        directory.cleanup()
+
+
+def test_streaming_wiki_evidence_is_returned_and_stored(monkeypatch):
+    async def model(_settings): return 'mock-model'
+    async def fit(*args, **kwargs): return None
+    class Stream:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def raise_for_status(self): pass
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"답 [wiki:1]"},"finish_reason":"stop"}]}'
+            yield 'data: [DONE]'
+    class Gate:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def stream(self, *args, **kwargs): return Stream()
+    monkeypatch.setattr(main, 'resolve_gate_model', model)
+    monkeypatch.setattr(main, 'fit_chat_payload', fit)
+    monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
+    monkeypatch.setattr(main.httpx, 'AsyncClient', Gate)
+    monkeypatch.setattr(main.settings, 'wiki_store', 'integrated')
+    monkeypatch.setattr(main.settings, 'model_control_enabled', False)
+    client, directory = make_client(monkeypatch)
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            client.post('/api/v1/wiki/documents', headers=headers, json={'title': 'Fedora', 'content': 'Fedora 운영'})
+            response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers,
+                                   json={'content': 'Fedora', 'wiki': True, 'wiki_evidence': True, 'stream': True})
+            assert response.status_code == 200
+            assert 'event: done' in response.text and 'wiki_evidence' in response.text
+            evidence = conversation_messages(client, cid, headers)[-1]['wiki_evidence']
+            assert evidence['cited'] == [1]
+    finally:
+        directory.cleanup()
+
+
+@pytest.mark.parametrize('context_size', [4096, 16384])
+def test_wiki_evidence_reports_only_references_fitting_context(monkeypatch, context_size):
+    async def model(_settings): return 'mock-model'
+    async def fit(*args, **kwargs): return None
+    class Gate:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, **kwargs):
+            return main.httpx.Response(200, request=main.httpx.Request('POST', url), json={'choices': [{'message': {'content': '답 [wiki:3]'}, 'finish_reason': 'stop'}]})
+    monkeypatch.setattr(main, 'resolve_gate_model', model)
+    monkeypatch.setattr(main, 'fit_chat_payload', fit)
+    monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
+    monkeypatch.setattr(main.httpx, 'AsyncClient', Gate)
+    monkeypatch.setattr(main.settings, 'wiki_store', 'integrated')
+    monkeypatch.setattr(main.settings, 'model_control_enabled', False)
+    monkeypatch.setattr(main.settings, 'llm_context_tokens', context_size)
+    client, directory = make_client(monkeypatch)
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            for index in range(3):
+                assert client.post('/api/v1/wiki/documents', headers=headers, json={'title': f'Fedora 문서 {index}', 'content': '가' * 2000}).status_code == 201
+            response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers,
+                                   json={'content': 'Fedora', 'wiki': True, 'wiki_evidence': True})
+            assert response.status_code == 200
+            evidence = response.json()['assistant_message']['wiki_evidence']
+            assert len(evidence['retrieved']) == 3
+            if context_size == 4096:
+                assert len(evidence['provided']) < 3
+                if 3 not in [item['id'] for item in evidence['provided']]:
+                    assert 3 in evidence['invalid_citations']
+            else:
+                assert len(evidence['provided']) == 3
     finally:
         directory.cleanup()

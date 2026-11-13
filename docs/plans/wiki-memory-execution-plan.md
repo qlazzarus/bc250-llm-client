@@ -1,6 +1,8 @@
 # Wiki RAG·선별 자동 기억·UI 실행 계획
 
-작성일: 2026-11-12. 실행 대상: **Terra / medium**. 상태: **계획만 작성, 모든 구현 Task 미착수**.
+작성일: 2026-11-12. 실행 대상: **Terra / medium**. W00~W11의 실제 진행 상태는 각 Task와 §8을 따른다.
+
+> **2026-11-13 방향 변경:** Wiki를 Client 내부의 가족 공유 지식 공간으로 통합한다. 이 문서 §6의 I00~I10을 순서대로 실행한다. [통합 설계와 전환 계약](wiki-client-consolidation-plan.md)은 상세 참고 자료이며 W12~W19는 §9의 과거 이력이다. W00~W11 결과는 보존한다. 개인 기억과 다중 사용자 식별은 후속 범위다. 이번 변경은 문서만 갱신한다.
 
 이 문서는 한 세션에서 전체 개편을 수행하지 않고, 아래 Task 하나씩 구현·검증·기록하기 위한 실행 기준이다. 모델 설정은 실행자가 Terra / medium으로 선택한다. 이 문서 작성 시 모델 전환이나 구현 실행은 하지 않았다.
 
@@ -10,7 +12,7 @@
 - 1차 구현: 질문 원문 저장 방지, 혼합 발언 선별, 기억 UI 축소, 입력 영역·스크롤 회귀 해결.
 - 후속 구현: 중복·충돌·갱신, Wiki 쓰기 계약, RAG 역할 분리, 출처 메타데이터, 작업 비용 제한.
 - 새 서비스·새 DB 파일·상주 모델·벡터 DB·임베딩 서비스를 도입하지 않는다.
-- 기존 문서·메시지·자동 기억을 삭제·재분류·수정하는 정리 작업은 포함하지 않는다. 스크린샷의 문서 2도 수정하지 않는다.
+- Client의 기존 대화·메시지·자동 기억 이력은 보존한다. 사용자는 별도 Family Wiki DB는 버리고 통합 Wiki를 빈 상태로 시작해도 된다고 했다. 이번 문서 작업에서 DB를 삭제하거나 전환하지 않는다.
 - 운영 DB 마이그레이션, 테스트 데이터의 운영 저장, 서비스 재시작, 패키지 설치, 배포, GPU 모델 전환은 이 계획 실행의 기본 권한에 포함하지 않는다. 단, 사용자가 2026-11-12에 승인한 테스트 의존성은 프로젝트 전용 [`.venv/`](../../.venv/)에만 설치했다.
 - 현재 요청은 **문서 작성만**이다. 아래 구현·격리 테스트는 사용자가 후속 실행을 요청할 때 진행한다.
 - 후속 구현 테스트는 임시 SQLite·fake Wiki·mock gate를 사용한다. 앱 import/lifespan이 실제 DB 초기화나 자동 마이그레이션을 유발하지 않도록 설정을 먼저 격리한다.
@@ -122,6 +124,8 @@ W12~W14를 시작하려면 다음 중 하나가 필요하다.
 
 ### 4.2 저장과 갱신
 
+**방향 변경 우선 규칙:** 이 절의 외부 Wiki/Client 간 분리 저장과 HTTP 결과 조정은 당시 설계 이력이다. 신규 목표는 [통합 계획의 전환 안전 계약](wiki-client-consolidation-plan.md#전환-안전-계약)에 따라 같은 Client SQLite의 단일 트랜잭션을 사용한다. 삭제·출처·개인정보 보류 등 사용자 정책은 그대로 유지한다.
+
 - Wiki는 본문 저장소, 기존 Client SQLite는 기억 분류·출처·fingerprint·활성 관계·작업 조정 저장소다.
 - 기존 wiki_memory_jobs는 작업 생명주기로 유지한다. 내용 비교와 활성 기억에 필요한 보조 테이블은 기존 DB 안에 추가한다. 새 DB 파일은 만들지 않는다.
 - 후보 스키마: memory_records(scope, subject_key, predicate_key, value, kind, source refs, fingerprint, wiki_document_id, wiki_revision, state, supersedes_id, timestamps). 최종 필드/인덱스는 W08의 계약 산출물로 확정한다.
@@ -150,7 +154,8 @@ W12~W14를 시작하려면 다음 중 하나가 필요하다.
 #### 4.2.1b 현재 W08 초안 — 개인·다중값은 후속 범위
 
 - `scope_key`는 초기 버전에서 고정 문자열 `shared`뿐이다. 이는 공유 접근 범위이며 개인 인증·개인 소유를 뜻하지 않는다. `subject_key`는 관리 사전에 등록된 비인격 대상의 불투명한 안정 ID만 허용하며 이름·기기 시리얼 등 사용자 원문을 포함하지 않는다. `me`, `나`, 대화 ID, Wiki 제목, 발화자의 암묵적 신원을 개인 식별자로 변환하지 않는다. 현재 인증된 사용자 식별 기능이 없으므로 사람을 주체로 하는 기억은 명시적 기억 요청을 포함해 보류하고 UI에 이유를 표시한다. 개인 scope 도입은 별도 인증·동의 설계 후에만 가능하다.
-- 첫 버전의 `predicate_key`는 서버가 관리하는 고정 사전에서 명확히 매핑된 단일 속성만 쓴다. LLM이 임의 키를 만들거나 여러 의미의 속성을 합치지 않는다. 허용 키·정규화 사전이 아직 정해지지 않았으므로 **그 사전과 모호성 회귀가 확정되기 전 W09의 claim/유일성 구현 완료 판정, W10 연동 및 새 writer 활성화는 차단**한다. 키가 없으면 보류하고 제목이나 의미 유사도로 대체하지 않는다.
+- 2026-11-13 확정: 공유 서버 `bc250_server`의 `operating_system`, `backup_path`, `backup_frequency`, 공유 Client `bc250_client`의 `service_port` 네 단일 속성만 초기 허용한다. LLM이 임의 키를 만들거나 여러 의미의 속성을 합치지 않는다. 값 정규화는 아래 NFC·공백 규칙만 쓴다. 자연어→키 매핑과 모호성 회귀는 W10에서 구현·검증하기 전 자동 분류 및 새 writer 연결을 차단한다. 키가 없거나 대상·의미가 모호하면 보류하고 제목이나 의미 유사도로 대체하지 않는다. W09의 로컬 저장소 완료는 자연어 매핑이나 운영 안전 쓰기 완료를 뜻하지 않는다.
+- 사용자 승인 충돌 정책: 같은 속성의 기존 값과 명확한 새 값이 다르고 명시 정정이 아니면 기존 값을 유지하고 확인 후보로 보류한다. 후속 UI는 기존·새 값과 대상을 보여 주고 변경/유지를 제공한다. 변경 승인 시 확인 대상의 기존 record ID·revision·출처와 현재 상태를 다시 확인하고 변경됐으면 다시 판단한다. 취소·무응답은 쓰지 않는다. 명시 정정은 추가 확인 없이 후보로 진행할 수 있으나 동일한 충돌 및 안전 저장 검증을 거친다. 대상이 모호하면 명확화 또는 보류한다. 확인 후보의 영속성·만료·중복 응답·취소 및 동시성은 W10/W14/W17에서 구체화·검증하며 현재 구현된 기능이 아니다.
 - 값은 검증된 사용자 원문 절 그대로 보관하고 비교용 값은 Unicode NFC와 양끝·연속 공백 정규화만 한다. 대소문자, 부정, 숫자, 단위, 날짜를 지우거나 동의어를 합치지 않는다. 날짜 없는 계획이나 기준일·주체가 모호한 표현은 보류한다. fingerprint는 버전 태그와 길이가 지정된 UTF-8 필드 `(scope_key, subject_key, predicate_key, kind, normalized_value)`를 순서대로 SHA-256 처리한다. 비교 전 원 필드도 확인해 해시 충돌을 안전하게 보류한다.
 - 원문 메시지 및 대화 참조는 nullable FK `ON DELETE SET NULL`이다. 기억 본문을 원문 복제 저장소로 취급하지 않고, 출처 삭제 시 해당 기록은 활성 검색에서 즉시 제외하고 값·정규화 값·fingerprint와 출처 span을 NULL로 지운다. 문서 ID와 격리 사유만 비식별 tombstone으로 유지한다. 삭제된 대화의 작업 본문은 기존 cascade 정책을 유지한다. Wiki 본문 삭제나 수정은 자동 수행하지 않으며, 사용자가 Wiki에서 별도 처리할 수 있도록 해당 문서 ID를 격리한다. 즉 대화 삭제만으로 Wiki 원문까지 삭제됐다고 주장하지 않는다.
 - 여러 출처를 자동으로 합치지 않는다. 중복 발견 시 기존 출처를 바꾸지 않고 새 job에 duplicate 결과만 기록한다. 출처 삭제가 여러 버전에 영향을 미치면 그 출처를 참조하는 각 버전을 위 규칙으로 처리하며 이전 버전을 자동 재활성화하지 않는다.
@@ -361,10 +366,10 @@ CREATE TABLE memory_document_quarantine (
 - 작업: 기존 DB 보조 테이블 DDL 초안, unique/index, scope/subject 판정, source 삭제 정책, operation 상태 전이, legacy 검색 방식을 확정. 일반 문서와 기억 간 경계 명시.
 - 완료: 이후 구현자가 필드·삭제 정책·개인 식별 규칙을 새로 결정할 필요 없음. 신규 저장소 불필요 근거 기록.
 - 검증: 생성/중복/갱신/충돌/대화 삭제/Wiki 외부 편집/부분 성공 시나리오를 표로 점검. 미확정 정책은 W09 차단 조건.
-- 결과: §4.2.1~4.2.3에 소유 범위, 삭제·격리, DDL/index, operation 상태 및 검색 경계를 명세했다. 고정 predicate 사전은 미확정으로 남기고 W09 claim/유일성 완료 판정과 W10 연동·writer 활성화를 차단한다. Wiki CAS/멱등성·결과 조회와 검색 필터가 없으므로 W12~W15 검증 전 새 writer를 활성화하지 않는다. W09는 로컬 repository만 구현한다.
+- 결과: §4.2.1~4.2.3에 소유 범위, 삭제·격리, DDL/index, operation 상태 및 검색 경계를 명세했다. 당시 고정 predicate 사전은 미확정이었으며, 이후 2026-11-13 사용자 승인으로 §4.2.1b의 네 속성이 확정됐다. Wiki CAS/멱등성·결과 조회와 검색 필터가 없으므로 W12~W15 검증 전 새 writer를 활성화하지 않는다. W09는 로컬 repository만 구현한다.
 - 검증: 생성·정확 중복·정정·충돌·출처 삭제·외부 편집·부분 성공을 설계 표로 점검했다. 이 작업은 문서만 변경하며 migration·운영 DB·서비스·Wiki를 실행하거나 변경하지 않았다.
 
-#### W09 [ ] 기존 DB에 메타데이터와 repository 구현 — 진행 중
+#### W09 [x] 기존 DB에 메타데이터와 repository 구현 — 로컬 저장소 완료
 
 - 의존: W08.
 - 대상: [db.py](../../backend/app/db.py), 신규 `backend/app/memory_repository.py`, 신규 `tests/test_memory_repository.py`.
@@ -372,107 +377,305 @@ CREATE TABLE memory_document_quarantine (
 - 완료: 과거 데이터 불변, 새 DB 파일 없음, DB 연결을 잡은 채 HTTP/LLM await하지 않음.
 - 검증: old-schema upgrade 반복, 동시 claim/unique 충돌, rollback, source 삭제 정책, 비활성 버전 조회 제외.
 - 기반: [db.py](../../backend/app/db.py)에 기존 DB에만 추가되는 migration 16과 W08 테이블·인덱스를 작성했다. 이후 아래와 같이 repository 및 대화 삭제 처리를 추가했다. 새 writer에는 연결하지 않았다.
-- 범위 정정: 개인 기억 및 여러 기기·선호 지원은 §4.2.1a의 후속 TODO이며 현재 W09 범위에 넣지 않는다. 현행 초안의 공유 scope·단일 active 제약을 적용하고, 고정 속성 사전 미확정 차단 조건은 유지한다.
+- 범위 정정: 개인 기억 및 여러 기기·선호 지원은 §4.2.1a의 후속 TODO이며 현재 W09 범위에 넣지 않는다. 공유 scope·단일 active 제약과 사용자 승인 네 속성 사전을 적용한다.
 - 추가 진행: [memory_repository.py](../../backend/app/memory_repository.py)에 공유 대상 `bc250_server`의 `operating_system`, `backup_path`, `backup_frequency`와 `bc250_client`의 `service_port`만 허용하는 초기 키 사전 및 짧은 transaction의 claim·상태 전이·활성 전환을 추가했다. 사용자 원문 span을 검증하고 출처 삭제 시 [main.py](../../backend/app/main.py)의 대화 삭제 transaction에서 redaction·Wiki 문서 격리를 수행한다. 현재는 writer/API의 새 기억 경로에 연결하지 않았다. 향후 개인 scope·다중값은 후속 migration과 별도 계약으로 확장하며 기존 공유 slot의 의미를 자동 변경하지 않는다.
-- 미완료: 위 사전은 자연어에서 해당 키로의 안전한 매핑·모호성 회귀가 아직 없으므로 확정된 자동 분류 사전이 아니다. 동시 claim·정정 rollback과 출처 삭제를 검증했지만 서버 operation 증거 검증, 삭제 중 쓰기 결과 불명 복구, 메시지 단독 삭제 경로의 redaction 계약, 서버 CAS/멱등성, 활성화 전 통합 검증이 남아 W09 완료 및 새 writer 연결은 보류한다. `confirmed`/`apply_confirmed`는 서버 증거 확인을 호출자에게 위임하는 내부 부품이며 현재 엔드포인트에서 사용할 수 없다.
+- 후속 차단: W10의 제한적인 자연어 매핑은 구현됐지만 실제 writer에 연결되지 않았다. 통합 namespace·검색 격리·원자적 저장·승인 확인은 I02/I06/I07에서 구현한다. 따라서 **W09 로컬 저장소 완료와 무관하게 새 writer 연결·운영 활성화는 차단**한다. `confirmed`/`apply_confirmed`는 서버 증거 확인을 호출자에게 위임하는 내부 부품이며 현재 엔드포인트에서 사용할 수 없다.
+- 2026-11-13 로컬 후속: 메시지 단독 삭제를 위한 `redact_message_memory`를 추가했다. 호출자가 해당 메시지 삭제와 같은 transaction에서 실행해야 하며 현재 메시지 단독 삭제 endpoint는 없다. 삭제 실패 rollback과 다른 메시지 불변, 소스 삭제 시 문서 격리를 검증했다. 확인 전이에서는 공백만 있거나 문자열이 아닌 revision을 거절한다. 이는 서버 증거를 검증한다는 뜻이 아니다. 관련 격리 회귀 **57 passed**; 운영 DB·Wiki·서비스는 변경하지 않았다.
+- 2026-11-13 완료 검증: 승인된 네 slot의 claim과 migration 중간 실패 시 새 테이블·버전 기록 rollback을 추가 검증했다. 기존 기억·Wiki·모델 전환 회귀 포함 **62 passed**, `git diff --check` 통과. 자연어 매핑 품질이나 서버 증거를 검증한 결과는 아니다.
 - 추가 검증: 임시 SQLite·mock만 이용한 repository, 기존 기억 및 모델 전환 회귀 **46 passed**. 동시 claim 1건 허용, 출처가 assistant인 후보 거부, unknown 재전송 전이 거부, 명시 정정의 활성 대상 변경 시 rollback과 대화 삭제 시 redaction·격리를 확인했다. 운영 DB·Wiki·서비스는 변경하지 않았다.
 - 후속 안전성 검증: 사용자 메시지 범위를 벗어난 span·boolean index와 이미 격리된 Wiki 문서의 재사용을 거절한다. 전송 중 대화 삭제 시 결과를 unknown으로 남기며 삭제된 출처를 다시 활성화하지 않는다. 이 경우 결과 조회·문서 격리 복구는 Wiki 서버 계약이 준비될 때까지 미구현이다. 관련 임시 DB 회귀 **51 passed**. 자연어→속성 매핑과 모호성 검증은 W10 이후, 서버 결과 증거·복구는 W12~W14 이후에 연결하며 현재 저장소를 운영 writer에 연결하지 않는다.
 - 검증: 임시 DB에서 v15 형태로 되돌린 fixture의 반복 upgrade, legacy 내용 보존, active unique 충돌, 비활성 조회 제외, 직접 대화 삭제 실패를 확인했다. `.venv/bin/python -m pytest tests/test_memory_repository.py tests/test_wiki_memory.py tests/test_api.py::test_legacy_database_migrates_without_losing_conversation_data -q` **35 passed**. 운영 migration·서비스 재시작·Wiki 쓰기는 수행하지 않았다. 향후 이 코드 배포 후 startup에서는 migration 16이 실행된다.
 
-#### W10 [ ] 정확 중복·충돌 판정 순수 함수
+#### W10 [x] 정확 중복·충돌 판정 순수 함수 — 제한된 표현 지원
 
 - 의존: W09.
 - 대상: [wiki_memory.py](../../backend/app/wiki_memory.py), W09 repository, 신규 `tests/test_memory_dedup.py`.
-- 작업: scope/subject/predicate/value/fingerprint 비교. 정확 중복 no-op, 상충값 보류, 명시 정정만 supersede 후보. 의미 검색은 후보 제한에만 사용.
+- 작업: 승인된 네 속성에 대한 자연어 매핑과 모호성 보류, scope/subject/predicate/value/fingerprint 비교. 정확 중복 no-op, 상충값 확인 후보, 명시 정정 또는 유효한 사용자 승인만 supersede 후보. 의미 검색은 후보 제한에만 사용. 확인 응답의 출처·대상 검증은 W14/W17에서 연결한다.
 - 완료: R07 충족, 부정/숫자/단위/시간/다른 사용자 정보가 정규화로 합쳐지지 않음.
 - 검증: 공백/Unicode 변형, 같은 제목 다른 내용, 다른 문서 같은 사실, 오래된 계획, 다중 주체, 후보 검색 누락. 전역 의미 중복 완전 탐지를 주장하지 않음.
+- 결과: [memory_dedup.py](../../backend/app/memory_dedup.py)에 네 속성의 명시적인 전체 문장 템플릿과 정확한 원문 span 추출, 중복·충돌·정정 후보 순수 판정을 추가했다. 질문·부정·계획·복수 대상·모호한 문장 등 인식하지 못하는 입력은 보류한다. 범용 한국어 의미 분석이나 자동 저장으로 연결하지 않았으며 표현 범위가 좁아 실제 발언도 보류될 수 있다.
+- 안전 조건: 활성 slot 조회가 불완전하거나 legacy 중복 여부가 확인되지 않으면 신규 생성 후보를 보류한다. 제한된 Wiki 검색의 빈 결과는 legacy 전체 중복 부재의 증거가 아니다. 변경 승인 후보는 대상 record ID·revision·새 값 fingerprint가 모두 일치해야 한다. 승인 인증·만료·일회성 소비, 원문 출처 확인 및 최신 revision 재검증은 W14/W17의 별도 책임이며 이 순수 함수의 결과는 쓰기 권한이 아니다.
+- 검증: [test_memory_dedup.py](../../tests/test_memory_dedup.py)의 명시·모호·부정·계획·범위 외 포트·다른 대상, NFC/공백, 대소문자·숫자·부정, fingerprint 오류·충돌, 불완전 조회, 변경된 승인 대상 회귀와 기존 테스트를 실행해 **86 passed**. Wiki 문서 제목은 판단에 쓰지 않는다. 같은 사실의 다른 Wiki 문서에 대한 전역 중복 부재는 검증하거나 보장하지 않는다. 운영 DB·Wiki·서비스는 변경하지 않았다.
 
-#### W11 [ ] Wiki HTTP 응답·오류 계약 강화
+#### W11 [x] Wiki HTTP 응답·오류 계약 강화 — Client 측 구현
+
+아래 계약은 레거시 외부 Wiki 어댑터의 이력이다. 통합 전환 전에는 유지하고 전환 이후 제거 여부는 I04/I09에서 검증한다. 이후 W12 조사에서 당시 운영 파일의 POST/PUT ID와 DELETE JSON 형태를 확인했으나 실행 프로세스와 동일 버전인지는 미확인이다.
 
 - 의존: W00, W01.
 - 대상: [wiki.py](../../backend/app/wiki.py), [main.py](../../backend/app/main.py)의 Wiki 라우트, [test_wiki.py](../../tests/test_wiki.py).
 - 작업: 응답 타입/크기 검증, 빈 검색과 형식 오류 구분, 404/409/422/503/timeout 구분, 성공 응답 호환 유지. 204 여부는 W00 실계약에 따라 처리.
 - 완료: 서버 오류가 빈 검색으로 숨겨지지 않고, malformed 응답이 write 완료로 처리되지 않음.
 - 검증: MockTransport로 잘못된 JSON/리스트 원소/크기 초과/redirect/상태별 오류. loopback·trust_env=False 유지.
+- 결과: [wiki.py](../../backend/app/wiki.py)에서 응답을 스트리밍으로 읽어 4 MiB, 문서 목록 1,000개로 제한하고, 검색·문서 조회 및 쓰기 응답의 필수 형식/ID를 검증한다. 정상 빈 검색과 손상된 응답을 구분하며 404/409/422/503, timeout 504, 잘못된 응답·기타 upstream 오류 502를 구분한다. RAG 오류도 이 코드를 보존한다. 전송 이후 잘못된 쓰기 응답은 자동 기억 job에서 성공이 아닌 `unknown`이다.
+- 호환성 제한: 실제 Wiki 서버 소스·실제 응답은 확인되지 않았다. 특히 PUT 성공 응답의 문서 ID, DELETE 성공 JSON 및 204 여부가 실계약과 다를 수 있으므로 운영 적용 전 W00 서버 계약 조사·격리 검증이 필요하다. 현재 204는 성공으로 추정하지 않고 502로 처리한다. 새 한도에 걸리는 기존 문서 목록도 확인해야 한다. 구형 쓰기 경로의 수동 재시도와 원자성 문제를 해결한 것은 아니다.
+- 검증: [test_wiki.py](../../tests/test_wiki.py)의 MockTransport 응답/상태/timeout/redirect/크기·개수 제한, [test_wiki_memory_integration.py](../../tests/test_wiki_memory_integration.py)의 잘못된 쓰기 응답 후 `unknown` 회귀 및 기존 기억·저장소 테스트 포함 **110 passed**. 운영 Wiki 호출·DB 마이그레이션·서비스 재시작 없이 수행했다.
 
-#### W12 [ ] Wiki 서버 원자적 revision 지원
+### 3차: 가족 공유 Wiki 통합 — 다음 작업부터 순서대로 실행
 
-- 의존: W00, W11. 실제 서버 소스 미확보면 실행 금지.
-- 대상: W00에서 확정한 Wiki 라우터·저장 계층·격리 테스트. 시작 시 정확한 파일 목록을 §8에 기입.
-- 작업: 저장 transaction 안에서 조건 revision 비교와 갱신. 기존 조건 없는 수동 API 호환과 새 조건부 API를 구분. 기존 본문/ID 변경 migration 금지.
-- 완료: 두 writer의 같은 revision 요청 중 하나만 성공. 조건 미일치에는 409와 안정된 오류 코드.
-- 검증: 격리 DB 동시성·외부 수동 편집 경쟁·legacy 요청. Client GET→PUT 테스트만으로 완료 처리하지 않음.
+현재 시작점은 **I09**이다. I00~I10의 상태는 이 문서에서 관리한다. Wiki는 가족용 LLM의 공유 공간이고 개인 기억·사용자별 접근 제어는 후속 범위다. 기존 Family Wiki 문서 없이 시작할 수 있지만 Client 대화·기억·작업 이력은 보존한다. 이력의 외부 Wiki ID와 새 통합 문서 ID를 저장소 식별자 없이 연결하지 않는다.
 
-#### W13 [ ] Wiki 서버 멱등 쓰기와 결과 조회
+전환 안전 계약: 단일 writer, 외부·통합 ID namespace 분리, 문서·FTS·기억·작업의 동일 SQLite transaction, revision 조건부 갱신, 작업 ID 기반 중복 방지, 출처 삭제·비활성 기억 격리를 지킨다. LLM/사용자 입력/HTTP 대기 중 DB 트랜잭션을 유지하지 않는다. 상세 전환 계약과 위험은 [통합 설계](wiki-client-consolidation-plan.md#전환-안전-계약)를 참고한다. 운영 DB·서비스·배포는 아래 I09/I10 전 별도 수행하지 않는다.
 
-- 의존: W12.
-- 대상: W00에서 확정한 Wiki 저장/API 파일과 테스트.
-- 작업: 문서 저장과 operation 기록을 같은 transaction으로 처리. 동일 key/payload 재사용, 충돌, 작업 결과 조회 구현. payload hash는 결정적 직렬화 사용.
-- 완료: 응답 유실 뒤 결과 조회로 원래 문서 ID/버전을 확인 가능. 같은 key의 다른 내용은 거절.
-- 검증: commit 전후 crash 경계, 같은 key 동시 POST, 동일 요청 재조회, operation 없음과 처리 불명 구분. 테스트용 서버만 사용.
+2026-11-13 결정: 같은 revision을 편집한 여러 요청 중 **먼저 commit된 저장**을 유지한다. 이후 요청은 409로 보류하고 작성 중인 내용을 보존한다. 도착 순서나 버튼을 먼저 누른 순서를 보장하지 않는다. 저장된 revision 간 diff와 충돌 시 사용자의 미저장 초안과 최신본 diff를 지원한다. 현재 revision 숫자만 저장하는 I01/I03 구현은 과거 본문을 보존하지 않으므로 별도의 버전 이력이 필요하다(I04a). 자동 병합·자동 덮어쓰기는 하지 않는다.
 
-#### W14 [ ] Client 저장·갱신·결과 조정 연결
+#### I00 [x] 전환 계약과 현황 확인
 
-- 의존: W10~W13.
-- 대상: [main.py](../../backend/app/main.py)의 기억 작업, [wiki.py](../../backend/app/wiki.py), W09 repository, [test_wiki_memory.py](../../tests/test_wiki_memory.py).
-- 작업: operation ID를 쓰기 전에 영속화. 새 버전 Wiki 저장 성공 뒤 활성 전환. unknown은 작업 조회로만 조정. 일반 legacy 문서 덮어쓰기 금지.
-- 완료: DB와 Wiki 부분 성공이 기존 기억 소실/중복 쓰기로 이어지지 않음. 서버 기능 미지원 시 새 안전 쓰기 경로 보류, 구형 위험 경로 자동 fallback 금지.
-- 검증: HTTP 응답 유실, Wiki 성공 뒤 Client DB 실패, 앱 재시작, 동시 중복/정정, Wiki 외부 변경/삭제, 대화 삭제. 추정 성공 처리 금지.
+- 의존: W00, W09~W11.
+- 대상: 이 문서, [통합 설계](wiki-client-consolidation-plan.md), [wiki-integration.md](wiki-integration.md), [db.py](../../backend/app/db.py), [main.py](../../backend/app/main.py), [wiki.py](../../backend/app/wiki.py), 기존 UI·설정.
+- 작업: 외부 API·화면 호출자, Client DB schema v16, 작업 상태와 문서 ID 참조를 파악한다. 빈 Wiki 시작, legacy/integrated namespace, 쓰기 중단·전환·롤백 계약을 확정한다. 운영 내용·비밀은 기록하지 않는다.
+- 완료: 각 ID 참조와 기존 pending/unknown/active 처리 경계, 확인 가능한 사실과 미확인 사항, I01/I02 수정 대상이 명시된다.
+- 검증: 코드·migration 설계 리뷰. 필요한 운영 조사는 읽기 전용으로 수행하고 파일과 실행 프로세스의 버전 차이 가능성을 기록한다.
+- 결과: 다음 I00 조사 기록의 호출 경로·상태·ID 참조와 I01/I02 계약을 확정했다. 작업 공간 코드·기존 SSH 읽기 전용 조사 이력과 소스 스냅샷을 검토했으며 이번 실행에서 운영 서비스·DB는 조회하거나 변경하지 않았다. 미확인 외부 호출자와 실제 운영 schema 버전은 I09 전환 검증에 남긴다.
 
-### 3차: RAG·출처·조회 비용
+##### I00 조사 기록 — 현재 코드에서 확인
 
-#### W15 [ ] RAG 역할 분리·발췌·검색 평가
+| 경로·저장 위치 | 현재 동작과 전환 영향 |
+| --- | --- |
+| [wiki.py](../../backend/app/wiki.py) | `127.0.0.1:8020` HTTP 어댑터, 8초 timeout. 문서 목록·상세·작성 응답을 검증한다. 통합 모드에서는 외부 HTTP를 호출하지 않아야 한다. |
+| [main.py](../../backend/app/main.py)의 `/api/v1/wiki/documents` | 인증 API가 목록·상세·생성·수정·삭제를 외부 Wiki에 전달한다. PUT의 기존 GET→시간 비교→PUT은 원자적 CAS가 아니다. 통합 모드에서도 기존 성공 응답은 유지한다. |
+| [main.py](../../backend/app/main.py)의 RAG·기억 작업 | quick 대화의 검색은 외부 `/api/search` limit 3, 기억 후보 검색은 limit 5다. 기억 작업은 모델 판단 후 외부 GET/POST/PUT을 수행한다. 현재 legacy writer가 동작하며 W09/W10의 새 repository와는 연결되어 있지 않다. |
+| [main.py](../../backend/app/main.py)의 답변 저장 | Wiki 참고자료 JSON이 assistant `messages.content`의 텍스트로 보존된다. 구조화된 문서 참조가 아니므로 ID를 파싱해 새 Wiki 문서에 연결하거나 과거 메시지를 일괄 수정하지 않는다. |
+| [WikiMemoryStatus.tsx](../../frontend/src/components/WikiMemoryStatus.tsx), [api.ts](../../frontend/src/api.ts) | 이력은 `document_id`와 제목 등을 표시하지만 현재 문서 이동 링크는 없다. Wiki 검색·자동 기억 토글과 이력 UI는 있고 Client 문서 관리 UI는 없다. |
+| 기존 Wiki [소스 스냅샷](../../tests/fixtures/wiki_server_w12/main.py) | 단독 Wiki는 자체 문서 CRUD·검색 및 LLM 8080 직접 호출 `/api/ask`를 제공한다. 확인했던 HTML 화면은 문서 관리·검색·AI 질문을 호출한다. Client 채팅은 `/api/ask`를 사용하지 않는다. |
 
-- 의존: W11, W14.
-- 대상: [wiki.py](../../backend/app/wiki.py), [main.py](../../backend/app/main.py)의 검색 경로, [prompting.py](../../backend/app/prompting.py), [test_wiki.py](../../tests/test_wiki.py), [wiki-search-evaluation.md](wiki-search-evaluation.md).
-- 작업: 일반 자료/활성 기억을 구분, 비활성 기억 문서 제외, bounded query/후보/발췌. 전체 payload 예산 안에서 자료를 선택. 검색 순위 알고리즘 변경은 실제 Wiki 구현 확인·평가 결과가 있을 때만 별도 Task로 분할.
-- 완료: legacy 문서 불변, 삭제/만료/비활성 기억 오주입 방지, 불충분 근거 안내, 실제 context 준수.
-- 검증: 한국어 조사·후속 질문·긴 문서·무관한 제목·검색 없음·오류·문서 지시 injection·4K/16K profile mock. 기존 대비 Recall@3/무관 근거율 기록.
+별도 Wiki HTML·서버 파일은 이전 SSH 조사에서 읽었으며, 그때의 소스 파일과 실제 실행 프로세스가 동일하다는 증거는 없다. 이전 조사 문서의 `/wiki/*`→8020 경로 및 서비스 상태는 **과거 관찰**이다. 현재 운영 설정·직접 API 사용자·다른 기기나 외부 호출자·운영 DB의 migration 버전 및 행 수는 미확인이다. I00의 설계는 운영 레코드의 존재를 가정하지 않으며 I09에서 읽기 전용으로 재확인한다.
 
-##### W15-Q0~Q6 [ ] 검색어 정규화·Alias 세부 작업
+##### I00 기존 ID·상태와 namespace 계약
 
-- 사용자 보고: `bc250 ai 서버가 뭐야?`는 성공하지만 `bc250 이 뭐야?`는 실패한다. 운영 재현은 미실시다.
-- [검색어 정규화·Alias 개선 계획](wiki-query-alias-plan.md)에 Client 코드 근거, FTS5의 조건부 토큰화 분석, 정확 Alias→FTS5→제한 확장 전략, 신구 응답 호환, 단계별 수정 대상·의존·완료 조건·테스트·롤백을 기록했다.
-- 순서: Q0 서버 계약 조사 → Q1 질문/표기 정규화 → Q2 Alias 수명주기 → Q3 단계 검색 → Q4 Client/발췌 → Q5 근거 메타데이터(W16 연계) → Q6 평가. 각 Task는 별도로 실행하며 서버 수정 경로는 Q0 확인 전 확정하지 않는다.
-- Q0~Q3의 검색 설계·격리 검증은 W14와 독립적으로 진행 가능하다. W15의 기억 문서 격리와 새 writer 활성화 차단 조건은 유지한다.
-- 완료 기준: `bc250`, `bc-250`, `BC 250`, `bc250 ai 서버`가 비충돌 Alias fixture에서 같은 문서 Top1; 기존 성공 질의 Recall@3·무관 결과율·지연 회귀 기준 충족. 새 LLM/벡터 DB 도입 없음. 현재는 계획만 반영했고 코드·DB·운영 설정은 변경하지 않았다.
+작업 공간 [db.py](../../backend/app/db.py)는 `LATEST_SCHEMA_VERSION = 16`이다. 이는 현재 소스의 목표 버전이며 운영 DB가 16이라는 뜻은 아니다. 현재 `initialize()`는 실제 DB 생성·migration과 일부 UPDATE를 수행하므로 읽기 전용 조사에 호출하지 않는다.
 
-#### W16 [ ] 출처 메타데이터 API·본문 분리
+| 저장 위치 | 현재 식별·상태 | I02 계약 |
+| --- | --- | --- |
+| `wiki_memory_jobs.document_id` | generation별 nullable 정수, 상태 `pending/running/writing/completed/skipped/failed/unknown`; 이력에 반환 | 기존 행은 `legacy_external`로 식별하고 값·상태·본문을 이력으로 보존. 값이 NULL이어도 옛 작업을 새 문서 작업으로 추정하지 않는다. |
+| `memory_records.wiki_document_id`, `wiki_revision` | nullable 정수·문자열; candidate/active/superseded/quarantined/redacted. active unique는 scope/subject/predicate 기준 | 기존 행을 `legacy_external`로 식별. 통합 조회에서 active로 자동 승격하지 않으며 ID만으로 열지 않는다. slot 충돌 정책과 인덱스에 저장소 구분을 반영한다. |
+| `memory_operations.wiki_document_id`, `record_id`, `expected_revision` | nullable 문서 ID, record FK; claimed/prepared/sending/unknown/confirmed/applied/rejected/cancelled. open unique는 scope/subject/predicate 기준 | record와 동일 namespace를 명시·검증한다. 과거 진행 중 작업을 통합 저장소에서 실행하거나 재전송하지 않는다. 복구되지 않은 작업이 새 slot을 막는지 검사하고 격리 정책에 따라 분리한다. |
+| `memory_document_quarantine.wiki_document_id` | 정수 하나가 PRIMARY KEY이고 저장소 구분 없음 | `(store_id, wiki_document_id)` 복합 키로 안전하게 변경·인덱스 재구성한다. 외부 ID 1 격리가 통합 ID 1과 섞이지 않으며 양쪽을 독립 격리할 수 있어야 한다. |
+| 사용자·assistant 메시지의 Wiki 참고자료 | assistant 본문 안 텍스트·발췌·ID, 출처 테이블 아님 | 메시지 내용 그대로 보존. 번호는 당시 외부 Wiki의 참고자료이며 통합 문서의 클릭 가능한 참조로 자동 변환하지 않는다. |
 
-- 의존: W15.
-- 대상: [main.py](../../backend/app/main.py), [db.py](../../backend/app/db.py), [api.ts](../../frontend/src/api.ts), [test_api.py](../../tests/test_api.py).
-- 작업: 새 요청의 명시적 opt-in 계약과 저장 출처 스키마 구현. retrieved/provided/cited 구분. 기존 답변 수정 없음. 새 모드의 다음 턴에는 출처 JSON 본문 재주입 없음.
-- W15-Q5 연계: 검색 일치 단계·Alias는 retrieved 진단이며 답변 근거가 아니다. provided는 최종 payload 기준, cited는 전달한 문서 ID와 대조한다. ID 일치만으로 주장과 발췌의 의미 일치까지 검증됐다고 표시하지 않는다. 상세 계약은 [Alias 계획 §5](wiki-query-alias-plan.md#5-기존-문서인덱스api-호환)를 따른다.
-- 완료: stream/nonstream·이력 조회 동일 출처, 구형 요청 기본 형식 유지. 문서 버전/발췌는 답변 생성 시점 기준.
-- 검증: 전달되지 않은 ID 인용, 최종 프롬프트에서 제거된 자료, 문서 사후 변경/삭제, 구형 클라이언트, 재로딩·request 중복. 기존 legacy 답변의 자동 재작성/문자열 휴리스틱 삭제 금지.
+전환 시 legacy `pending`은 새 writer로 처리하지 않고 중단 이력으로 남긴다. 이미 외부로 전송됐을 수 있는 `writing/running/unknown`과 `sending/unknown/confirmed`는 성공·실패를 추정하거나 통합 저장소에서 재시도하지 않고 legacy 불명/검토 대상으로 보존한다. 종료된 `completed`, `skipped`, `failed` 이력은 과거 상태 그대로 유지한다. 기존 `active` 기억도 외부 namespace에서만 보존하며 통합 검색·활성 기억에는 포함하지 않는다. 이는 목표 계약이며 현재 startup의 `pending→failed`, `running/writing→unknown` 처리가 namespace를 구분해 구현됐다는 뜻은 아니다.
 
-#### W17 [ ] 경량 기억 조회·출처 카드·polling 개선
+##### I00 I01/I02 구현 지침·전환 경계
 
-- 의존: W04, W05, W16.
-- 대상: [main.py](../../backend/app/main.py)의 history/detail API, [main.tsx](../../frontend/src/main.tsx), [api.ts](../../frontend/src/api.ts), [MessageList.tsx](../../frontend/src/components/MessageList.tsx), W05 UI 컴포넌트/테스트.
-- 작업: view=summary opt-in, 상세 클릭 조회, source 카드, 비활성 탭 중지/진행 중 polling. 대화 완료 이벤트 이후 새 작업 discovery를 보장하고 미등록→등록 race에도 영구 중단하지 않음.
-- 완료: 30개 전후 본문을 매 5초 전송하지 않음. 기본 API 응답 유지. 요청 중첩 방지, R12 충족.
-- 검증: fake timers·visibility·네트워크 실패·대화 전환·완료 직후 등록 지연·상세 권한/대화 소속 확인. frontend lint/test/build와 화면 확인.
+1. **I01:** [db.py](../../backend/app/db.py)의 v16 뒤에 새 migration을 추가해 같은 Client DB에 통합 문서·revision·FTS5·trigger를 만든다. DB 초기화는 기존 패턴을 검토하되 migration의 schema/버전 기록이 실패 시 원자적으로 되돌아가도록 검증한다. 별도 Wiki 파일을 열거나 import하지 않는다. v15에서 v16을 거쳐 올라가는 경우와 v16을 모두 테스트한다.
+2. **I02:** `wiki_memory_jobs`, `memory_records`, `memory_operations`, `memory_document_quarantine`의 저장소 식별자를 함께 다룬다. legacy 행과 신규 행의 기본값을 혼동하지 않도록 신규 쓰기는 namespace를 명시한다. quarantine의 기존 단일 PK와 record/operation의 active/open unique 인덱스, document lookup 인덱스를 migration에서 재설계한다. FK/참조·redaction·조회·이력 API 및 UI 표시도 함께 검증한다. 전환 전에 새 namespace를 모르는 구버전은 writer로 실행하지 않는다. 구버전이 schema 버전을 검사한다고 가정하지 않고 I09에서 실행 자체를 통제한다.
+3. 같은 SQLite transaction에서 문서·FTS·기억 상태·작업 결과를 함께 commit한다. 별도 Client↔Wiki HTTP 부분 성공 복구 계약은 통합 경로에 그대로 이식하지 않는다. 다만 commit 뒤 클라이언트 응답이 유실될 수 있으므로 작업 ID·payload hash에 기반한 결과 재조회와 idempotency는 I07에서 구현한다.
+4. 운영 전환은 구형 자동 기억 작업 생성과 수동 Wiki 쓰기를 막고, 실행 중 작업을 종료 또는 legacy 불명으로 분류한 뒤 단일 통합 writer를 활성화한다. 기존 Wiki를 빈 통합 Wiki로 전환한 뒤에는 구 서비스가 자동 쓰기로 되돌아가지 않는다. 새 통합 데이터가 생긴 후 롤백은 우선 읽기 전용 보존이며 과거 서비스 재개 시 양쪽 변경·ID 충돌을 별도 해결한다. 실제 재시작·기존 Wiki DB 삭제는 I10의 별도 운영 작업이다.
+5. I01/I02 테스트는 임시 DB와 fixture로만 수행한다. 같은 숫자 ID를 가진 양 namespace, 이력·메시지 보존, 중단/불명 작업, 구버전 실행 차단, index/FK·rollback·반복 migration을 포함한다. 현재 조사에는 테스트 실행이나 운영 데이터 저장이 없다.
 
-#### W18 [ ] 기억 작업 대기·토큰·모델 전환 비용 제한
+#### I01 [x] 통합 문서·FTS 스키마
 
-- 의존: W14, W15.
-- 대상: [main.py](../../backend/app/main.py)의 background scheduler/prepare, [config.py](../../backend/app/config.py), [test_background_switch_deferral.py](../../tests/test_background_switch_deferral.py), [test_model_context.py](../../tests/test_model_context.py).
-- 작업: 기존 DB 작업 큐 사용, bounded admission/대기/추론 1개. foreground 대기 중 신규 기억 추론 양보. 매 epoch 재준비 시 불필요한 Wiki 재검색 빈도 제한은 freshness 보존 가능한 경우만 적용.
-- 완료: 후보당 전송 1회 원칙, 명확한 admission 거절만 재준비, 타이틀·요약 경로 회귀 없음. 16K 하드코딩/모델 자동 전환 없음.
-- 검증: 큐 포화·foreground 경합·모델 hold·409 전송 전 거절/전송 후 불명·schema 미지원·토큰 초과·취소/재시작. fake gate로 검증하고 실제 GPU 성능은 W19에서 구분.
+- 의존: I00.
+- 대상: [db.py](../../backend/app/db.py), 신규 `tests/test_integrated_wiki_db.py`.
+- 작업: v16 다음 additive migration에 통합 문서·revision·FTS5·trigger를 추가한다. 기존 Client 데이터는 보존하고 기존 Wiki 자동 import 없이 0건으로 시작한다. FTS 오류를 감추지 않는다.
+- 완료: 새 DB 파일 없이 문서 및 인덱스가 추가되고 기존 대화·기억 이력이 유지된다.
+- 검증: v15/v16 upgrade·반복·중간 실패 rollback, FTS insert/update/delete, 빈 Wiki, 기존 데이터 보존 및 다른 DB 파일 미생성.
+- 결과: [db.py](../../backend/app/db.py)에 migration 17로 `wiki_documents`와 `wiki_documents_fts` 및 insert/update/delete trigger를 추가했다. 문서 revision은 양의 정수로 보관하며 조건부 갱신은 I03에서 구현한다. 별도 Wiki import나 Client API 연결은 없다. migration은 savepoint로 schema·버전 기록을 함께 처리하며 FTS 오류는 숨기지 않는다.
+- 검증 결과: [test_integrated_wiki_db.py](../../tests/test_integrated_wiki_db.py)의 v15/v16 형태 업그레이드·반복, 기존 대화/작업/격리 이력 보존, 빈 Wiki, 실패 rollback, FTS 동기화·오류 rollback 및 revision 제약과 기존 회귀 포함 **116 passed**. 운영 DB는 접근하지 않았으며 실제 배포 후 startup 시 migration 17이 실행될 수 있다. 구버전 실행 차단과 namespace는 I02/I09에서 처리한다.
 
-#### W19 [ ] 통합 품질·비용 평가와 롤백 문서 확정
+#### I02 [x] 저장소 출처 namespace 분리 — 로컬 저장소 범위 완료
 
-- 의존: W07, W14~W18.
-- 대상: [wiki-search-evaluation.md](wiki-search-evaluation.md), [wiki-integration.md](wiki-integration.md), [README](../../README.md), 이 문서 §8.
-- 작업: 기존/개선 동일 fixture로 평가. Qwen3.6/Gemma 실제 모델 검증은 별도 승인된 환경·실행 기회가 있을 때 수행하고 없으면 미검증으로 남김. 새로운 schema 전체를 기존 모델 기능 시험이 보장한다고 간주하지 않음.
-- 완료: 질문/assistant 사실 저장 0건, 정확 중복 쓰기 0회, conflict/unknown 덮어쓰기 0회(필수 회귀 세트 기준). Recall@3, 저장 precision, 선별 recall, 추가 추론 비율/토큰, foreground 지연 p50/p95, UI 요청량 기록.
-- 검증: 관련 backend 통합, frontend lint/tests/build, 네 viewport 시각 확인. 운영 적용·부하 측정·장애 주입 미실행은 별도 표시. 모두 skip하는 정책으로 recall을 희생해 완료하지 않음.
+- 의존: I01.
+- 대상: [db.py](../../backend/app/db.py), [memory_repository.py](../../backend/app/memory_repository.py), [main.py](../../backend/app/main.py), 관련 테스트.
+- 작업: 기존 job·record·quarantine을 `legacy_external`로 보존하고 신규 `integrated`와 분리한다. 참조·유일성·격리는 `(store_id, document_id)` 기준으로 설계한다. 기존 pending/unknown/active를 통합 active로 자동 승격하거나 재전송하지 않는다.
+- 완료: 로컬 저장소의 기존 ID 참조와 활성·작업·격리 조회가 namespace로 분리되고 구 Wiki 이력이 보존된다. 아직 없는 통합 CRUD/RAG 경로의 전체 검증과 배포 제어는 각각 I03~I07, I09의 완료 조건으로 이관한다.
+- 검증: 양 저장소 ID 1 충돌, 기존 active/unknown 이력, redaction·quarantine 및 반복 upgrade. pending 등 전체 전환 상태와 실제 연결 경로는 I04/I07에서 확인한다.
+- 진행: [db.py](../../backend/app/db.py)의 migration 18은 기존 job·record·operation을 `legacy_external`로 보존하고 quarantine의 `(store_id, wiki_document_id)` 복합 키와 저장소별 unique/index를 만든다. record/operation·정정 대상의 namespace 불일치를 거절한다. [memory_repository.py](../../backend/app/memory_repository.py)는 namespace별 조회·claim·격리·redaction을 수행하고 이력 API/UI에 구 Wiki 표시를 추가했다. 기존 호출 호환을 위한 기본 namespace는 `legacy_external`이며 통합 호출은 `integrated`를 명시해야 한다.
+- 검증: [test_memory_namespace.py](../../tests/test_memory_namespace.py)의 v17 반복 upgrade, 동일 문서 ID, 기존 active/unknown 및 새로운 claim, 서로 다른 namespace의 격리·redaction, 불일치 거절·migration rollback과 기존 회귀 포함 **119 passed**. 프런트엔드 테스트는 기존 Vitest 실행 파일 권한 문제 및 누락된 jsdom 파일로 실행되지 않았다. 패키지 설치는 하지 않았다.
+- 후속 조건: 통합 CRUD/RAG 및 writer의 옛 참조 차단과 작업 상태 전환은 I03~I07에서, 구버전 실행을 차단하는 배포 제어는 I09에서 검증한다. 미실행된 이력 UI 회귀는 I05에서 반드시 실행한다. 현재 기본값은 구버전이 namespace를 이해한다는 보장이 아니며 구버전 writer 자동 복귀는 금지한다. migration 18은 배포 후 startup에서 실행될 수 있으며 운영 DB에는 적용하지 않았다.
+
+#### I03 [x] 내부 Wiki repository CRUD·검색
+
+- 의존: I01, I02.
+- 대상: 신규 `backend/app/wiki_repository.py`, [wiki.py](../../backend/app/wiki.py), 신규 repository 테스트.
+- 작업: 명시적 connection과 짧은 transaction으로 CRUD·FTS/부분 검색을 구현하고 revision 조건부 갱신을 원자화한다. 기존 Wiki 검색을 참고하되 FTS 오류는 숨기지 않고 요청과 결과를 제한한다.
+- 완료: 동일 revision의 동시 수정 중 하나만 성공하고 나머지는 409에 대응할 수 있다. DB 연결을 잡은 채 네트워크·LLM 호출을 하지 않는다.
+- 검증: 동시 수정·수동 편집 경합, 404/409, FTS 동기화, 특수문자·빈 검색·검색 오류, 연결 종료.
+- I02 이관: 동일 숫자의 legacy 문서 ID로 통합 문서를 조회·수정·삭제하지 않도록 저장소 경계를 검증한다.
+- 결과: [wiki_repository.py](../../backend/app/wiki_repository.py)는 호출자가 소유하는 SQLite connection과 transaction에서 통합 저장소 ID를 명시적으로 요구한다. 수정·삭제는 예상 revision을 원자적으로 비교하며 `WikiNotFound`/`WikiConflict`를 구분한다. FTS 최대 30개·부분 문자열 후보 최대 200개·반환 최대 20개로 제한하고 통합 namespace에서 격리된 문서를 검색에서 제외한다. FTS 오류는 전파한다. 동기 함수이므로 I04의 async 경로 연결 시 이벤트 루프 차단과 connection의 스레드 소유를 고려한다.
+- 검증 결과: [test_wiki_repository.py](../../tests/test_wiki_repository.py)의 동시 수정, revision 충돌·미존재, 외부 ID 거절, namespace별 격리, FTS 오류·특수문자·경계와 호출자 transaction rollback 및 기존 관련 회귀 **124 passed**. 기존 성공 검색의 성능·정확도 대비, Alias, API 오류 매핑과 활성 기억 별도 주입은 I04/I06에서 검증한다. 운영 DB·서버를 변경하지 않았다.
+
+#### I04 [x] 공용 API와 저장소 모드 전환 — Client 측 완료
+
+- 의존: I03, W11.
+- 대상: [main.py](../../backend/app/main.py), [wiki.py](../../backend/app/wiki.py), [config.py](../../backend/app/config.py), [test_wiki.py](../../tests/test_wiki.py), [test_api.py](../../tests/test_api.py).
+- 작업: 기존 CRUD 성공 응답을 유지하고 통합 검색 API와 revision 조건부 갱신을 제공한다. 통합 feature flag는 기본 비활성이며 레거시/통합 모드는 각각 하나의 writer만 사용한다.
+- 완료: 기존 Client 계약이 유지되고 오류를 빈 검색으로 바꾸지 않는다. 두 writer가 동시에 활성화되지 않는다.
+- 검증: API 인증·기존 형식·빈 검색·404/409/422, 양 모드, 외부 HTTP/내부 DB 오류와 동시 writer 차단.
+- I02 이관: 이전 pending/running/writing/unknown 작업을 통합 작업으로 실행·재전송하지 않는 전환과 API의 legacy 참조 차단을 검증한다.
+- 진행: [config.py](../../backend/app/config.py)에 `wiki_store` 모드를 추가했다. 기본값은 `legacy_external`이며 `integrated`에서 [main.py](../../backend/app/main.py)의 CRUD·검색과 RAG 검색을 내부 repository로 보낸다. SQLite connection 생성·사용·종료는 같은 worker thread에서 처리한다. 통합 모드의 상세/수정/삭제는 `store_id=integrated`가 필요하고 삭제에는 `expected_revision`이 필요하다. PUT은 revision 또는 기존 `expected_updated_at` 조건을 하나의 transaction에서 검증한다. 격리 문서는 일반 목록·상세·검색에서 제외하고 수정·삭제도 차단한다.
+- 자동 기억: 통합 모드의 pending 작업은 구 Wiki writer를 호출하지 않고 `integrated_memory_unavailable` 실패 이력으로 남긴다. 통합 기억 writer는 I07 전까지 미구현이며 old 프로세스·별도 Wiki 서버의 쓰기를 이 설정만으로 막지 못한다. 레거시 모드의 기존 동작은 유지한다.
+- 검증: [test_wiki_mode_api.py](../../tests/test_wiki_mode_api.py)의 격리 DB 라우트 함수 직접 테스트와 기존 관련 회귀 **130 passed**. 통합/legacy 모드, 422/404/409/503, timestamp/revision, 관리 문서 격리, legacy pending 차단을 확인했다. 이 환경에서 asyncio thread 완료 후 루프가 깨어나지 않아 테스트는 `to_thread`를 동기 대체했다. ASGITransport 실제 요청 테스트도 대기 상태로 중단해 HTTP 인증·직렬화 및 실제 thread 스케줄링은 미검증이다.
+- 후속 검증: [test_wiki_mode_http.py](../../tests/test_wiki_mode_http.py)를 정상 실행 환경에서 실제 ASGI 요청 및 worker thread로 실행해 인증, 빈 검색, 성공 응답, namespace·revision 요구, 404/409/422 및 동시 저장을 검증했다. 같은 revision의 두 수정은 하나만 commit되고 다른 하나는 409다. 관련 백엔드 회귀 **131 passed**. 위 130개 테스트의 inline thread 대체는 제거했다. 통합 모드에서 `store_id`와 삭제 revision 필수화는 구형 상세·삭제 요청과 호환되지 않으므로 I05 UI와 배포 전 호출자 확인에 반영한다.
+- 남은 운영 조건: 구버전 Client/별도 Wiki 프로세스까지 포함한 단일 writer 제어는 I09 전환 시 검증한다. 구형 프로세스와 새 프로세스가 동시에 동작하지 않는다는 것을 이 설정만으로 보장하지 않는다. 운영 DB·서버·설정은 변경하지 않았다.
+
+#### I04a [x] Wiki revision 이력과 diff API
+
+- 이력 정책(구현 기준): 통합 문서별 최신 100개 revision의 제목·본문·카테고리 snapshot을 같은 Client DB에 보관하고 101번째 저장 시 가장 오래된 snapshot부터 삭제한다. 삭제된 문서의 이력은 문서 삭제 transaction에서 cascade 삭제한다. 출처 삭제 등으로 격리된 기억 문서는 이력·diff API에서도 숨긴다. 모든 이력은 현재 앱 접근자에게 공유되므로 예전 본문에도 정보가 남는다는 점을 I05 UI에 표시한다. 기존 통합 문서는 migration 시 현재 revision만 snapshot으로 만들며 없는 과거 revision은 복원하지 않는다. diff는 최대 총 4,000줄 및 UTF-8 응답 2 MiB를 넘으면 413으로 안내하고 잘린 diff를 완전한 결과로 표시하지 않는다.
+
+- 의존: I03, I04의 API 계약. I05 전에 수행한다.
+- 대상: [db.py](../../backend/app/db.py), [wiki_repository.py](../../backend/app/wiki_repository.py), [main.py](../../backend/app/main.py), 신규 `tests/test_wiki_revision_history.py` 및 API 테스트.
+- 작업: Client SQLite에 문서별 revision의 제목·본문·카테고리와 시각을 보관한다. 생성·수정·이력 기록·FTS 갱신을 같은 transaction으로 처리하고 실패 시 함께 rollback한다. 이력 조회와 두 저장 revision의 diff를 인증된 opt-in API로 제공한다. 삭제된 문서와 출처 삭제·격리 기억에 대한 이력 접근은 동일한 격리 정책을 적용한다. 기존 문서의 초기 이력 생성은 통합 기능 활성 전 migration에서 검증하며 기존 외부 Wiki는 import하지 않는다.
+- 완료: 첫 commit만 성공하고 후속 409에서 기존 저장은 바뀌지 않는다. 저장된 두 revision의 차이를 확인할 수 있으며 현재 revision 숫자만으로 과거 내용을 추정하지 않는다. 사용자 초안은 서버가 자동 저장하지 않는다.
+- 검증: 동시 수정 1건 성공·1건 409, 이력과 FTS rollback, 제목/본문/카테고리 diff, 없는 revision·다른 문서 ID·권한 오류, 한글·긴 본문, 삭제/격리·민감한 이전 본문의 노출 방지, 반복 migration. 이력 저장량과 응답 크기를 제한하고 정확한 보존·삭제 정책을 구현 전에 문서화한다.
+- 결과: [db.py](../../backend/app/db.py)의 migration 19는 기존 통합 문서의 현재 revision만 snapshot으로 기록하고 이후 문서 생성·revision 갱신을 trigger로 기록한다. 최근 100개만 유지하고 문서 삭제 시 이력은 cascade 삭제된다. [wiki_repository.py](../../backend/app/wiki_repository.py)와 [main.py](../../backend/app/main.py)는 인증된 저장 revision 목록·diff를 제공하고 read snapshot 안에서 격리·삭제 여부를 확인한다. 첫 commit 우선 CAS는 I04의 기존 구현을 유지한다.
+- 검증 결과: [test_wiki_revision_history.py](../../tests/test_wiki_revision_history.py)의 migration 반복/실패 rollback, 한글 제목·본문·카테고리 diff, 100개 상한, 삭제·격리 및 인증, diff 상한 HTTP 413과 기존 HTTP 동시성·기억 회귀를 확인했다. 관련 전체 회귀 **136 passed**, 이후 추가 HTTP 413 검증 포함 이력 테스트 **5 passed**. 실제 운영 DB·Wiki는 변경하지 않았고 배포 후 startup에서는 migration 19가 실행될 수 있다. 미저장 초안 대 최신본 비교 UI는 I05에서 구현한다.
+
+#### I05 [x] 공유 Wiki 문서 관리 UI
+
+- 의존: I04, I04a.
+- 대상: [main.tsx](../../frontend/src/main.tsx), [api.ts](../../frontend/src/api.ts), 신규 `frontend/src/components/WikiManager.tsx`, 스타일과 frontend 테스트.
+- 작업: 공유 안내와 문서 목록·생성·편집·삭제·검색을 제공한다. revision 이력과 저장된 버전 간 diff를 보여주고, 충돌 시 미저장 초안과 최신본의 차이를 보여준다. 기존 Wiki AI 질문은 Client 채팅의 Wiki 검색을 이용하도록 이동 안내한다.
+- 완료: 가족 공유 범위가 표시되고 저장 실패·revision 충돌 시 사용자의 편집 내용이 보존된다.
+- 검증: React 테스트·접근성·키보드·모바일/데스크톱, 409 draft 보존·최신본/초안 diff·재편집 후 명시적 재저장, 과거 revision diff, 중복 클릭, 인증/오류와 안전한 렌더링.
+- I02 이관: 미실행된 Wiki 기억 이력의 legacy 출처 표시 회귀를 실행하고 결과를 기록한다. 기존 환경의 jsdom 누락 문제도 해결하거나 미실행으로 명시한다.
+- 진행: [WikiManager.tsx](../../frontend/src/components/WikiManager.tsx)에 공유 안내·문서 목록/검색·생성/편집/삭제, 저장된 revision diff, 충돌 시 최신본과 초안 비교 및 명시적 재저장을 추가했다. [main.tsx](../../frontend/src/main.tsx)에서 공유 Wiki 화면으로 이동하며 화면 전환 시 컴포넌트를 유지해 초안을 보존한다. 기본 legacy 모드에서는 기존 `/wiki/` 링크를 제공하고 통합 문서 쓰기는 하지 않는다. [main.py](../../backend/app/main.py)에 인증된 모드 확인 API를 추가했다.
+- 검증 상태: [WikiManager.test.tsx](../../frontend/tests/WikiManager.test.tsx)에 생성·검색·충돌과 초안 유지·이력 diff·삭제·legacy 모드 회귀와 [WikiMemoryStatus.test.tsx](../../frontend/tests/WikiMemoryStatus.test.tsx)에 구 Wiki 표시 회귀를 작성했다. 서버 mode API 관련 테스트 **8 passed**. 기존 frontend 의존성의 `jsdom` 파일과 TypeScript `lib.es2022.d.ts` 등이 누락돼 Vitest와 TypeScript 컴파일이 시작되지 못했다. frontend 테스트·lint·build·네 viewport는 아직 미검증이다. 의존성 복구 없이 I05 완료로 표시하지 않는다.
+- 후속 검증: 사용자가 의존성 설치를 허용해 `frontend`에서 lockfile 기준 `npm ci`로 복구했다. 프런트엔드 전체 테스트 **23 passed**, `npm run lint`, `npm run build` 통과. 메모리 내 모의 API와 로컬 정적 서버에서 1280×800·768×1024·390×844·320×568의 문서 입력 UI와 가로 넘침 여부를 확인했다. 실제 운영 Wiki에 대한 저장·삭제나 운영 데이터는 사용하지 않았다. 테스트 서버는 종료했다.
+
+#### I06 [x] Alias 검색·RAG 통합
+
+- 의존: I03, I04.
+- 대상: [Alias 계획](wiki-query-alias-plan.md), 신규 `backend/app/wiki_query.py`, 내부 Wiki repository, [wiki.py](../../backend/app/wiki.py)와 테스트.
+- 작업: 명시 Alias 정확 일치 → FTS → 제한된 확장 순서로 검색하고 문서 ID 중복을 제거한다. 모든 검색 단계에 격리 필터를 적용한다. 빈 Wiki에 문서나 Alias를 자동 생성하지 않는다.
+- 완료: 아래 현재 단계 명세와 격리 테스트를 충족한다. 기존 API 응답 형식과 문서 데이터를 보존한다.
+- 검증: 아래 현재 단계 검증 범위에 한정한다. 검색 후보와 실제 답변 근거의 구분은 I08에서 완료한다.
+- I02 이관: legacy 문서 ID가 통합 문서와 같아도 검색·RAG 및 격리 필터에서 서로 섞이지 않는지 검증한다.
+- 구현: [wiki_query.py](../../backend/app/wiki_query.py)의 제한된 표기 정규화와 독립 질문 처리를 통합 RAG에 연결했다. [db.py](../../backend/app/db.py)의 추가 migration 20은 기존 SQLite에 명시 Alias 테이블을 추가한다. [wiki_repository.py](../../backend/app/wiki_repository.py)는 제목/별칭 정확 일치, 기존 FTS·부분 문자열, 결과가 없을 때 제한 정규화 확장 순서로 검색하고 각 단계에서 통합 격리를 적용한다. 별칭 충돌 후보는 `alias_ambiguous`로 표시하고 [main.py](../../backend/app/main.py)가 모델 답변 대신 대상 확인 질문을 반환·저장한다. [WikiManager.tsx](../../frontend/src/components/WikiManager.tsx)에서 별칭을 명시적으로 조회·등록하며 revision 충돌 시 입력을 보존한다. 문서나 별칭을 자동 생성하지 않는다.
+- 검증: 임시 DB에서 표기 네 가지·한국어 질문, 숫자 유사어, 별칭 충돌·삭제·revision 충돌, namespace 격리 및 독립/후속 질문을 검사했다. 기존 Wiki/기억 회귀 **48 passed**, 추가 검색·namespace 회귀 **25 passed**, 별칭 인증·검색 HTTP **1 passed**. 프런트엔드 전체 **24 passed**, lint/build 및 `git diff --check` 통과. 운영 DB와 서비스는 변경하지 않았다.
+- 완료 검증: [test_wiki_alias.py](../../tests/test_wiki_alias.py), [test_wiki_mode_api.py](../../tests/test_wiki_mode_api.py), [test_api.py](../../tests/test_api.py), [test_prompting.py](../../tests/test_prompting.py) 및 기존 Wiki·기억 회귀 **97 passed**. 통합/legacy 동일 ID 격리, 201개 초과 문서의 오래된 명시 별칭, 제목 변경 및 FTS, 유사 숫자, 오류·특수문자, 확인 질문의 stream/nonstream 저장과 자동 기억 미생성, 4K/16K 예산을 격리 환경에서 검사했다. 이전 frontend 전체 **24 passed**, lint/build 통과. 운영 DB·서비스·모델 호출은 수행하지 않았다.
+- 소규모 비교: 문서 네 개, 대표 기존 성공 질의 네 개에서 각 질의의 관련 문서 Top3 및 무관 결과 집합이 이전 FTS+부분 문자열 순위와 같았다. 같은 로컬 임시 DB에서 질의별 25회 반복한 중앙값은 이전 **0.095 ms**, 현재 **0.226 ms**였다. 매우 작은 warm fixture의 참고 수치이며 BC-250 운영 성능·대규모 Recall이나 실제 답변 품질을 보장하지 않는다.
+
+##### I06 현재 단계 명세 — 가족 공유 Wiki의 소규모 검색
+
+- 우선순위: 이 명세가 I06의 실제 범위와 완료 기준이다. [Alias 계획](wiki-query-alias-plan.md)의 전체 A01~A09 및 수치 성능 기준은 상세 참고와 향후 평가 항목으로 보존하며, 여기서 명시하지 않은 기준을 I06 완료의 추가 차단 조건으로 적용하지 않는다.
+- 목표·제한: 기존 SQLite FTS5와 명시 별칭을 이용하는 소규모 공유 Wiki 검색이다. 자연어 의미 검색, 범용 한국어 형태소 분석, 자동 별칭 생성, 모든 질문의 정확한 검색·답변은 보장하지 않는다. 새 검색 서비스·벡터 DB·상주 모델은 도입하지 않는다.
+- 검색: 등록된 별칭은 문서 전체를 대상으로 정규화 key의 인덱스에서 찾는다. 제목의 정규화 정확 비교와 부분 문자열 보조 검색은 최근 200개로 제한하고, 그 밖의 문서는 기존 FTS 결과에 의존한다. 200개 밖 문서의 표기 변형을 반드시 찾으려면 별칭을 명시 등록한다. FTS 후보 30개, 반환 최대 20개, RAG 최대 3개와 기존 발췌·context 예산을 유지한다. 현재 제한은 검색 대상 총 문서 수의 상한이 아니며 모든 문서의 제목 정규화 검색을 보장하지 않는다.
+- 충돌: 정확 별칭에 둘 이상의 표시 가능한 문서가 일치하고 질문만으로 대상을 구분할 수 없는 경우 단일 문서를 임의 확정하지 않는다. 모델 지시만으로 보장하지 말고 애플리케이션에서 대상 확인 응답을 제공하는 경로를 구현·검증한다. 사용자 확인 이후 문서를 선택하는 완전한 대화형 흐름은 후속으로 두며, 안전하게 구분할 수 없으면 다시 질문한다.
+- 안전·호환: 유사 번호 오일치 방지, 모든 단계의 통합 격리, legacy ID와 namespace 분리, FTS 오류 노출, 기존 list 응답 및 수동 문서·별칭의 revision 충돌 보호를 유지한다. 별칭을 자동으로 만들거나 기존 문서를 수정하지 않는다. 기존 legacy 모드를 롤백 경로로 유지하고 별도 검색 단계별 설정 스위치는 필수 범위에서 제외한다. 구버전 복귀와 변경된 데이터 보존의 운영 절차는 I09에서 검증한다.
+- 필수 검증: 임시 DB에서 A01·A02 표기와 질문, 유사 숫자, 명시 별칭 충돌 및 대상 확인, 제목 변경·삭제·별칭 갱신 충돌, FTS 오류, 특수문자, 격리와 namespace, 독립/후속 질문, prompt 예산 및 기존 API 회귀를 확인한다. 200개를 넘는 fixture에서 제한 동작과 오래된 문서의 명시 별칭 검색을 검증한다. 고정 소규모 fixture의 대표 기존 성공 질의와 무관 결과를 변경 전후로 비교하고 결과를 기록한다. 측정은 같은 환경의 간단한 지연 비교로 이상 여부를 확인하며 실제 운영 SLA나 p95 성능 보장을 주장하지 않는다.
+- 후속: 오렌지파이 클러스터 구축 후 Elasticsearch 등 검색 기술의 필요성, 운영 비용, 문서 동기화·보안·복구, 검색 품질·성능 평가를 별도 설계한다. 특정 제품의 도입은 확정하지 않는다. 의미 검색, 더 큰 문서 집합의 전체 제목 정규화 인덱스, 복잡한 질의·충돌 해소, 단계별 기능 스위치와 실제 하드웨어 부하 평가는 그때 재검토한다. I08의 retrieved/provided/cited 구분과 I09 운영 전환 기준은 그대로 유지한다.
+
+#### I07 [x] 자동 기억 원자 쓰기와 충돌 확인
+
+- 의존: I02~I04, I06, W10.
+- 대상: [memory_repository.py](../../backend/app/memory_repository.py), [memory_dedup.py](../../backend/app/memory_dedup.py), [main.py](../../backend/app/main.py), [WikiMemoryStatus.tsx](../../frontend/src/components/WikiMemoryStatus.tsx), backend/frontend 테스트.
+- 작업: 후보 검증 뒤 문서·FTS·활성 기억·job/idempotency를 한 transaction으로 처리한다. 충돌 시 기존/새 값을 보여주고 승인에 대상·revision·후보·출처를 결합한다. 취소·무응답은 보류한다.
+- 완료: 명시적 정정 또는 유효한 확인만 갱신 후보로 연결하며 저장 결과 확인 전 완료로 표시하지 않는다. 구형 위험 writer로 자동 fallback하지 않는다.
+- 검증: 동시 claim·중복/오래된 승인·출처 삭제·rollback·commit 후 응답 유실·재시작·결과 조회.
+- I02 이관: 기존 외부 active/unknown 작업이 통합 기억 활성화·쓰기·재전송의 대상이 되지 않는지 검증한다.
+- 2026-11-13 진행: [integrated_memory.py](../../backend/app/integrated_memory.py)에 미연결 초기 생성 primitive를 추가했다. 완료된 대화의 통합 저장소 user 원문을 제한된 네 속성으로 재검증하고 한 transaction에서 문서·FTS·격리·기억·operation·job 결과를 저장한다. 동일 operation은 요청 hash와 출처가 일치할 때만 확정 결과를 재조회한다. 기존 활성 슬롯, 미해결 operation, legacy job은 거절한다. 이 함수는 API나 백그라운드 writer에 연결되지 않았으며 운영 저장 동작은 활성화하지 않았다.
+- 검증: [test_integrated_memory.py](../../tests/test_integrated_memory.py)에서 임시 DB 초기 저장·동일 요청 동시 실행·응답 유실 이후 재조회·중간 실패 전체 rollback·충돌 차단·출처 삭제 및 legacy unknown 분리를 확인하고 기존 기억·namespace·Wiki 회귀 포함 **67 passed**. 운영 DB와 서비스는 변경하지 않았다.
+- 추가 진행: 같은 값은 기존 출처를 유지하며 중복 처리하고 다른 값은 확인 후보로 영속화한다. 승인 시 기존 record·revision·문서와 양쪽 출처·후보 fingerprint를 검증한 뒤 새 문서·FTS·활성 기억 전환·operation·job을 한 transaction으로 처리한다. 확인은 24시간 뒤 변경을 거절하며, 기한이 지났더라도 기존 값 유지는 선택할 수 있다. 인증된 확인 API와 [WikiMemoryStatus.tsx](../../frontend/src/components/WikiMemoryStatus.tsx)의 변경/유지 UI를 추가했다. 반복된 동일 선택은 결과를 재조회하고 반대 선택은 거절한다.
+- 추가 검증: 임시 DB에서 중복·승인/유지·서로 다른 동시 결정·원문/revision 변경·기한 만료·승인 저장 실패 rollback과 HTTP 인증/대화 소속 및 재시도를 확인했다. 백엔드 관련 회귀 **85 passed**, 프런트엔드 전체 **25 passed**, lint/build 통과. 실제 운영 DB나 서비스는 변경하지 않았다.
+- 최종 구현: [main.py](../../backend/app/main.py)가 신규 job의 저장소를 기록하고 통합 worker를 실행한다. [integrated_memory.py](../../backend/app/integrated_memory.py)는 최초 생성·중복·충돌을 구분하고, `정정:` 또는 `수정:`으로 시작하는 지원된 전체 문장만 명시 정정으로 처리한다. 그 밖의 모호한 정정·개인 기억은 자동 저장하지 않는다. 원문 전체 hash와 대상·revision을 승인에 결합하며 재시작 시 통합 pending 및 명시 정정 중단 작업만 안전하게 처리한다. 기존 외부 Wiki job은 통합 worker가 처리하지 않는다.
+- 활성 기억은 통합 RAG에서 명시된 BC250 기기와 지원 속성에 한해 별도 채널로 조회한다. 출처·fingerprint·Wiki revision과 격리를 검증하고 실패한 항목은 주입하지 않는다. 일반 Wiki 문서와 구분하며 검색 결과를 실제 답변 근거로 검증하는 I08 작업은 남는다. 표현 범위가 좁아 지원하지 않는 자연어 질문에는 기억이 조회되지 않을 수 있다.
+- 최종 검증: 임시 DB에서 메시지 완료→worker 생성, 중복·충돌·명시 정정, 재시작 복구·기존 외부 active/unknown 분리, 변경된 원문/대상·만료·동시 승인·rollback과 모의 LLM에 대한 기억 주입을 검증했다. 관련 회귀 **97 passed**, 추가 통합 기억 테스트 **26 passed**, frontend 전체 **25 passed**, lint/build 통과. 전체 backend 실행은 **1025 passed, 3 skipped, 5 failed**였으며 5건은 자식 프로세스의 모듈 경로 미설정 때문이었다. `PYTHONPATH=.`로 해당 5건을 재실행해 모두 통과했다. 전체를 경로 설정 후 재실행한 결과는 아니다. 운영 DB·서비스·배포는 변경하지 않았다.
+
+#### I08 [x] 출처·UI·부하 통합 검증
+
+- 의존: I05~I07.
+- 대상: [main.py](../../backend/app/main.py), [db.py](../../backend/app/db.py), [prompting.py](../../backend/app/prompting.py), [api.ts](../../frontend/src/api.ts), [main.tsx](../../frontend/src/main.tsx), 관련 backend/frontend 테스트, [wiki-search-evaluation.md](wiki-search-evaluation.md).
+- 작업: retrieved/provided/cited 구분, 기억 이력·polling 및 토큰/큐 제한을 구현·검증한다. 기존 W16~W19의 상세 검증은 §9에서 참고한다.
+- 완료: 검색 후보를 실제 답변 근거로 오표시하지 않고, UI·검색·기억·비용 평가 결과와 미검증을 기록한다.
+- 검증: 미전달 문서 인용·비활성 기억 제외, 4K/16K, 모델 전환·동시 요청, 네 viewport, frontend lint/test/build 및 관련 backend 통합 테스트.
+- 진행: [wiki_evidence.py](../../backend/app/wiki_evidence.py)와 migration 21로 명시 opt-in 요청의 검색 후보·실제 payload에 포함된 Wiki 발췌·공유 기억 참조·`[wiki:ID]` 인용을 구분해 답변 메시지에 별도로 저장한다. 전달되지 않은 ID는 유효 인용으로 표시하지 않고, ID 일치만 확인하며 사용 여부나 내용 일치의 증거로 주장하지 않는다. 기존 요청과 기존 답변은 그대로 유지한다. 새 UI의 Wiki 검색 요청은 opt-in하며 상세 출처 카드를 표시한다. 공유 기억 값은 출처 metadata에 복제하지 않는다.
+- 진행: 기존 전체 기억 이력 API는 유지하고 `view=summary` 및 대화별 단건 상세 API를 추가했다. UI는 요약만 조회하고 사용자가 선택할 때 상세 내용을 가져온다. 비활성 탭에서는 polling을 중지하고 in-flight 중첩을 막으며, 완료 이벤트·탭 복귀 시 다시 조회한다. 공유 기억만 전달된 경우의 참고 문구도 구분했다.
+- 검증: 임시 DB·mock LLM에서 미전달 ID 인용, payload 제외, 응답 생성 시점 문서 revision·발췌 보존, migration 반복·메시지 삭제, stream/nonstream·재조회·다음 턴 본문 분리, 기존 API 호환과 대화별 상세 접근을 확인했다. 관련 회귀 **70 passed**, 추가 출처 테스트 **5 passed**, frontend **26 passed**, lint/build 통과. 운영 DB·서비스·모델은 사용하지 않았다. 배포 후 startup에서는 additive migration 21이 실행될 수 있다.
+- 추가 검증: [WikiPolling.test.tsx](../../frontend/tests/WikiPolling.test.tsx)의 fake timer로 비활성 탭·지연된 요청 중복 방지·탭 복귀 및 이전 대화의 늦은 응답 배제를 확인했다. **2 passed**.
+- 추가 진행·검증: Wiki 발췌가 입력 예산에 맞지 않으면 뒤쪽 후보부터 제외하며 실제 payload에 남은 발췌만 제공 출처로 기록한다. 모의 4K/16K profile에서 제외된 문서의 인용이 유효 처리되지 않음을 포함해 **5 passed**. 로컬 mock API와 프런트엔드에서 1280×800·768×1024·390×844·320×568 출처 카드와 가로 넘침을 확인했다. 운영 서버·실제 모델은 사용하지 않았다.
+- 최종 검증: polling 네트워크 오류·늦은 작업 등록 포함 **3 passed**. 통합 기억은 단일 worker가 최대 32개씩 읽고 재시작 대기 작업 35개를 빠짐없이 처리하며 추가 LLM 추론은 없다. 모델 전환과 token budget 관련 격리 테스트 **30 passed**. 고정 자료 품질·검색 p50/p95 및 이력 전송량은 [평가 기록](wiki-search-evaluation.md)에 수치와 한계를 기록했다. 전체 backend는 `PYTHONPATH=.`로 **1043 passed, 3 skipped**, 최종 worker/인용 보완은 별도 집중 테스트로 확인했다. 프런트엔드 전체 **29 passed**, lint/build 통과.
+- 한계·롤백: 실제 BC-250 토크나이저·GPU/foreground 부하, 실제 모델의 인용 정확도와 의미적 근거 일치는 미측정이다. I09 리허설에서 실행 버전·DB 백업·단일 writer와 역전환을 확인한다. 문제가 생기면 통합 writer와 새 출처 opt-in을 비활성화하고 호환 코드를 복구하되, migration 21과 생성된 출처 데이터·대화는 삭제하지 않는다. 운영 전환·서비스 재시작은 수행하지 않았다.
+
+#### I09 [진행 중] 운영 전환 준비와 리허설
+
+- 의존: I08.
+- 대상: 이 문서, [통합 설계](wiki-client-consolidation-plan.md), [README](../../README.md), 조사 후 확정한 배포 설정.
+- 작업: 백업, 외부 호출자, 단일 writer 전환·서비스 종료·역전환 절차를 작성하고 격리 복제 환경에서 리허설한다. 전환 후 생긴 자료는 구 Wiki 복귀 시 보존·조정한다.
+- 완료: 운영에서 실행할 단계와 실패 시 읽기 전용 복구 방안을 검토할 수 있다.
+- 검증: 구 writer 차단, 빈 Wiki·ID 충돌·이력 보존, 장애 복구·양쪽 데이터 보호·재가동 점검.
+- I02 이관: namespace를 이해하지 못하는 구버전 프로세스와 writer의 실행·자동 복귀를 차단하고 리허설로 증명한다. 구버전이 schema 버전을 검사한다고 가정하지 않는다.
+
+##### 현재 확인된 배포·운영 경계
+
+- 2026-11-13 읽기 전용 SSH 확인: `bc250-llm-client.service`와 `bc250-family-wiki.service`는 모두 `active`, `enabled`; 8010과 8020은 각각 loopback에서 수신 중이었다. 두 서비스 모두 `yeppyshiba`로 실행하고 `Restart=on-failure`다. Client의 working directory는 `/opt/bc250-llm-client/backend`, 환경 파일은 `/etc/bc250-llm-client.env`, `/etc/bc250-model-control/client.env`, `/etc/bc250-model-control/client-activation.env` 순서로 표시됐다. 이 관찰은 당시 상태이며 이후 변경 가능하다.
+- 같은 조사에서 Client PID 153606, Wiki PID 1007이었고 디스크의 Client `main.py` SHA-256은 `1a70d464d8dcaf803273cdbc89e616bf2d5f072a48c1b18f4419970f4c76506d`, Wiki `main.py`는 `20889a43f3f749854ef9beace60a31fb18c96afb34b782120f2e9d4a07c19953`이었다. `/etc/caddy/Caddyfile`에는 `/llm/api/*`→8010, `/wiki/*`→8020이 있다. 파일 지문·설정 파일 관찰은 실행 프로세스의 로드 코드나 실효 Caddy 설정과 같다는 증명이 아니다.
+- 운영자가 읽기 전용으로 확인한 Client PID 153606의 환경에는 `DATABASE_PATH=/var/lib/bc250-llm-client/bc250-llm-client.db`가 있으며 `WIKI_STORE`는 없다. 작업 디렉터리의 `.env`는 없고, 배포된 설정 파일에서 `wiki_store` 필드는 검색되지 않았다. 이는 기존 외부 Wiki 방식의 배포본이라는 정황이지만 디스크 파일과 실행 프로세스의 코드 일치 및 실제 DB 연결의 증명은 아니다. 현재 작업 공간 코드의 기본값은 `legacy_external`이며 운영에 적용됐다고 단정하지 않는다. Wiki 서버 소스는 DB 경로를 `/opt/bc250-family-wiki/data/wiki.db`로 지정한다. 실행 프로세스와 파일이 같은 버전이라는 보장은 없다.
+- 운영자 추가 확인: 설정된 Client DB 파일이 존재하고 PID 153606에서 열려 있었다. 조회 시 WAL 파일은 없었다. 사용자는 현재 배포본이 통합 전 버전임을 확인하고 버전 추가 조사는 불필요하다고 했다. Client와 기존 Wiki 중단 시 Studio·gate 영향 확인이 우선이다. 기존 Wiki DB 폐기 가능성과 Client 대화 DB 삭제는 별도로 취급한다.
+- 이전 모델 전환 조사와 Studio 인계 스냅샷에서는 Client가 gate를 호출하고 Studio와 gate는 별도 서비스였으며, 별도 Wiki는 llama 8080을 직접 호출했다. 이는 과거 관찰과 템플릿이고 현행 systemd의 역의존성, 실행 중 이미지·모델 전환 작업과 gate hold 상태를 보장하지 않는다. gate·Studio·llama를 Client 또는 Wiki와 함께 중지하지 않는다.
+- 운영자 제공 systemd 조회: Client, Family Wiki, Studio, gate, llama 모두 active/running이고 systemd job은 없었다. 다섯 unit의 `BindsTo`, `PartOf`, `PropagatesStopTo`, `StopPropagatedFrom`은 비어 있고 두 중단 대상의 역의존성 출력에는 `multi-user.target`만 있었다. 확인 시점의 systemd 관계에서 Client/Wiki 중단이 Studio·gate·llama 중단으로 전파되는 관계는 발견되지 않았다. 이는 Studio 이미지·모델 전환 작업, gate hold, 응용 계층 호출자 부재 또는 이후 상태의 증명은 아니다. Client 대화·기억 작업과 기존 Wiki 요청의 중단 영향은 별도로 확인한다. 서비스 중지는 실행하지 않았다.
+- 운영자가 기존 Family Wiki를 중지하고 자동 시작을 해제했다. 결과는 `inactive`, `disabled`, Studio·gate·llama는 각각 `active`였다. 이후 운영자는 기존 Wiki 삭제 및 Caddy 정리를 요청했다. Caddy의 실제 구성 범위와 unit 파일·drop-in 경로를 확인한 뒤 다른 경로를 보존하도록 정리한다. Client 대화 DB는 삭제 대상이 아니다.
+- 운영자 제공 설정: Wiki unit은 `/etc/systemd/system/bc250-family-wiki.service`, 작업 디렉터리는 `/opt/bc250-family-wiki`, drop-in은 공통 `/usr/lib/systemd/system/service.d/10-timeout-abort.conf`다. Caddy의 독립 `/wiki` redirect 및 `/wiki/*` reverse proxy가 제거 대상이며 `/llm`, `/api` 및 Studio fallback은 유지한다. 공통 drop-in은 삭제하지 않는다. 운영자가 정리 결과를 보고하기 전 실제 삭제·Caddy 반영 여부는 미확인이다.
+- 운영자가 Caddyfile을 직접 수정하고 Caddy를 reload했다. `caddy validate`는 유효하다고 보고했으며 Caddy·Client·Studio·gate·llama는 모두 active였다. 수정된 설정의 실제 내용은 아직 재확인하지 않았다. Family Wiki는 inactive/disabled지만 unit은 여전히 로드되어 있고, Wiki 디렉터리와 unit 삭제 실행은 아직 확인되지 않았다.
+- 이후 운영자가 `/opt/bc250-family-wiki`와 전용 unit 파일을 삭제하고 daemon-reload했다. `LoadState=not-found`와 디렉터리 부재를 확인했다. 이 디렉터리의 Wiki DB도 삭제된 것으로 취급하며 별도 백업 존재 여부는 미확인이다. 기존 Wiki 복구를 롤백의 전제로 삼지 않는다. Client DB와 구 Client는 유지된다.
+- 읽기 전용 `sudo -n -l`에서 SSH 계정의 무암호 권한은 Client 서비스 restart와 별도 Studio 배포 wrapper로 제한됐다. 환경 파일의 root 읽기나 Wiki unit 제어가 무암호로 허용된다는 근거는 없다. 이 조사에서 해당 restart나 wrapper는 호출하지 않았다.
+- [deploy.yml](../../.github/workflows/deploy.yml)은 `main` push와 수동 실행에서 checkout된 [deploy-release.sh](../../deploy/deploy-release.sh)를 SSH로 실행하고 서비스를 재시작한다. 따라서 `WIKI_STORE=legacy_external`이어도 새 Client가 시작되면 migration 17~21이 실행될 수 있다. **단순 push도 운영 DB 변경을 유발할 수 있으므로 I09 차단 조건 해소 및 I10 승인 전 이 변경을 운영에 배포하지 않는다.** `/wiki/` 및 기존 8020 API, `/api/ask` 직접 8080 호출과 외부 호출자의 현재 사용 여부는 완전히 확인되지 않았다. 유휴 연결 목록은 호출자 부재의 증거가 아니다.
+- 이 작업에서 최신 배포 스크립트의 파일 교체 후 실패 시 **구버전 자동 복원·재시작을 제거**하고 이전 backend/dist와 배포 archive를 `.deploy.*`에 보존하도록 했다. health는 인증이 필요 없는 `/api/v1/health`만 확인한다. 이는 프로세스 기본 응답 확인이지 저장소 모드·기능 정상성이나 단일 writer 보장이 아니다. 파일 교체 전 실패는 기존 프로세스를 재시작하지 않는다. 실패 후 새 프로세스의 실제 실행 여부는 별도 확인해야 한다. 성공 시 이전 임시 파일은 정리되므로 전환 전 별도 release 백업이 필요하다.
+- 제한: workflow는 **checkout한 커밋의 스크립트**를 실행한다. 위 수정만으로 구 커밋의 workflow 재실행, 별도 배포 경로, 직접 `systemctl` 또는 서버 재부팅 시 구버전 시작을 차단할 수 없다. 기존 Wiki unit과 디렉터리는 운영자가 삭제했지만 별도 복구·재배포 경로는 미확인이다. Git HEAD의 과거 schema 16 초기화 코드는 상위 schema 버전 거절을 확인하지 않으므로 이를 안전장치로 가정하지 않는다.
+
+##### I10 전환 실행안 — 지금 실행하지 않음
+
+현재 운영 상태: 아래 절차의 별도 Wiki 중단·삭제는 운영자가 이미 수행했다. 삭제된 Wiki DB·release의 백업을 새로 만들거나 복원을 전제할 수 없다. Client DB는 유지하고 구 Client writer를 통제한다. 삭제된 Wiki의 복구는 별도 백업이 확인된 경우에만 검토한다.
+
+운영자 결정: Client DB 백업을 생략한다. 전환 중 손상·실수 시 백업으로 기존 대화·기억을 복구할 수 없다는 제한을 수용한 운영 결정이며 Client DB를 삭제하라는 지시는 아니다. `WIKI_STORE` 설정과 구버전 재배포 방지는 운영자가 직접 관리한다. 구버전 실행 방지는 기술적으로 강제된 상태가 아니므로 구 workflow 재실행·옛 release 복원·재배포를 하지 않는 운영상 통제에 의존한다.
+
+1. 운영자·사용자에게 Client 쓰기 중단을 알린다. `main` push·수동 재실행·예약/별도 배포와 구 release 재기동을 중단하고 진행 중 배포 및 관련 writer가 끝났는지 확인한다. 삭제된 Wiki를 사용하는 호출자가 있다면 종료 사실과 통합 Wiki 전환까지의 영향을 알린다.
+2. 권한 있는 운영자가 Client DB 경로와 현재 설정·서비스 실행 파일·release hash·schema 버전을 확인한다. 값에 비밀이 들어갈 수 있는 전체 환경 파일이나 프로세스 환경은 출력하지 않는다. Client DB의 대화·기억·이력과 구 Client의 코드/설정을 보존한다. 기존 Wiki DB 삭제는 Client DB 삭제 승인이 아니다.
+3. Client DB 백업은 운영자 결정으로 생략한다. 문제 발생 시 기존 대화·기억의 복구를 보장할 수 없으며 운영 DB를 초기화하거나 삭제하지 않는다.
+4. 구 Client/Family Wiki writer와 구 release의 자동 복귀를 운영자가 root 관리 경계에서 차단한다. Caddy `/wiki` 쓰기뿐 아니라 8020 직접 접근, 구 프로세스·systemd 자동 재시작/재부팅·GitHub Actions의 구 커밋 재실행 및 다른 배포자를 모두 포함해야 한다. `systemctl stop` 한 번이나 최신 checkout 스크립트 수정만으로 지속 차단을 증명하지 않는다. 차단 후 실제 unit·PID·listen 경로와 배포 재실행 거절을 확인하고, 차단을 증명하지 못하면 전환하지 않는다.
+5. 승인된 새 release·설정과 Client DB 경로를 확정한 뒤에만 통합 모드를 활성화한다. 초기화/migration 성공과 기존 대화·legacy 이력 보존, 빈 통합 Wiki, namespace가 다른 같은 문서 ID, 문서 저장·revision 충돌·검색·기억 확인 및 재시작 후 결과를 순서대로 확인한다. 테스트 작성·삭제는 운영 검증에 별도 승인된 범위에서만 한다. 이전 Wiki 문서의 수동 이관 여부는 별도로 정한다. 전환 후 생성 자료와 작업을 별도 백업한다.
+6. 오류·불명 상태는 추가 writer 실행 없이 쓰기를 차단하고, 서비스/DB와 새로 생긴 자료를 보존한 뒤 원인과 마지막 commit 경계를 확인한다. 복구용 복제본은 읽기 전용으로 먼저 검사한다. **전환 전 DB 백업으로 운영 DB를 덮어쓰지 않는다.** 별도 Wiki 복귀가 필요하면 양쪽에서 생긴 자료의 보존·이관과 ID namespace 차이를 검토하고 별도 승인 후 수행한다. 구버전 자동 재시작 또는 `WIKI_STORE`만 바꾸는 것을 롤백으로 간주하지 않는다.
+
+##### 격리 리허설 결과와 잔여 차단 조건
+
+- [test_wiki_cutover_rehearsal.py](../../tests/test_wiki_cutover_rehearsal.py)는 임시 Client DB의 이전 schema→21 반복 초기화, SQLite backup API, 빈 통합 Wiki, 외부/통합 ID 1 충돌, 기존 대화·unknown 이력 보존, 통합 문서·기억 저장과 재개, 전후 백업의 읽기 전용 검사를 확인했다. 가짜 Wiki의 쓰기 차단은 절차 모델이며 **실제 systemd·Caddy·외부 호출자 차단의 증거가 아니다**.
+- [test_wiki_deploy_guard.py](../../tests/test_wiki_deploy_guard.py)는 임시 디렉터리·가짜 systemctl/curl에서 정상 배포와 restart/health 실패를 재현했다. 실패 시 구 파일 보존과 구버전 자동 재시작 0회를 확인했다. 격리 DB·namespace·API 및 과거 버전 재기동 재현을 포함한 최종 회귀 **48 passed**. 운영 DB 백업·migration·서비스 제어·설정 변경·배포는 실행하지 않았다.
+- 구버전 차단의 필요성을 실제 코드로 재현했다. Git commit `e85c8cf61b9538ce0d4d9a390a8fb87f0fba8674`의 schema 16 초기화 코드 [fixture](../../tests/fixtures/client_schema_v16.py)(SHA-256 `ff50b3b4be2e5a2ad7d9530b8c4a9ccd4bfbaa091e2994f0319e5d611b6b9ac4`)를 임시 schema 21 DB에 실행했을 때 상위 버전이라는 이유로 거절하지 않았다. 기존 코드는 `store_id` 없이 이력에 쓸 수도 있었다. 이는 구버전이 안전하게 동작한다는 뜻이 아니며 schema 숫자만으로 구 writer를 막을 수 없다는 근거다.
+- **I09 미완료 / I10 차단:** Client DB 및 구 Client release의 백업·복원 가능성, 외부 호출자, 구 Client release의 재부팅/재배포 포함 지속 차단이 아직 증명되지 않았다. 별도 Wiki unit과 디렉터리는 삭제됐으며 Wiki 복구·재배포 경로는 미확인이다. 특히 과거 workflow 자체가 옛 스크립트를 실행할 수 있어 최신 스크립트 테스트만으로 구 writer 차단 완료를 주장하지 않는다. 실제 차단 장치의 구현·적용 방법과 격리 리허설을 확정한 뒤 운영 접근·실행은 I10 범위에서 수행한다.
+
+##### 운영자 읽기 전용 확인 명령 — I09
+
+서버에서 아래 명령은 실행 중인 Client 프로세스의 작업 디렉터리와 두 설정값만 출력한다. 전체 환경, API 키와 다른 비밀값은 출력하지 않는다. 서비스·설정·DB는 변경하지 않는다. 실행 프로세스에 설정이 없으면 `<프로세스 환경에 없음>`으로 표시하며, 이 경우 별도 환경 파일이나 `.env`의 영향을 확인하기 전 기본값을 유효값으로 단정하지 않는다.
+
+```bash
+sudo python3 - <<'PY'
+import os
+import subprocess
+from pathlib import Path
+
+pid = subprocess.check_output(
+    ['systemctl', 'show', '--value', '-p', 'MainPID', 'bc250-llm-client.service'],
+    text=True,
+).strip()
+if not pid.isdigit() or int(pid) == 0:
+    raise SystemExit('Client 실행 프로세스를 찾지 못했습니다. 여기서 중단하세요.')
+process = Path('/proc') / pid
+environment = {}
+for entry in (process / 'environ').read_bytes().split(b'\0'):
+    key, separator, value = entry.partition(b'=')
+    if separator and key in (b'DATABASE_PATH', b'WIKI_STORE'):
+        environment[key.decode()] = os.fsdecode(value)
+print('MainPID:', pid)
+print('WorkingDirectory:', os.readlink(process / 'cwd'))
+for key in ('DATABASE_PATH', 'WIKI_STORE'):
+    print(f'{key}:', environment.get(key, '<프로세스 환경에 없음>'))
+PY
+```
+
+이 명령은 현재 프로세스 환경만 확인한다. 실행이 거절되거나 값이 없을 때 환경 파일 전체를 공유하지 말고 해당 결과만 보고한다. DB 경로와 모드 확인은 구버전 writer 차단·백업·전환을 승인하거나 실행한 것을 뜻하지 않는다.
+
+#### I10 [ ] 승인된 운영 전환과 기존 Wiki 종료
+
+- 의존: I09 검증과 명시적인 운영 실행 권한.
+- 대상: 실제 배포·서비스·데이터 경로는 I09에서 확정.
+- 작업: 일시 쓰기 중단 → 통합 경로 활성화 → 기능 검증 후 기존 Wiki를 deprecated 처리한다. 의존 호출자가 없고 롤백 조건이 충족될 때 서비스 종료·기존 DB 삭제 시점을 별도 처리한다.
+- 완료: 단일 writer, 기존 대화·이력 보존, 통합 Wiki와 기억 동작이 확인되고 기존 서비스 종료 여부가 기록된다.
+- 검증: SSH/브라우저에서 생성·편집·검색·기억·충돌, 재시작 후 유지, 단계별 결과·버전·시각.
 
 ## 7. 실행 순서·검증·롤백
 
-권장 순서:
+현재 권장 순서: 이 문서 §6의 I00 → I01 → I02 → I03 → I04 → I04a → I05 → I06 → I07 → I08 → I09 → I10. I08까지 격리 구현·검증하고 I09 리허설 후 운영 전환 I10을 진행한다. 아래는 방향 변경 전의 실행 이력이다.
+
+이전 순서:
 
 1. **첫 실행:** W01 → W02 → W03 → W04. 저장 오류부터 차단한다.
 2. **다음 실행:** W05 → W06 → W07. 사용자 스크린샷의 UI 문제를 해결한다. 이 묶음은 Wiki 서버 소스 없이 진행 가능하다.
@@ -501,12 +704,30 @@ Python 실행기는 저장소에 이미 준비된 테스트 환경에 맞춘다.
 | 모델 전환 경합/부하 | 기존 epoch/기능/예산 검증 재사용 | 자동 기억 중지, gate/Studio/모델 서비스 임의 변경 없음 |
 | 운영 DB 전체 복원 손실 | 정상 롤백은 기능 비활성+호환 코드 복귀 | 전체 복원은 기본 절차에서 제외. 별도 사고 복구 판단 필요 |
 
-과거 [Wiki 연동 계획](wiki-integration.md)의 서비스 통합/별도 Wiki 종료 TODO는 이 계획의 선행 조건이 아니다. 이번 범위에서 실행하지 않는다.
+별도 Wiki 종료와 데이터 처리의 현재 조건은 [통합 전환 안전 계약](wiki-client-consolidation-plan.md#전환-안전-계약) 및 I09/I10을 따른다.
 
 ## 8. 실행 이력과 다음 실행 프롬프트
 
 | 날짜 | Task | 상태 | 수정/검증 | 다음 단계 |
 | --- | --- | --- | --- | --- |
+| 2026-11-13 | I09 전환 준비 | 진행 중 | 운영 서비스·unit 읽기 전용 확인, 실패 시 구버전 자동 복귀 제거, 임시 전환·백업/실패 리허설. 구 schema 16이 21 DB를 거절하지 않는 사례 확인 | 운영 DB 경로·외부 호출자 및 지속적인 구 writer 차단 검증 |
+| 2026-11-13 | I08 출처·UI·부하 | 완료 | 출처 분리·입력 예산·요약 polling·단일 worker, mock 네 viewport·고정 품질/비용 측정. backend 전체 1043 passed/3 skipped 및 집중 회귀, frontend 29 passed. 실제 BC-250 부하는 미측정 | I09 |
+| 2026-11-13 | I08 출처·요약 이력 | 진행 중 | opt-in 출처 스냅샷과 카드, 기억 요약/상세 및 polling 개선. 관련 backend 70 passed, 출처 추가 5 passed, frontend 26 passed | polling·viewport·부하 및 품질 평가 |
+| 2026-11-13 | I07 통합 worker | 완료 | namespace별 worker·정정·재시작 복구·검증된 공유 기억 주입 연결. 관련 회귀 97 passed, frontend 25 passed; 전체 실행의 하위 프로세스 경로 실패 5건 별도 재실행 통과 | I08 |
+| 2026-11-13 | I07 충돌 확인 기반 | 진행 중 | 중복·후보·승인/유지 transaction, 24시간 확인 기한, 인증 API/UI. backend **85 passed**, frontend **25 passed**, lint/build 통과 | 자동 기억 분기 및 명시 정정 연결과 안전한 조회 검증 |
+| 2026-11-13 | I07 원자적 초기 생성 기반 | 진행 중 | 미연결 transaction primitive와 임시 DB 회귀 **67 passed**. 자동 기억 writer는 계속 차단 | 충돌 승인·중복 및 복구 구현 후 통합 연결 |
+| 2026-11-13 | I06 검색·RAG | 완료 | 제한된 I06 명세에 따라 충돌 확인 응답과 검색/격리 검증 완료. backend **97 passed**, 고정 소규모 fixture 비교 기록. 클러스터 및 고도화는 TODO | I07 |
+| 2026-11-13 | I06 현재 단계 범위 | 진행 중 | 가족용 소규모 SQLite 검색의 한계·필수 검증과 클러스터 고도화 TODO를 확정. 기존 구현 검증 결과를 변경하지 않음 | I06 명세에 맞춰 충돌 처리와 나머지 격리 테스트 수행 |
+| 2026-11-13 | I05 공유 Wiki UI 검증 | 완료 | 사용자 승인으로 frontend 의존성 복구. 전체 **23 passed**, lint/build 통과, 모의 API 네 viewport 확인. 운영 서버·DB 미변경 | I06 |
+| 2026-11-13 | I05 공유 Wiki 화면 | 진행 중 | 문서 관리·충돌 초안 비교·이력 diff UI 및 mode API 작성. API 회귀 **8 passed**. frontend 의존성 불완전으로 테스트·컴파일·화면 미검증 | frontend 의존성 복구 후 I05 검증 |
+| 2026-11-13 | I04a Wiki revision 이력·diff | 완료 | migration 19, 최근 100개 snapshot, 인증된 목록·diff 및 삭제/격리 차단. 관련 회귀 **136 passed** 및 추가 HTTP 413 테스트 통과 | I05 |
+| 2026-11-13 | I04 HTTP 및 동시성 검증 | Client 측 완료 | 정상 실행 환경에서 실제 ASGI 요청·worker thread, 인증·응답·동시 revision 충돌 확인. 관련 백엔드 **131 passed**, 운영 writer 전환은 I09 | I04a |
+| 2026-11-13 | I04 공용 API·모드 전환 | 진행 중 | 통합/legacy 모드 및 CRUD·검색 연결, 자동 기억 legacy writer 차단. 라우트 직접 회귀 포함 **130 passed**. ASGI HTTP·실제 worker thread 검증 미완료 | I04 HTTP/worker 검증 |
+| 2026-11-13 | I03 통합 Wiki repository | 완료 | caller 소유 transaction의 CRUD·조건부 revision·bounded FTS/부분 검색·namespace 분리. 관련 backend 회귀 **124 passed**; 운영 경로 미연결 | I04 |
+| 2026-11-13 | I02 저장소 namespace | 로컬 완료 | migration 18 및 저장소별 참조·격리, 이력 표시. backend 관련 **119 passed**; frontend jsdom 누락으로 미실행. 통합 경로·UI·구버전 차단 조건은 I03~I09에 명시적으로 이관 | I03 |
+| 2026-11-13 | I01 통합 문서·FTS 스키마 | 완료 | Client SQLite migration 17, 빈 문서 테이블·FTS·trigger 추가. 임시 DB 업그레이드·롤백 및 기존 회귀 **116 passed**. 운영 DB 미접근 | I02 |
+| 2026-11-13 | I00 전환 계약과 현황 확인 | 완료 | Client 작업 공간 코드와 기존 Wiki 읽기 전용 조사 이력 검토. 외부 호출·문서 ID·상태·메시지 출처, namespace 및 I01/I02 전환 계약 기록. 현재 운영 DB/호출자/실행 프로세스 버전은 미확인 | I01 |
+| 2026-11-13 | 통합 방향 확정 | 계획 변경 | Client SQLite/FastAPI/React에 가족 공유 Wiki 통합, 별도 Wiki deprecated, 빈 Wiki 시작 허용, Client 이력 보존 및 namespace·단일 writer 전환 계약 작성. 문서만 변경 | I00 |
 | 2026-11-12 | 계획 작성 | 완료(구현 아님) | Client 핵심 경로·스크린샷 분석. 문서만 작성. 운영/테스트 데이터 저장·테스트 실행 없음 | W01 |
 | 2026-11-12 | W00 외부 Wiki 계약 조사 | 완료(소스 접근 차단 기록) | 작업 공간·접근 가능한 `/opt`·인접 workspace·Git 참조를 읽기 전용 조사. 예상 경로는 `/opt/bc250-family-wiki/app/main.py`이나 이 환경에는 `/opt`와 Wiki 소스가 없음. Client API 사용 계약과 과거 운영 조사 기록만 §2.3에 기록. 운영 endpoint/DB/서비스는 호출·변경하지 않음 | W01; W12~W14는 Wiki 소스 제공 전 차단 |
 | 2026-11-12 | W01 스크린샷·기존 계약 회귀 | 완료 | R01/R02의 현행 비사실 원문 저장 경로를 fake Wiki·mock LLM·임시 SQLite로 재현하는 기준 테스트를 [test_wiki_memory.py](../../tests/test_wiki_memory.py)에 추가. 기존 원문/role/unknown/quick/명시 요청 보호 테스트 유지. 사용자 승인으로 프로젝트 전용 [`.venv/`](../../.venv/)에 [backend/requirements.txt](../../backend/requirements.txt)를 설치했고, 대상 pytest **12 passed** | W02 |
@@ -539,7 +760,7 @@ Terra / medium에서 시작할 때 붙여 넣을 프롬프트:
 
 ```text
 docs/plans/wiki-memory-execution-plan.md를 실행 기준으로 사용한다.
-이번에는 W01만 수행한다. 완료 후 이 문서의 상태와 실행 이력을 갱신한다.
+이번에는 I09만 수행한다. 완료 후 이 문서의 상태와 실행 이력을 갱신한다.
 기존 사용자 변경을 보존하고, 관련 Wiki/기억 경로만 읽는다.
 운영 DB·Wiki 문서·서비스·모델·패키지는 변경하지 않는다.
 테스트는 임시 DB, fake Wiki, mock gate에 한정한다.
@@ -547,4 +768,99 @@ docs/plans/wiki-memory-execution-plan.md를 실행 기준으로 사용한다.
 실행하지 못한 검증은 미실행으로 보고한다. commit/push/배포하지 않는다.
 ```
 
-다음 실행에서는 `W01`만 다음 Task ID로 바꾸고 의존성·완료 기준을 확인한다. 사용자 요청이 여러 Task 연속 실행이라면 같은 원칙으로 각 Task 완료 기록을 남긴 뒤 순서대로 진행한다.
+다음 실행에서는 `I09`을 다음 미완료 Task ID로 바꾸고 의존성·완료 기준을 확인한다. 사용자 요청이 여러 Task 연속 실행이라면 같은 원칙으로 각 Task 완료 기록을 남긴 뒤 순서대로 진행한다.
+
+## 9. 이전 W12~W19 작업 이력 및 세부 검증
+
+이 절은 통합 전 계획과 검증 기준을 보존한 참고 이력이다. 실행 순서와 상태는 §6의 I00~I10만 따른다. W15~W19의 품질 기준은 I06~I08에 반영한다.
+
+#### W12 [대체됨] 별도 Wiki 서버 원자적 revision 지원 — 이력
+
+통합 방향에 따라 별도 서버 패치를 배포하지 않는다. 내부 구현과 검증은 [I03](wiki-client-consolidation-plan.md#단계별-구현-task)에서 진행한다. 아래는 과거 작업 이력이다.
+
+- 의존: W00, W11. 실제 서버 소스 미확보면 실행 금지.
+- 대상: W00에서 확정한 Wiki 라우터·저장 계층·격리 테스트. 시작 시 정확한 파일 목록을 §8에 기입.
+- 작업: 저장 transaction 안에서 조건 revision 비교와 갱신. 기존 조건 없는 수동 API 호환과 새 조건부 API를 구분. 기존 본문/ID 변경 migration 금지.
+- 완료: 두 writer의 같은 revision 요청 중 하나만 성공. 조건 미일치에는 409와 안정된 오류 코드.
+- 검증: 격리 DB 동시성·외부 수동 편집 경쟁·legacy 요청. Client GET→PUT 테스트만으로 완료 처리하지 않음.
+- 2026-11-13 읽기 전용 SSH 조사: 운영 `/opt/bc250-family-wiki/app/main.py`를 확인했다. `documents.updated_at`과 `unicode61` FTS5/CRUD trigger를 사용하며 기존 PUT은 조건 없는 UPDATE, 정상 POST/PUT은 ID 포함 JSON, DELETE는 상태 JSON을 반환한다. 운영 디렉터리는 Git 저장소가 아니다. 204는 이 소스의 CRUD 정상 경로에서 사용하지 않는다. 읽은 원문의 SHA-256은 `20889a43f3f749854ef9beace60a31fb18c96afb34b782120f2e9d4a07c19953`; 사본은 [격리 테스트 fixture](../../tests/fixtures/wiki_server_w12/main.py)다. 이 관찰은 조회 시점의 파일에 대한 사실이며 현재 실행 프로세스와 파일이 같은 버전인지 증명하지 않는다.
+- 검토용 [서버 패치](../patches/wiki-server-w12.patch): 기존 GET에 내용 기반 revision을 추가하고, 별도 조건부 PUT에서 `BEGIN IMMEDIATE` 안에 revision 비교·갱신을 수행한다. 기존 PUT도 같은 잠금과 단조 증가 timestamp를 사용해 동일 내용 재저장과 시계 역행이 기존 revision을 재사용하지 않도록 한다. 스키마 migration은 없다. 기존 PUT 응답과 조건 없는 수동 편집은 유지하며, revision 불일치 시 409 `wiki_revision_conflict`를 반환한다.
+- 격리 검증: [test_wiki_server_w12_patch.py](../../tests/test_wiki_server_w12_patch.py)는 읽어 온 소스 사본에 패치를 적용하고 임시 DB에서 서버 라우트 함수를 실행한다. 동시 조건부 갱신 2건 중 1건 성공, legacy 수정에 따른 충돌, 삭제 후 404, FTS 갱신, 같은 본문의 재저장 revision 변경 **3 passed**. 실제 HTTP 전송·운영 서버·다중 프로세스 혼합 배포는 미검증이다.
+- **W12 미완료**: 이 패치는 운영 서버에 적용·배포되지 않았으며 운영 파일을 수정하지 않았다. 적용 전에 원본 hash/소유권 확인과 충돌 검토, 패치 및 격리 테스트를 수행하고, 기존 구버전 writer가 동시에 실행되지 않는 배포 방식을 검증해야 한다. 직접 SQLite 변경이나 오래된 서버 프로세스가 timestamp 규칙을 우회하면 revision 보장이 성립하지 않는다. 잘못된 시간 형식의 기존 행은 409로 거절되므로 영향 범위를 배포 전 읽기 전용으로 조사해야 한다. 서버 및 배포 권한은 이 검토용 변경만으로 부여되지 않는다.
+
+#### W13 [대체됨] 별도 Wiki 서버 멱등 쓰기와 결과 조회 — 이력
+
+별도 서버 API 대신 통합 DB의 작업 결과 및 멱등성으로 [I07](wiki-client-consolidation-plan.md#단계별-구현-task)에서 구현한다.
+
+- 의존: W12.
+- 대상: W00에서 확정한 Wiki 저장/API 파일과 테스트.
+- 작업: 문서 저장과 operation 기록을 같은 transaction으로 처리. 동일 key/payload 재사용, 충돌, 작업 결과 조회 구현. payload hash는 결정적 직렬화 사용.
+- 완료: 응답 유실 뒤 결과 조회로 원래 문서 ID/버전을 확인 가능. 같은 key의 다른 내용은 거절.
+- 검증: commit 전후 crash 경계, 같은 key 동시 POST, 동일 요청 재조회, operation 없음과 처리 불명 구분. 테스트용 서버만 사용.
+
+#### W14 [대체됨] 별도 Wiki 저장·갱신·결과 조정 — 이력
+
+분리 DB 조정 대신 [I02/I07](wiki-client-consolidation-plan.md#단계별-구현-task)의 namespace·단일 트랜잭션을 적용한다.
+
+- 의존: W10~W13.
+- 대상: [main.py](../../backend/app/main.py)의 기억 작업, [wiki.py](../../backend/app/wiki.py), W09 repository, [test_wiki_memory.py](../../tests/test_wiki_memory.py).
+- 작업: operation ID를 쓰기 전에 영속화. 새 버전 Wiki 저장 성공 뒤 활성 전환. unknown은 작업 조회로만 조정. 일반 legacy 문서 덮어쓰기 금지.
+- 충돌 확인 승인 시 승인된 후보·대상과 기존 record/revision을 재검증하고 변경됐으면 재확인; 반복 승인·취소·지연 응답·출처 삭제 경합은 안전하게 거절하거나 보류한다. 사용자 승인 자체를 Wiki 쓰기 성공으로 간주하지 않는다.
+- 완료: DB와 Wiki 부분 성공이 기존 기억 소실/중복 쓰기로 이어지지 않음. 서버 기능 미지원 시 새 안전 쓰기 경로 보류, 구형 위험 경로 자동 fallback 금지.
+- 검증: HTTP 응답 유실, Wiki 성공 뒤 Client DB 실패, 앱 재시작, 동시 중복/정정, Wiki 외부 변경/삭제, 대화 삭제. 추정 성공 처리 금지.
+
+### 3차: RAG·출처·조회 비용
+
+#### W15 [대체됨] RAG 역할 분리·발췌·검색 평가 — 이력
+
+통합 이후 실행 대상은 [I06/I08](wiki-client-consolidation-plan.md#단계별-구현-task)이다. 아래 작업 및 품질 기준은 유지한다.
+
+- 의존: W11, W14.
+- 대상: [wiki.py](../../backend/app/wiki.py), [main.py](../../backend/app/main.py)의 검색 경로, [prompting.py](../../backend/app/prompting.py), [test_wiki.py](../../tests/test_wiki.py), [wiki-search-evaluation.md](wiki-search-evaluation.md).
+- 작업: 일반 자료/활성 기억을 구분, 비활성 기억 문서 제외, bounded query/후보/발췌. 전체 payload 예산 안에서 자료를 선택. 검색 순위 알고리즘 변경은 실제 Wiki 구현 확인·평가 결과가 있을 때만 별도 Task로 분할.
+- 완료: legacy 문서 불변, 삭제/만료/비활성 기억 오주입 방지, 불충분 근거 안내, 실제 context 준수.
+- 검증: 한국어 조사·후속 질문·긴 문서·무관한 제목·검색 없음·오류·문서 지시 injection·4K/16K profile mock. 기존 대비 Recall@3/무관 근거율 기록.
+
+##### W15-Q0~Q6 [대체됨] 검색어 정규화·Alias 세부 작업 — 이력
+
+통합 방향에서는 아래 외부 서버 수정·차단 조건 대신 [I06](wiki-client-consolidation-plan.md#단계별-구현-task)에서 Client 내부 repository를 대상으로 수행한다. Q0의 서버 코드 사실은 확보한 스냅샷을 기준으로 갱신됐으며 사용자 질의의 운영 재현은 미실시다.
+
+- 사용자 보고: `bc250 ai 서버가 뭐야?`는 성공하지만 `bc250 이 뭐야?`는 실패한다. 운영 재현은 미실시다.
+- [검색어 정규화·Alias 개선 계획](wiki-query-alias-plan.md)에 Client 코드 근거, FTS5의 조건부 토큰화 분석, 정확 Alias→FTS5→제한 확장 전략, 신구 응답 호환, 단계별 수정 대상·의존·완료 조건·테스트·롤백을 기록했다.
+- 순서: Q0 서버 계약 조사 → Q1 질문/표기 정규화 → Q2 Alias 수명주기 → Q3 단계 검색 → Q4 Client/발췌 → Q5 근거 메타데이터(W16 연계) → Q6 평가. 각 Task는 별도로 실행하며 서버 수정 경로는 Q0 확인 전 확정하지 않는다.
+- Q0~Q3의 검색 설계·격리 검증은 W14와 독립적으로 진행 가능하다. W15의 기억 문서 격리와 새 writer 활성화 차단 조건은 유지한다.
+- 완료 기준: `bc250`, `bc-250`, `BC 250`, `bc250 ai 서버`가 비충돌 Alias fixture에서 같은 문서 Top1; 기존 성공 질의 Recall@3·무관 결과율·지연 회귀 기준 충족. 새 LLM/벡터 DB 도입 없음. 현재는 계획만 반영했고 코드·DB·운영 설정은 변경하지 않았다.
+
+#### W16 [대체됨] 출처 메타데이터 API·본문 분리 — 이력
+
+- 의존: W15.
+- 대상: [main.py](../../backend/app/main.py), [db.py](../../backend/app/db.py), [api.ts](../../frontend/src/api.ts), [test_api.py](../../tests/test_api.py).
+- 작업: 새 요청의 명시적 opt-in 계약과 저장 출처 스키마 구현. retrieved/provided/cited 구분. 기존 답변 수정 없음. 새 모드의 다음 턴에는 출처 JSON 본문 재주입 없음.
+- W15-Q5 연계: 검색 일치 단계·Alias는 retrieved 진단이며 답변 근거가 아니다. provided는 최종 payload 기준, cited는 전달한 문서 ID와 대조한다. ID 일치만으로 주장과 발췌의 의미 일치까지 검증됐다고 표시하지 않는다. 상세 계약은 [Alias 계획 §5](wiki-query-alias-plan.md#5-기존-문서인덱스api-호환)를 따른다.
+- 완료: stream/nonstream·이력 조회 동일 출처, 구형 요청 기본 형식 유지. 문서 버전/발췌는 답변 생성 시점 기준.
+- 검증: 전달되지 않은 ID 인용, 최종 프롬프트에서 제거된 자료, 문서 사후 변경/삭제, 구형 클라이언트, 재로딩·request 중복. 기존 legacy 답변의 자동 재작성/문자열 휴리스틱 삭제 금지.
+
+#### W17 [대체됨] 경량 기억 조회·출처 카드·polling 개선 — 이력
+
+- 의존: W04, W05, W16.
+- 대상: [main.py](../../backend/app/main.py)의 history/detail API, [main.tsx](../../frontend/src/main.tsx), [api.ts](../../frontend/src/api.ts), [MessageList.tsx](../../frontend/src/components/MessageList.tsx), W05 UI 컴포넌트/테스트.
+- 작업: view=summary opt-in, 상세 클릭 조회, source 카드, 비활성 탭 중지/진행 중 polling. 대화 완료 이벤트 이후 새 작업 discovery를 보장하고 미등록→등록 race에도 영구 중단하지 않음.
+- 충돌 시 기존·새 값과 대상이 명확한 확인 UI를 제공한다. 변경/유지 및 무응답 동작은 §4.2.1b를 따르며 미구현 서버 기능을 완료로 표시하지 않는다.
+- 완료: 30개 전후 본문을 매 5초 전송하지 않음. 기본 API 응답 유지. 요청 중첩 방지, R12 충족.
+- 검증: fake timers·visibility·네트워크 실패·대화 전환·완료 직후 등록 지연·상세 권한/대화 소속 확인. frontend lint/test/build와 화면 확인.
+
+#### W18 [대체됨] 기억 작업 대기·토큰·모델 전환 비용 제한 — 이력
+
+- 의존: W14, W15.
+- 대상: [main.py](../../backend/app/main.py)의 background scheduler/prepare, [config.py](../../backend/app/config.py), [test_background_switch_deferral.py](../../tests/test_background_switch_deferral.py), [test_model_context.py](../../tests/test_model_context.py).
+- 작업: 기존 DB 작업 큐 사용, bounded admission/대기/추론 1개. foreground 대기 중 신규 기억 추론 양보. 매 epoch 재준비 시 불필요한 Wiki 재검색 빈도 제한은 freshness 보존 가능한 경우만 적용.
+- 완료: 후보당 전송 1회 원칙, 명확한 admission 거절만 재준비, 타이틀·요약 경로 회귀 없음. 16K 하드코딩/모델 자동 전환 없음.
+- 검증: 큐 포화·foreground 경합·모델 hold·409 전송 전 거절/전송 후 불명·schema 미지원·토큰 초과·취소/재시작. fake gate로 검증하고 실제 GPU 성능은 W19에서 구분.
+
+#### W19 [대체됨] 통합 품질·비용 평가와 롤백 문서 확정 — 이력
+
+- 의존: W07, W14~W18.
+- 대상: [wiki-search-evaluation.md](wiki-search-evaluation.md), [wiki-integration.md](wiki-integration.md), [README](../../README.md), 이 문서 §8.
+- 작업: 기존/개선 동일 fixture로 평가. Qwen3.6/Gemma 실제 모델 검증은 별도 승인된 환경·실행 기회가 있을 때 수행하고 없으면 미검증으로 남김. 새로운 schema 전체를 기존 모델 기능 시험이 보장한다고 간주하지 않음.
+- 완료: 질문/assistant 사실 저장 0건, 정확 중복 쓰기 0회, conflict/unknown 덮어쓰기 0회(필수 회귀 세트 기준). Recall@3, 저장 precision, 선별 recall, 추가 추론 비율/토큰, foreground 지연 p50/p95, UI 요청량 기록.
+- 검증: 관련 backend 통합, frontend lint/tests/build, 네 viewport 시각 확인. 운영 적용·부하 측정·장애 주입 미실행은 별도 표시. 모두 skip하는 정책으로 recall을 희생해 완료하지 않음.

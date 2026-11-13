@@ -3,13 +3,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from backend.app.db import connect, initialize
-from backend.app.memory_repository import apply_confirmed, claim_memory, get_active_memory, transition_operation
+from backend.app.db import _apply_memory_repository_migration, connect, initialize
+from backend.app.memory_repository import (apply_confirmed, claim_memory, get_active_memory,
+                                           redact_message_memory, transition_operation)
 
 
-def test_upgrade_is_repeatable_and_preserves_legacy_data(tmp_path):
+def test_upgrade_is_repeatable_and_preserves_legacy_data(tmp_path, monkeypatch):
     path = str(tmp_path / 'client.db')
-    initialize(path)
+    with monkeypatch.context() as patch:
+        patch.setattr('backend.app.db._apply_memory_namespace_migration', lambda db: None)
+        patch.setattr('backend.app.db._apply_wiki_revision_migration', lambda db: None)
+        initialize(path)
     with connect(path) as db:
         db.execute("INSERT INTO conversations (id,title,created_at,updated_at) VALUES ('c','legacy','t','t')")
         db.execute("INSERT INTO messages VALUES ('u','c','user','원문','t')")
@@ -23,6 +27,39 @@ def test_upgrade_is_repeatable_and_preserves_legacy_data(tmp_path):
         assert db.execute("SELECT content FROM messages WHERE id='u'").fetchone()[0] == '원문'
         assert db.execute("SELECT count(*) FROM schema_migrations WHERE version=16").fetchone()[0] == 1
         assert db.execute("SELECT count(*) FROM memory_records").fetchone()[0] == 0
+
+
+def test_migration_failure_rolls_back_new_objects_and_version():
+    db = sqlite3.connect(':memory:')
+    try:
+        db.execute('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)')
+        # A pre-existing incompatible table makes a later index creation fail.
+        db.execute('CREATE TABLE memory_operations (id TEXT PRIMARY KEY)')
+        with pytest.raises(sqlite3.OperationalError):
+            _apply_memory_repository_migration(db)
+        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='memory_records'").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM schema_migrations WHERE version=16").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='memory_operations'").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(('subject', 'predicate'), [
+    ('bc250_server', 'operating_system'), ('bc250_server', 'backup_path'),
+    ('bc250_server', 'backup_frequency'), ('bc250_client', 'service_port'),
+])
+def test_approved_shared_slots_accept_valid_user_sources(tmp_path, subject, predicate):
+    path = str(tmp_path / 'client.db')
+    initialize(path)
+    with connect(path) as db:
+        db.execute("INSERT INTO conversations (id,title,created_at,updated_at) VALUES ('c','title','t','t')")
+        db.execute("INSERT INTO messages VALUES ('u','c','user','value','t')")
+    claim_memory(path, record_id='r', operation_id='o', subject_key=subject, predicate_key=predicate,
+                 kind='fact', conversation_id='c', message_id='u', start=0, end=5,
+                 value='value', request_hash='hash')
+    with connect(path) as db:
+        record = db.execute("SELECT scope_key,subject_key,predicate_key FROM memory_records WHERE id='r'").fetchone()
+        assert tuple(record) == ('shared', subject, predicate)
 
 
 def test_active_lookup_excludes_inactive_and_slot_is_unique(tmp_path):
@@ -143,7 +180,7 @@ def test_confirm_rejects_existing_quarantined_document_without_changing_job(tmp_
     with connect(path) as db:
         db.execute("INSERT INTO conversations (id,title,created_at,updated_at) VALUES ('c','title','t','t')")
         db.execute("INSERT INTO messages VALUES ('u','c','user','Fedora','t')")
-        db.execute("INSERT INTO memory_document_quarantine VALUES (42,'source_deleted','t','t')")
+        db.execute("INSERT INTO memory_document_quarantine VALUES ('legacy_external',42,'source_deleted','t','t')")
     claim_memory(path, record_id='r', operation_id='o', subject_key='bc250_server',
                  predicate_key='operating_system', kind='fact', conversation_id='c', message_id='u',
                  start=0, end=6, value='Fedora', request_hash='hash')
@@ -210,3 +247,61 @@ def test_correction_activation_is_atomic_and_requires_active_target(tmp_path):
     with connect(path) as db:
         assert db.execute("SELECT state FROM memory_records WHERE id='r1'").fetchone()[0] == 'superseded'
     assert get_active_memory(path, 'shared', 'bc250_server', 'operating_system')['id'] == 'r2'
+
+
+def test_message_redaction_is_scoped_and_rolls_back_with_deletion(tmp_path):
+    path = str(tmp_path / 'client.db')
+    initialize(path)
+    with connect(path) as db:
+        db.execute("INSERT INTO conversations (id,title,created_at,updated_at) VALUES ('c','title','t','t')")
+        db.execute("INSERT INTO messages VALUES ('u1','c','user','Fedora','t')")
+        db.execute("INSERT INTO messages VALUES ('u2','c','user','8010','t')")
+    base = dict(kind='fact', conversation_id='c', start=0, request_hash='hash')
+    claim_memory(path, **base, record_id='r1', operation_id='o1', subject_key='bc250_server',
+                 predicate_key='operating_system', message_id='u1', end=6, value='Fedora')
+    claim_memory(path, **base, record_id='r2', operation_id='o2', subject_key='bc250_client',
+                 predicate_key='service_port', message_id='u2', end=4, value='8010')
+    for before, after in [('claimed', 'prepared'), ('prepared', 'sending')]:
+        transition_operation(path, 'o1', before, after)
+    transition_operation(path, 'o1', 'sending', 'confirmed', document_id=42, revision='v1')
+    apply_confirmed(path, 'o1')
+
+    with pytest.raises(RuntimeError):
+        with connect(path) as db:
+            db.execute('BEGIN IMMEDIATE')
+            redact_message_memory(db, 'c', 'u1', 'later')
+            db.execute("DELETE FROM messages WHERE id='u1' AND conversation_id='c'")
+            raise RuntimeError('simulate deletion failure')
+    assert get_active_memory(path, 'shared', 'bc250_server', 'operating_system')['id'] == 'r1'
+    with connect(path) as db:
+        assert db.execute("SELECT reason FROM memory_document_quarantine WHERE wiki_document_id=42").fetchone()[0] == 'owned'
+        db.execute('BEGIN IMMEDIATE')
+        redact_message_memory(db, 'wrong-conversation', 'u1', 'later')
+        assert db.execute("SELECT state FROM memory_records WHERE id='r1'").fetchone()[0] == 'active'
+        redact_message_memory(db, 'c', 'u1', 'later')
+        db.execute("DELETE FROM messages WHERE id='u1' AND conversation_id='c'")
+    with connect(path) as db:
+        first = db.execute("SELECT * FROM memory_records WHERE id='r1'").fetchone()
+        assert first['state'] == 'redacted' and first['value'] is None and first['source_message_id'] is None
+        assert db.execute("SELECT reason FROM memory_document_quarantine WHERE wiki_document_id=42").fetchone()[0] == 'source_deleted'
+        assert db.execute("SELECT state FROM memory_records WHERE id='r2'").fetchone()[0] == 'candidate'
+        assert db.execute("SELECT state FROM memory_operations WHERE id='o2'").fetchone()[0] == 'claimed'
+
+
+@pytest.mark.parametrize('revision', [None, '', '  ', 123, True])
+def test_confirmation_requires_nonempty_text_revision(tmp_path, revision):
+    path = str(tmp_path / 'client.db')
+    initialize(path)
+    with connect(path) as db:
+        db.execute("INSERT INTO conversations (id,title,created_at,updated_at) VALUES ('c','title','t','t')")
+        db.execute("INSERT INTO messages VALUES ('u','c','user','Fedora','t')")
+    claim_memory(path, record_id='r', operation_id='o', subject_key='bc250_server',
+                 predicate_key='operating_system', kind='fact', conversation_id='c', message_id='u',
+                 start=0, end=6, value='Fedora', request_hash='hash')
+    transition_operation(path, 'o', 'claimed', 'prepared')
+    transition_operation(path, 'o', 'prepared', 'sending')
+    with pytest.raises(ValueError, match='requires document and revision'):
+        transition_operation(path, 'o', 'sending', 'confirmed', document_id=42, revision=revision)
+    with connect(path) as db:
+        assert db.execute("SELECT state FROM memory_operations WHERE id='o'").fetchone()[0] == 'sending'
+        assert db.execute('SELECT count(*) FROM memory_document_quarantine').fetchone()[0] == 0

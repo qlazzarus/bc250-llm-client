@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-LATEST_SCHEMA_VERSION = 16
+LATEST_SCHEMA_VERSION = 21
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -95,6 +95,11 @@ def initialize(path: str) -> None:
             connection.execute("ALTER TABLE wiki_memory_jobs ADD COLUMN source_message_id TEXT")
         _apply_wiki_memory_metadata_migration(connection)
         _apply_memory_repository_migration(connection)
+        _apply_integrated_wiki_migration(connection)
+        _apply_memory_namespace_migration(connection)
+        _apply_wiki_revision_migration(connection)
+        _apply_wiki_alias_migration(connection)
+        _apply_wiki_evidence_migration(connection)
 
 
 def _apply_conversation_mode_migration(connection: sqlite3.Connection) -> None:
@@ -348,4 +353,166 @@ def _apply_memory_repository_migration(connection: sqlite3.Connection) -> None:
     except Exception:
         connection.execute("ROLLBACK TO SAVEPOINT memory_repository_migration")
         connection.execute("RELEASE SAVEPOINT memory_repository_migration")
+        raise
+
+
+def _apply_integrated_wiki_migration(connection: sqlite3.Connection) -> None:
+    """Add an empty local Wiki and its transactional FTS index to the client DB."""
+    if connection.execute("SELECT 1 FROM schema_migrations WHERE version=17").fetchone():
+        return
+    statements = [
+        """CREATE TABLE wiki_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL CHECK(length(trim(title)) BETWEEN 1 AND 200),
+            content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 100000),
+            category TEXT NOT NULL DEFAULT 'general' CHECK(length(category) <= 80),
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(typeof(revision) = 'integer' AND revision > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""",
+        "CREATE VIRTUAL TABLE wiki_documents_fts USING fts5(title, content, tokenize='unicode61')",
+        """CREATE TRIGGER wiki_documents_ai AFTER INSERT ON wiki_documents BEGIN
+            INSERT INTO wiki_documents_fts(rowid,title,content) VALUES(new.id,new.title,new.content);
+        END""",
+        """CREATE TRIGGER wiki_documents_au AFTER UPDATE ON wiki_documents BEGIN
+            DELETE FROM wiki_documents_fts WHERE rowid=old.id;
+            INSERT INTO wiki_documents_fts(rowid,title,content) VALUES(new.id,new.title,new.content);
+        END""",
+        """CREATE TRIGGER wiki_documents_ad AFTER DELETE ON wiki_documents BEGIN
+            DELETE FROM wiki_documents_fts WHERE rowid=old.id;
+        END""",
+    ]
+    connection.execute("SAVEPOINT integrated_wiki_migration")
+    try:
+        for statement in statements:
+            connection.execute(statement)
+        connection.execute("INSERT INTO schema_migrations(version) VALUES (17)")
+        connection.execute("RELEASE SAVEPOINT integrated_wiki_migration")
+    except Exception:
+        connection.execute("ROLLBACK TO SAVEPOINT integrated_wiki_migration")
+        connection.execute("RELEASE SAVEPOINT integrated_wiki_migration")
+        raise
+
+
+def _apply_memory_namespace_migration(connection: sqlite3.Connection) -> None:
+    """Preserve old Wiki references while separating integrated document IDs."""
+    if connection.execute("SELECT 1 FROM schema_migrations WHERE version=18").fetchone():
+        return
+    statements = [
+        "ALTER TABLE wiki_memory_jobs ADD COLUMN store_id TEXT NOT NULL DEFAULT 'legacy_external' CHECK(store_id IN ('legacy_external','integrated'))",
+        "ALTER TABLE memory_records ADD COLUMN store_id TEXT NOT NULL DEFAULT 'legacy_external' CHECK(store_id IN ('legacy_external','integrated'))",
+        "ALTER TABLE memory_operations ADD COLUMN store_id TEXT NOT NULL DEFAULT 'legacy_external' CHECK(store_id IN ('legacy_external','integrated'))",
+        "ALTER TABLE memory_document_quarantine RENAME TO memory_document_quarantine_v16",
+        """CREATE TABLE memory_document_quarantine (
+            store_id TEXT NOT NULL CHECK(store_id IN ('legacy_external','integrated')),
+            wiki_document_id INTEGER NOT NULL,
+            reason TEXT NOT NULL CHECK(reason IN ('owned','source_deleted','external_change','unknown_write')),
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            PRIMARY KEY(store_id,wiki_document_id))""",
+        """INSERT INTO memory_document_quarantine(store_id,wiki_document_id,reason,created_at,updated_at)
+            SELECT 'legacy_external',wiki_document_id,reason,created_at,updated_at FROM memory_document_quarantine_v16""",
+        "DROP TABLE memory_document_quarantine_v16",
+        "DROP INDEX memory_one_active_slot",
+        "CREATE UNIQUE INDEX memory_one_active_slot ON memory_records(store_id,scope_key,subject_key,predicate_key) WHERE state='active'",
+        "DROP INDEX memory_fingerprint_lookup",
+        "CREATE INDEX memory_fingerprint_lookup ON memory_records(store_id,scope_key,fingerprint) WHERE fingerprint IS NOT NULL",
+        "DROP INDEX memory_document_lookup",
+        "CREATE INDEX memory_document_lookup ON memory_records(store_id,wiki_document_id)",
+        "DROP INDEX memory_one_open_operation",
+        "CREATE UNIQUE INDEX memory_one_open_operation ON memory_operations(store_id,scope_key,subject_key,predicate_key) WHERE state IN ('claimed','prepared','sending','unknown','confirmed')",
+        """CREATE TRIGGER memory_operation_store_insert BEFORE INSERT ON memory_operations
+           WHEN NOT EXISTS (SELECT 1 FROM memory_records r WHERE r.id=NEW.record_id AND r.store_id=NEW.store_id)
+           BEGIN SELECT RAISE(ABORT,'operation store mismatch'); END""",
+        """CREATE TRIGGER memory_operation_store_update BEFORE UPDATE OF store_id,record_id ON memory_operations
+           WHEN NOT EXISTS (SELECT 1 FROM memory_records r WHERE r.id=NEW.record_id AND r.store_id=NEW.store_id)
+           BEGIN SELECT RAISE(ABORT,'operation store mismatch'); END""",
+        """CREATE TRIGGER memory_record_store_immutable BEFORE UPDATE OF store_id ON memory_records
+           WHEN OLD.store_id<>NEW.store_id BEGIN SELECT RAISE(ABORT,'record store immutable'); END""",
+        """CREATE TRIGGER memory_supersedes_store_insert BEFORE INSERT ON memory_records
+           WHEN NEW.supersedes_id IS NOT NULL AND NOT EXISTS
+           (SELECT 1 FROM memory_records r WHERE r.id=NEW.supersedes_id AND r.store_id=NEW.store_id)
+           BEGIN SELECT RAISE(ABORT,'supersedes store mismatch'); END""",
+        """CREATE TRIGGER memory_supersedes_store_update BEFORE UPDATE OF supersedes_id ON memory_records
+           WHEN NEW.supersedes_id IS NOT NULL AND NOT EXISTS
+           (SELECT 1 FROM memory_records r WHERE r.id=NEW.supersedes_id AND r.store_id=NEW.store_id)
+           BEGIN SELECT RAISE(ABORT,'supersedes store mismatch'); END""",
+    ]
+    connection.execute('SAVEPOINT memory_namespace_migration')
+    try:
+        for statement in statements:
+            connection.execute(statement)
+        connection.execute('INSERT INTO schema_migrations(version) VALUES (18)')
+        connection.execute('RELEASE SAVEPOINT memory_namespace_migration')
+    except Exception:
+        connection.execute('ROLLBACK TO SAVEPOINT memory_namespace_migration')
+        connection.execute('RELEASE SAVEPOINT memory_namespace_migration')
+        raise
+
+
+def _apply_wiki_revision_migration(connection: sqlite3.Connection) -> None:
+    """Keep at most 100 snapshots per integrated document, deleting with it."""
+    if connection.execute('SELECT 1 FROM schema_migrations WHERE version=19').fetchone():
+        return
+    statements = [
+        """CREATE TABLE wiki_document_revisions (
+            document_id INTEGER NOT NULL REFERENCES wiki_documents(id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision > 0),
+            title TEXT NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY(document_id, revision))""",
+        """INSERT INTO wiki_document_revisions(document_id,revision,title,content,category,created_at)
+           SELECT id,revision,title,content,category,updated_at FROM wiki_documents""",
+        """CREATE TRIGGER wiki_revision_ai AFTER INSERT ON wiki_documents BEGIN
+            INSERT INTO wiki_document_revisions VALUES(new.id,new.revision,new.title,new.content,new.category,new.updated_at);
+        END""",
+        """CREATE TRIGGER wiki_revision_au AFTER UPDATE ON wiki_documents BEGIN
+            SELECT CASE WHEN new.revision <> old.revision+1 THEN RAISE(ABORT,'revision must increase by one') END;
+            INSERT INTO wiki_document_revisions VALUES(new.id,new.revision,new.title,new.content,new.category,new.updated_at);
+            DELETE FROM wiki_document_revisions WHERE document_id=new.id AND revision NOT IN
+              (SELECT revision FROM wiki_document_revisions WHERE document_id=new.id ORDER BY revision DESC LIMIT 100);
+        END""",
+    ]
+    connection.execute('SAVEPOINT wiki_revision_migration')
+    try:
+        for statement in statements:
+            connection.execute(statement)
+        connection.execute('INSERT INTO schema_migrations(version) VALUES (19)')
+        connection.execute('RELEASE SAVEPOINT wiki_revision_migration')
+    except Exception:
+        connection.execute('ROLLBACK TO SAVEPOINT wiki_revision_migration')
+        connection.execute('RELEASE SAVEPOINT wiki_revision_migration')
+        raise
+
+
+def _apply_wiki_alias_migration(connection: sqlite3.Connection) -> None:
+    if connection.execute('SELECT 1 FROM schema_migrations WHERE version=20').fetchone():
+        return
+    connection.execute('SAVEPOINT wiki_alias_migration')
+    try:
+        connection.execute('''CREATE TABLE wiki_document_aliases (
+            document_id INTEGER NOT NULL REFERENCES wiki_documents(id) ON DELETE CASCADE,
+            alias_original TEXT NOT NULL, alias_key TEXT NOT NULL,
+            normalization_version INTEGER NOT NULL CHECK(normalization_version=1),
+            PRIMARY KEY(document_id, alias_key))''')
+        connection.execute('CREATE INDEX wiki_alias_lookup ON wiki_document_aliases(normalization_version,alias_key,document_id)')
+        connection.execute('INSERT INTO schema_migrations(version) VALUES (20)')
+        connection.execute('RELEASE SAVEPOINT wiki_alias_migration')
+    except Exception:
+        connection.execute('ROLLBACK TO SAVEPOINT wiki_alias_migration')
+        connection.execute('RELEASE SAVEPOINT wiki_alias_migration')
+        raise
+
+
+def _apply_wiki_evidence_migration(connection: sqlite3.Connection) -> None:
+    if connection.execute('SELECT 1 FROM schema_migrations WHERE version=21').fetchone():
+        return
+    connection.execute('SAVEPOINT wiki_evidence_migration')
+    try:
+        connection.execute('''CREATE TABLE wiki_message_evidence (
+            message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+            evidence_json TEXT NOT NULL)''')
+        connection.execute('INSERT INTO schema_migrations(version) VALUES (21)')
+        connection.execute('RELEASE SAVEPOINT wiki_evidence_migration')
+    except Exception:
+        connection.execute('ROLLBACK TO SAVEPOINT wiki_evidence_migration')
+        connection.execute('RELEASE SAVEPOINT wiki_evidence_migration')
         raise

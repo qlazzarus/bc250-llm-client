@@ -64,3 +64,43 @@ it('keeps a long history behind the detail dialog', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Wiki 자동 기억 기록 (30)' }));
   expect(document.querySelectorAll('.wiki-memory-record')).toHaveLength(30);
 });
+
+it('marks old external Wiki records in the detail dialog', () => {
+  installDialogMocks();
+  render(<WikiMemoryStatus jobs={[base({ store_id: 'legacy_external' })]} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Wiki 자동 기억 기록 (1)' }));
+  expect(screen.getByText(/기존 Wiki 기록/)).toBeTruthy();
+});
+
+it('shows the existing and proposed values and submits an explicit decision', async () => {
+  installDialogMocks();
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ status: 'completed' }), { status: 200 }));
+  const onChanged = vi.fn();
+  render(<WikiMemoryStatus conversationId="conversation" onChanged={onChanged} jobs={[base({ status: 'awaiting_confirmation',
+    store_id: 'integrated', previous_content: 'Fedora', proposed_content: 'Ubuntu', confirmation_token: 'a'.repeat(64), needs_attention: 1 })]} />);
+  fireEvent.click(screen.getByRole('button', { name: /Wiki 자동 기억 기록/ }));
+  expect(screen.getByText('기존 값: Fedora')).toBeTruthy();
+  expect(screen.getByText('새 값: Ubuntu')).toBeTruthy();
+  expect(fetchMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '변경' }));
+  await vi.waitFor(() => expect(onChanged).toHaveBeenCalled());
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const [url, options] = fetchMock.mock.calls[0];
+  expect(url).toBe('/llm/api/v1/conversations/conversation/wiki-memory/g1/confirmation');
+  expect(JSON.parse(String(options?.body))).toEqual({ decision: 'approve', token: 'a'.repeat(64) });
+});
+
+it('loads sensitive details only when requested', async () => {
+  installDialogMocks();
+  const full = base();
+  const summary = { ...full };
+  delete summary.source_text; delete summary.source_message_id; delete summary.previous_content; delete summary.proposed_content;
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ data: full }), { status: 200 }));
+  render(<WikiMemoryStatus jobs={[summary]} conversationId="c" />);
+  fireEvent.click(screen.getByRole('button', { name: /Wiki 자동 기억 기록/ }));
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(screen.queryByText('내 휴대폰은 예시 기기입니다.')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '상세 불러오기' }));
+  await screen.findByText('내 휴대폰은 예시 기기입니다.');
+  expect(fetchMock).toHaveBeenCalledOnce();
+});

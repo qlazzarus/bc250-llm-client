@@ -6,7 +6,10 @@ export type ImagePresetName = 'fast' | 'balanced' | 'quality' | 'custom';
 export const promptModeLabel = (mode: PromptMode) => ({ ai_optimized: 'AI 최적화', direct_translation: '직접 번역', original: '원본 그대로' })[mode];
 export type ResponseLength = 'short' | 'medium' | 'long';
 export type ModeSettings = Record<string, string>;
-export type Message = { id: string; role: 'user' | 'assistant'; content: string; created_at: string };
+export type WikiEvidence = { version: number; retrieved: { id: number; title: string; revision: number | null; store_id: string }[];
+  provided: { id: number; title: string; excerpt: string }[]; memory_provided: { document_id: number; revision: string }[];
+  cited: number[]; memory_cited?: number[]; invalid_citations: number[]; evidence_status: 'citation_only' };
+export type Message = { id: string; role: 'user' | 'assistant'; content: string; created_at: string; wiki_evidence?: WikiEvidence };
 export type MessagePage = { data: Message[]; next_before: string | null; has_more: boolean };
 export type Conversation = {
   id: string; title: string; title_pending: boolean; mode: Mode; context_policy: 'none' | 'recent'; mode_settings: ModeSettings;
@@ -21,7 +24,9 @@ export type Generation = {
 };
 export type WikiMemoryJob = {
   generation_id: string; status: string; action: string | null; document_id: number | null; title: string | null;
-  source_text: string | null; source_message_id: string | null; previous_content: string | null; proposed_content: string | null;
+  store_id?: 'legacy_external' | 'integrated';
+  confirmation_token?: string | null;
+  source_text?: string | null; source_message_id?: string | null; previous_content?: string | null; proposed_content?: string | null;
   error_message: string | null; explicit: number; memory_kind: 'fact' | 'preference' | 'plan' | 'question' | 'uncertain' | null;
   reason_code: string | null; needs_attention: number | null; policy_version: number | null; created_at: string; updated_at: string;
 };
