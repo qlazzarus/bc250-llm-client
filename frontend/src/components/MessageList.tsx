@@ -41,7 +41,7 @@ const ChatMessage = memo(function ChatMessage({ message, mode, conversationId, i
     </div>}
     {message.role === 'user' && !message.id.startsWith('local-') && <div className="wiki-message-actions">
       {!candidateDismissed && proposal === 'contextual' && <div className="wiki-context-proposal" role="region" aria-label="공유 Wiki 저장 제안"><p>이 내용을 다음에도 참고할 수 있도록 가족 공유 Wiki에 저장할까요?</p><small>선택은 이 브라우저 화면에서만 유지되며 새로고침하면 다시 표시될 수 있습니다.</small><div><button type="button" onClick={() => onWikiDraft(message)}>저장 내용 확인</button> <button type="button" className="plain" onClick={() => onDismissCandidate(message.id)}>이번 대화에서만 사용</button></div></div>}
-      {!candidateDismissed && proposal === 'ordinary' && <div>이 메시지를 공유 Wiki 문서로 검토할 수 있습니다. <button type="button" className="plain" onClick={() => onWikiDraft(message)}>초안 검토</button> <button type="button" className="plain" aria-label="문서 후보 닫기" onClick={() => onDismissCandidate(message.id)}>닫기</button></div>}
+      {!candidateDismissed && proposal === 'ordinary' && <div className="wiki-ordinary-proposal"><p>이 메시지를 공유 Wiki 문서로 검토할 수 있습니다.</p><div><button type="button" className="plain" onClick={() => onWikiDraft(message)}>초안 검토</button><button type="button" className="plain" aria-label="문서 후보 닫기" onClick={() => onDismissCandidate(message.id)}>닫기</button></div></div>}
       <button type="button" className="plain" onClick={() => onWikiDraft(message)}>공유 Wiki에 저장</button>
     </div>}
     {message.role === 'assistant' && message.wiki_evidence && <details className="wiki-evidence"><summary>Wiki 참고 정보</summary>

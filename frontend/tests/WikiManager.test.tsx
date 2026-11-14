@@ -33,6 +33,7 @@ it('shows shared space, searches, and creates a document', async () => {
   fireEvent.change(await screen.findByLabelText('문서 검색'), { target: { value: 'server' } });
   fireEvent.click(screen.getByRole('button', { name: '검색' }));
   await waitFor(() => expect(mock).toHaveBeenCalledWith('/wiki/search?q=server'));
+  fireEvent.click(screen.getByRole('button', { name: '새 문서 만들기' }));
   fireEvent.change(screen.getByLabelText('제목'), { target: { value: '새 문서' } });
   fireEvent.change(screen.getByLabelText('본문'), { target: { value: '<script>안전</script>' } });
   fireEvent.click(screen.getByRole('button', { name: '저장' }));
@@ -56,6 +57,8 @@ it('retains the draft after conflict and requires an explicit new save', async (
   });
   render(<WikiManager onClose={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  await screen.findByRole('heading', { name: '서버' });
+  fireEvent.click(screen.getByRole('button', { name: '편집' }));
   await waitFor(() => expect((screen.getByLabelText('본문') as HTMLTextAreaElement).value).toBe('Fedora'));
   fireEvent.change(screen.getByLabelText('본문'), { target: { value: '내 초안' } });
   fireEvent.click(screen.getByRole('button', { name: '저장' }));
@@ -82,6 +85,7 @@ it('shows saved revision diff and asks before deleting', async () => {
   });
   render(<WikiManager onClose={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  fireEvent.click(await screen.findByText('문서 관리'));
   fireEvent.click(await screen.findByRole('button', { name: '이력 불러오기' }));
   fireEvent.click(await screen.findByRole('button', { name: '차이 보기' }));
   expect(await screen.findByText('-old +new')).toBeTruthy();
@@ -107,7 +111,8 @@ it('does not submit duplicate creates while a save is pending', async () => {
     throw new Error(`unexpected ${path}`);
   });
   render(<WikiManager onClose={() => {}} />);
-  fireEvent.change(await screen.findByLabelText('제목'), { target: { value: '제목' } });
+  fireEvent.click(await screen.findByRole('button', { name: '새 문서 만들기' }));
+  fireEvent.change(screen.getByLabelText('제목'), { target: { value: '제목' } });
   fireEvent.change(screen.getByLabelText('본문'), { target: { value: '본문' } });
   const save = screen.getByRole('button', { name: '저장' });
   fireEvent.click(save); fireEvent.click(save);
@@ -130,16 +135,18 @@ it('loads and explicitly saves aliases using the current revision', async () => 
   });
   render(<WikiManager onClose={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  fireEvent.click(await screen.findByText('문서 관리'));
   fireEvent.click(await screen.findByRole('button', { name: '별칭 불러오기' }));
   fireEvent.change(await screen.findByLabelText('별칭 목록'), { target: { value: 'bc250' } });
   fireEvent.click(screen.getByRole('button', { name: '별칭 저장' }));
   expect(await screen.findByText('별칭을 저장했습니다.')).toBeTruthy();
-  expect(screen.getByText('문서 편집 · revision 2')).toBeTruthy();
+  expect(screen.getByText('버전 2')).toBeTruthy();
 });
 
 it('previews markdown safely while keeping the editable source intact', async () => {
   render(<WikiManager onClose={() => {}} />);
-  const editor = await screen.findByLabelText('본문');
+  fireEvent.click(await screen.findByRole('button', { name: '새 문서 만들기' }));
+  const editor = screen.getByLabelText('본문');
   const source = '# 제목\n\n**굵게**\n\n<script>alert(1)</script>';
   fireEvent.change(editor, { target: { value: source } });
   const preview = screen.getByRole('region', { name: '마크다운 미리보기' });
@@ -166,12 +173,42 @@ it('opens linked Wiki documents in place and protects unsaved edits', async () =
   render(<WikiManager onClose={() => {}} onNavigate={navigate} />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   await screen.findByRole('link', { name: '두 번째로 이동' });
+  fireEvent.click(screen.getByRole('button', { name: '편집' }));
   fireEvent.change(screen.getByLabelText('제목'), { target: { value: '변경 중' } });
   fireEvent.click(screen.getByRole('link', { name: '두 번째로 이동' }));
   expect(confirm).toHaveBeenCalled();
   expect(mock).not.toHaveBeenCalledWith('/wiki/documents/2?store_id=integrated');
   confirm.mockReturnValue(true);
   fireEvent.click(screen.getByRole('link', { name: '두 번째로 이동' }));
-  await waitFor(() => expect((screen.getByLabelText('제목') as HTMLInputElement).value).toBe('두 번째 문서'));
+  expect(await screen.findByRole('heading', { name: '두 번째 문서' })).toBeTruthy();
   expect(navigate).toHaveBeenLastCalledWith(2);
+});
+
+it('opens documents in reading mode and confirms before discarding an edit', async () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  render(<WikiManager onClose={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  expect(await screen.findByRole('heading', { name: '서버' })).toBeTruthy();
+  expect(screen.getByText('Fedora')).toBeTruthy();
+  expect(screen.queryByLabelText('본문')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByLabelText('본문'), { target: { value: '변경한 초안' } });
+  fireEvent.click(screen.getByRole('button', { name: '취소' }));
+  expect(confirm).toHaveBeenCalled();
+  expect((screen.getByLabelText('본문') as HTMLTextAreaElement).value).toBe('변경한 초안');
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole('button', { name: '취소' }));
+  expect(screen.getByText('Fedora')).toBeTruthy();
+  expect(screen.queryByLabelText('본문')).toBeNull();
+});
+
+it('returns to the current document without discarding its draft', async () => {
+  const confirm = vi.spyOn(window, 'confirm');
+  render(<WikiManager onClose={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByLabelText('본문'), { target: { value: '보관할 초안' } });
+  fireEvent.click(screen.getByRole('button', { name: '서버' }));
+  expect(confirm).not.toHaveBeenCalled();
+  expect((screen.getByLabelText('본문') as HTMLTextAreaElement).value).toBe('보관할 초안');
 });

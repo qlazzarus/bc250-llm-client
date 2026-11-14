@@ -34,3 +34,25 @@ it('opens and closes the dialog, then creates and opens a conversation', async (
   await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/conversations') && init?.method === 'POST')).toBe(true));
   expect(await screen.findByLabelText('메시지 입력')).toBeTruthy();
 });
+
+it('opens the mobile navigation drawer and closes it after selecting Wiki', async () => {
+  vi.stubGlobal('requestAnimationFrame', () => 1);
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith('/conversations')) return json({ data: [conversation] });
+    if (url.endsWith('/models')) return json({ data: [] });
+    if (url.endsWith('/image-generation/capabilities')) return json({ models: [], available: false });
+    if (url.endsWith('/wiki/capabilities')) return json({ store_id: 'legacy_external' });
+    throw new Error(url);
+  }));
+  const { App } = await import('../src/main');
+  render(<App />);
+  const trigger = screen.getByRole('button', { name: '메뉴 열기' });
+  fireEvent.click(trigger);
+  const menu = await screen.findByRole('dialog', { name: '워크스페이스 메뉴' });
+  expect(trigger.getAttribute('aria-expanded')).toBe('true');
+  expect(within(menu).getByRole('navigation', { name: '모바일 대화 목록' })).toBeTruthy();
+  fireEvent.click(within(menu).getByRole('button', { name: '공유 Wiki' }));
+  expect(await screen.findByText(/통합 Wiki가 아직 활성화되지 않았습니다/)).toBeTruthy();
+  await waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
+});
