@@ -124,7 +124,7 @@ export function ModelControl({ onSwitchSucceeded }: { onSwitchSucceeded?: () => 
     }
   };
 
-  return <section><h3>LLM 모델 전환</h3><p>이 변경은 서버 전체에 적용됩니다. 진행 중인 대화와 이미지 작업에 영향을 줄 수 있습니다.</p>
+  return <section className="model-control"><h3>LLM 모델 전환</h3><p>이 변경은 서버 전체에 적용됩니다. 진행 중인 대화와 이미지 작업에 영향을 줄 수 있습니다.</p>
     <button onClick={() => void refresh()} disabled={pending}>상태 조회</button>
     {error && <p role="alert">{error}</p>}
     {uncertain && <div role="alert"><p>접수 결과를 확인할 수 없습니다. 관리자가 작업 기록을 확인해야 합니다.</p>

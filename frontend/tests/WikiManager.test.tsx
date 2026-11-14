@@ -136,3 +136,42 @@ it('loads and explicitly saves aliases using the current revision', async () => 
   expect(await screen.findByText('별칭을 저장했습니다.')).toBeTruthy();
   expect(screen.getByText('문서 편집 · revision 2')).toBeTruthy();
 });
+
+it('previews markdown safely while keeping the editable source intact', async () => {
+  render(<WikiManager onClose={() => {}} />);
+  const editor = await screen.findByLabelText('본문');
+  const source = '# 제목\n\n**굵게**\n\n<script>alert(1)</script>';
+  fireEvent.change(editor, { target: { value: source } });
+  const preview = screen.getByRole('region', { name: '마크다운 미리보기' });
+  expect(within(preview).getByRole('heading', { name: '제목' })).toBeTruthy();
+  expect(within(preview).getByText('굵게').tagName).toBe('STRONG');
+  expect(preview.querySelector('script')).toBeNull();
+  expect((editor as HTMLTextAreaElement).value).toBe(source);
+  fireEvent.click(screen.getByRole('button', { name: '미리보기 숨기기' }));
+  expect(screen.queryByRole('region', { name: '마크다운 미리보기' })).toBeNull();
+});
+
+it('opens linked Wiki documents in place and protects unsaved edits', async () => {
+  const target = { ...original, id: 2, title: '두 번째 문서', content: '두 번째 내용' };
+  const first = { ...original, content: '[두 번째로 이동](#/wiki/2)' };
+  mock.mockImplementation(async path => {
+    if (path === '/wiki/capabilities') return { store_id: 'integrated' } as never;
+    if (path === '/wiki/documents') return [first, target] as never;
+    if (path === '/wiki/documents/1?store_id=integrated') return first as never;
+    if (path === '/wiki/documents/2?store_id=integrated') return target as never;
+    throw new Error(`unexpected ${path}`);
+  });
+  const navigate = vi.fn();
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  render(<WikiManager onClose={() => {}} onNavigate={navigate} />);
+  fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  await screen.findByRole('link', { name: '두 번째로 이동' });
+  fireEvent.change(screen.getByLabelText('제목'), { target: { value: '변경 중' } });
+  fireEvent.click(screen.getByRole('link', { name: '두 번째로 이동' }));
+  expect(confirm).toHaveBeenCalled();
+  expect(mock).not.toHaveBeenCalledWith('/wiki/documents/2?store_id=integrated');
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole('link', { name: '두 번째로 이동' }));
+  await waitFor(() => expect((screen.getByLabelText('제목') as HTMLInputElement).value).toBe('두 번째 문서'));
+  expect(navigate).toHaveBeenLastCalledWith(2);
+});

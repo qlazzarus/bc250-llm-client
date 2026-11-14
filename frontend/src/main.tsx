@@ -1,12 +1,12 @@
 import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createTheme, ThemeProvider } from '@mui/material/styles';
 import { BookOpen, Menu, Plus, Activity, Settings, Trash2, Link2, MessageSquare } from 'lucide-react';
 import { ApiError, newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength, type WikiMemoryJob } from './api';
 import { MessageList } from './components/MessageList';
-import { ModelControl } from './components/ModelControl';
+import { SystemStatus } from './components/SystemStatus';
 import { WikiMemoryStatus } from './components/WikiMemoryStatus';
 import { WikiManager } from './components/WikiManager';
-import 'bootstrap/dist/css/bootstrap.min.css';
 import './image-prompt.css';
 import './style.css';
 import './scroll.css';
@@ -22,6 +22,7 @@ const MODE_META: Record<Mode, { label: string; description: string; fields: Arra
   roleplay: { label: '롤플레잉', description: '설정과 최근 완료 대화를 이어 갑니다.', fields: [['character', '캐릭터', '이름·역할·성격'], ['world', '세계관', '배경과 규칙'], ['voice', '말투', '예: 차분한 존댓말'], ['scenario', '현재 상황', '시작 장면'], ['rules', '응답 규칙', '지켜야 할 조건']] },
   image_prompt: { label: '이미지 프롬프트', description: '한 번의 요청을 영어 프롬프트와 설정 JSON으로 변환합니다. 이미지는 직접 생성하지 않습니다.', fields: [] },
 };
+const appTheme = createTheme({ palette: { mode: 'dark', primary: { main: '#83bff4' }, background: { default: '#101721', paper: '#192532' } }, typography: { fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, sans-serif' }, shape: { borderRadius: 10 }, components: { MuiButton: { defaultProps: { disableElevation: true }, styleOverrides: { root: { textTransform: 'none', fontWeight: 600 } } } } });
 const LENGTH_LABEL: Record<ResponseLength, string> = { short: '짧게', medium: '보통', long: '길게' };
 
 function ModeFields({ mode, value, onChange }: { mode: Mode; value: ModeSettings; onChange: (settings: ModeSettings) => void }) {
@@ -203,6 +204,8 @@ export function App() {
   const [promptMode, setPromptMode] = useState<PromptMode>('ai_optimized');
   const [imageModelId, setImageModelId] = useState('');
   const [gate, setGate] = useState<unknown>();
+  const [gateError, setGateError] = useState('');
+  const [gateLoading, setGateLoading] = useState(false);
   const [systemView, setSystemView] = useState(false);
   const [wikiView, setWikiView] = useState(false);
   const [wikiVisited, setWikiVisited] = useState(false);
@@ -582,8 +585,12 @@ export function App() {
     if (target?.id === retryInfo.conversationId) await runGeneration(target, retryInfo.content, retryInfo.requestId, true, retryInfo.promptMode, retryInfo.imageModelId);
   };
   const showSystem = async () => {
-    try { setGate(await request<unknown>('/admin/gate-status')); setWikiView(false); setSystemView(true); history.pushState(null, '', '#/'); }
-    catch (error) { setNotice(error instanceof Error ? error.message : 'LLM gate 상태를 가져오지 못했습니다.'); }
+    setWikiView(false); setSystemView(true); setGateLoading(true); setGateError('');
+    void refreshModels();
+    if (window.location.hash !== '#/') history.pushState(null, '', '#/');
+    try { setGate(await request<unknown>('/admin/gate-status')); }
+    catch (error) { setGate(undefined); setGateError(error instanceof Error ? error.message : 'LLM gate 상태를 가져오지 못했습니다.'); }
+    finally { setGateLoading(false); }
   };
   const deleteConversation = async (conversation: Detail) => {
     if (!confirm('이 대화를 삭제할까요?')) return;
@@ -593,7 +600,7 @@ export function App() {
   };
 
 
-  return <main className="layout">
+  return <ThemeProvider theme={appTheme}><main className="layout">
     <aside className="workspace-sidebar"><h1><span className="brand-mark" aria-hidden="true">✳</span><span>BC-250<small>개인 AI 워크스페이스</small></span></h1><button className="mobile-menu-toggle plain" aria-expanded={menuOpen} aria-controls="conversation-nav" onClick={() => setMenuOpen(value => !value)}><Menu size={18} aria-hidden="true" />{menuOpen ? '닫기' : '메뉴'}</button><button className="new-chat-button" onClick={() => { setMenuOpen(false); setNewDialog(true); }}><Plus size={18} aria-hidden="true" /> 새 대화</button>
       <nav id="conversation-nav" className={menuOpen ? 'mobile-open' : ''} aria-label="대화 목록">{conversations.map(conversation => <a role="button" href={'#/chat/' + encodeURIComponent(conversation.id)} className={active?.id === conversation.id && !systemView && !wikiView ? 'selected' : ''} key={conversation.id} onClick={event => { event.preventDefault(); setMenuOpen(false); void loadConversation(conversation.id, true).catch(error => setNotice(error.message)); }}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></a>)}</nav>
       <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); history.pushState(null, '', '#/wiki'); }}><BookOpen size={17} aria-hidden="true" /> 공유 Wiki</button>
@@ -601,7 +608,7 @@ export function App() {
     </aside>
     <section className="chat">
       {wikiVisited && <div className="wiki-manager-host" hidden={!wikiView}><WikiManager documentId={wikiDocumentId} onNavigate={id => { setWikiDocumentId(id); history.pushState(null, '', id ? '#/wiki/' + id : '#/wiki'); }} onClose={() => { setWikiView(false); history.pushState(null, '', active ? '#/chat/' + encodeURIComponent(active.id) : '#/'); }} /></div>}
-      {!wikiView && (systemView ? <section className="system-panel"><h2>BC-250 시스템 상태</h2><p>이미지 작업이 진행 중이면 image_priority 정책에 따라 LLM이 대기할 수 있습니다.</p><h3>사용 가능 모델</h3><ul>{models.map(model => <li key={model}>{model}</li>)}</ul><ModelControl onSwitchSucceeded={refreshModels} /><h3>LLM Gate</h3><pre>{JSON.stringify(gate, null, 2)}</pre><button onClick={showSystem}>새로고침</button></section>
+      {!wikiView && (systemView ? <SystemStatus gate={gate} gateError={gateError} loading={gateLoading} models={models} modelsUnavailable={modelsUnavailable} onRefresh={() => { void showSystem(); }} onSwitchSucceeded={refreshModels} />
       : active ? <><header className="chat-header"><div><h2>{active.title}</h2><p className="muted">{MODE_META[active.mode].label} · {active.mode === 'image_prompt' ? '영어 JSON 설정 · 매 요청 독립 작성' : `${LENGTH_LABEL[active.response_length]} · ${active.context_policy === 'none' ? '이전 대화 미포함' : '최근 대화 포함'}`}</p></div><a className="permalink" href={'#/chat/' + encodeURIComponent(active.id)}><Link2 size={16} aria-hidden="true" /> 대화 링크</a><button className="header-action" onClick={() => setSettingsDialog(true)} disabled={busy}><Settings size={16} aria-hidden="true" /> 설정</button><button className="danger header-action" disabled={busy} onClick={() => void deleteConversation(active)}><Trash2 size={16} aria-hidden="true" /> 삭제</button></header>
         {active.mode !== 'image_prompt' && <div className="mode-banner" role="status">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다. <button className="plain" onClick={() => setSettingsDialog(true)} disabled={busy}>기억 확인</button></div>}
         {active.mode === 'image_prompt' && <div className="mode-banner">매 요청은 독립적으로 작성됩니다. 결과 카드에서 모델·프리셋·프롬프트·세부 옵션을 확인·수정한 뒤, 원할 때만 이미지 생성 요청을 누르세요.</div>}
@@ -635,7 +642,7 @@ export function App() {
     {wikiDraft && <WikiDraftDialog source={wikiDraft} onClose={() => setWikiDraft(undefined)} onSaved={() => dismissWikiProposal(wikiDraft.conversationId, wikiDraft.messageId)} />}
     {newDialog && <NewConversationDialog onClose={() => setNewDialog(false)} onCreate={createConversation} />}
     {settingsDialog && active && <ConversationSettings conversation={active} onClose={() => setSettingsDialog(false)} onSave={saveConversation} />}
-  </main>;
+  </main></ThemeProvider>;
 }
 
 const root = document.getElementById('root');

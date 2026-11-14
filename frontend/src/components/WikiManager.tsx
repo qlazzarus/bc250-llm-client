@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, request } from '../api';
+import Button from '@mui/material/Button';
+import { MarkdownContent } from './MarkdownContent';
 import './wiki-manager.css';
 
 type WikiSummary = { id: number; title: string; category: string; revision: number };
@@ -27,6 +29,10 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
   const [doc, setDoc] = useState<WikiDocument>();
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [query, setQuery] = useState('');
+  const [preview, setPreview] = useState(true);
+  const [listOpen, setListOpen] = useState(true);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLElement>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -73,7 +79,8 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
     if (!allowDiscard()) return;
     void exclusive(async () => {
       const selected = await request<WikiDocument>(docPath(id));
-      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); resetHistory(); onNavigate?.(selected.id);
+      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); resetHistory(); setListOpen(false); onNavigate?.(selected.id);
+      if (window.matchMedia?.('(max-width: 700px)').matches) editorRef.current?.focus();
     });
   };
   useEffect(() => {
@@ -82,7 +89,7 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
     if (documentId === undefined) { setDoc(undefined); setDraft(emptyDraft()); resetHistory(); return; }
     void exclusive(async () => {
       const selected = await request<WikiDocument>(docPath(documentId));
-      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); resetHistory();
+      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); resetHistory(); setListOpen(false);
     });
   }, [documentId, mode]);
   const save = (event: FormEvent) => {
@@ -159,17 +166,17 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
     {mode === 'legacy_external' && <p role="status">통합 Wiki가 아직 활성화되지 않았습니다. 기존 <a href="/wiki/">가족 Wiki</a>를 이용하세요.</p>}
     {error && <p className="error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {mode === 'integrated' && <div className="wiki-manager-layout">
-      <aside aria-label="Wiki 문서 목록"><form onSubmit={search}><label>문서 검색<input value={query} onChange={event => setQuery(event.target.value)} maxLength={4000} /></label><button disabled={busy}>검색</button></form>
-        <button type="button" disabled={busy} onClick={() => { if (allowDiscard()) { setDoc(undefined); setDraft(emptyDraft()); resetHistory(); onNavigate?.(); setError(''); setNotice(''); } }}>새 문서</button>
-        <ul>{docs.map(item => <li key={item.id}><a role="button" href={'#/wiki/' + item.id} onClick={event => { event.preventDefault(); if (!busy) open(item.id); }}>{item.title}</a></li>)}</ul>
+      <aside ref={listRef} aria-label="Wiki 문서 목록" className={listOpen ? "wiki-list" : "wiki-list wiki-list-collapsed"}><div className="wiki-list-heading"><h3>문서 <span>{docs.length}개</span></h3><button type="button" className="plain wiki-list-toggle" aria-controls="wiki-list-content" aria-expanded={listOpen} onClick={() => setListOpen(value => !value)}>{listOpen ? '목록 접기' : '목록 열기'}</button></div><div id="wiki-list-content" className="wiki-list-content"><form onSubmit={search}><label>문서 검색<input placeholder="제목 또는 내용 검색" value={query} onChange={event => setQuery(event.target.value)} maxLength={4000} /></label><Button type="submit" variant="outlined" disabled={busy}>검색</Button></form>
+        <Button type="button" variant="contained" disabled={busy} onClick={() => { if (allowDiscard()) { setDoc(undefined); setDraft(emptyDraft()); resetHistory(); onNavigate?.(); setError(''); setNotice(''); setListOpen(false); } }}>＋ 새 문서</Button>
+        <ul>{docs.map(item => <li key={item.id}><a className={doc?.id === item.id ? "wiki-selected" : undefined} aria-current={doc?.id === item.id ? "page" : undefined} role="button" aria-label={item.title} href={'#/wiki/' + item.id} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); if (!busy) open(item.id); } }}>{item.title}<small>{item.category} · revision {item.revision}</small></a></li>)}</ul>{docs.length === 0 && <p className="wiki-empty-list">표시할 문서가 없습니다.</p>}</div>
       </aside>
-      <div className="wiki-manager-editor"><form onSubmit={save}>
-        <h3>{doc ? `문서 편집 · revision ${doc.revision}` : '새 문서'}</h3>{doc && <a className="permalink" href={'#/wiki/' + doc.id}>문서 링크</a>}
+      <div className="wiki-manager-editor" ref={editorRef} tabIndex={-1}><Button className="wiki-mobile-return" type="button" variant="outlined" onClick={() => { setListOpen(true); listRef.current?.scrollIntoView?.({ block: 'start' }); }}>← 문서 목록</Button><form onSubmit={save}>
+        <div className="wiki-editor-heading"><div><small>공유 Wiki</small><h3>{doc ? `문서 편집 · revision ${doc.revision}` : '새 문서'}</h3></div>{doc && <a className="permalink" href={'#/wiki/' + doc.id}>문서 링크</a>}</div>
         <label>제목<input value={draft.title} maxLength={200} required onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
         {doc?.source && <p>사용자 제공 출처: {doc.source} (자동으로 검증하지 않음)</p>}
         <label>분류<input value={draft.category} maxLength={80} onChange={event => setDraft({ ...draft, category: event.target.value })} /></label>
-        <label>본문<textarea value={draft.content} maxLength={100000} required onChange={event => setDraft({ ...draft, content: event.target.value })} /></label>
-        <div className="wiki-actions"><button type="submit" disabled={busy || !!latest}>저장</button>{doc && <button type="button" className="danger" disabled={busy || !!latest} onClick={remove}>문서 삭제</button>}</div>
+        <div className="wiki-content-heading"><span>본문</span><Button size="small" type="button" aria-pressed={preview} onClick={() => setPreview(value => !value)}>{preview ? '미리보기 숨기기' : '미리보기 보기'}</Button></div><div className={preview ? "wiki-content-layout" : "wiki-content-layout no-preview"}><label><span className="wiki-field-caption">마크다운 원문</span><textarea aria-label="본문" value={draft.content} maxLength={100000} required onChange={event => setDraft({ ...draft, content: event.target.value })} /></label>{preview && <section className="wiki-preview" aria-label="마크다운 미리보기"><span className="wiki-field-caption">미리보기</span><div className="markdown-content">{draft.content ? <MarkdownContent content={draft.content} onWikiNavigate={open} /> : <p className="muted">본문을 작성하면 여기에 표시됩니다.</p>}</div></section>}</div>
+        <div className="wiki-actions"><Button type="submit" variant="contained" disabled={busy || !!latest}>저장</Button>{doc && <Button type="button" color="error" variant="outlined" disabled={busy || !!latest} onClick={remove}>문서 삭제</Button>}</div>
       </form>
       {doc && <section className="wiki-history"><h3>문서 별칭</h3><p>검색에 사용할 이름을 한 줄에 하나씩 등록합니다.</p>
         {aliases === undefined ? <button type="button" disabled={busy} onClick={loadAliases}>별칭 불러오기</button> : <><label>별칭 목록<textarea value={aliases} maxLength={4000} onChange={event => setAliases(event.target.value)} /></label><button type="button" disabled={busy || !!latest} onClick={saveAliases}>별칭 저장</button></>}

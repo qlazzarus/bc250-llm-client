@@ -91,3 +91,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .wiki-manager-layout aside form button{min-height:44px}
   .wiki-actions button,.wiki-manager li a{min-height:44px}
 }
+/* Native dialogs must be sized by their content and remain interactive. */
+dialog.modal-dialog{position:fixed;inset:0;margin:auto;width:min(580px,calc(100% - 24px));height:fit-content;max-width:calc(100% - 24px);max-height:calc(100dvh - 24px);pointer-events:auto}
+dialog.modal-dialog .modal{position:static;width:100%;height:auto;max-height:calc(100dvh - 24px);overflow:auto;pointer-events:auto}

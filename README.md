@@ -375,7 +375,7 @@ AI 최적화 요청은 먼저 같은 분석을 수행하고 원문과 분석 결
 
 ## GitHub Actions를 통한 배포
 
-`.github/workflows/deploy.yml`은 `main`에 푸시하거나 `main`에서 수동 실행할 때 GitHub 호스팅 runner에서 백엔드 테스트와 프런트엔드 lint/build를 수행한 후 SSH로 배포한다. `production` environment의 배포 브랜치를 `main`으로 제한한다. 외부 PR에서는 배포하지 않는다. 배포 스크립트가 환경 파일이나 Caddy 설정을 직접 바꾸지는 않지만 서비스 재시작 시 SQLite schema migration이 실행될 수 있다. Wiki 저장소가 `legacy_external`이어도 migration은 실행된다. [Wiki 전환 작업](docs/plans/wiki-memory-execution-plan.md)의 백업·writer 차단 조건을 확인하기 전에는 이 변경을 운영 배포하지 않는다.
+`.github/workflows/deploy.yml`은 `main`에 푸시하면 서버의 마지막 성공 배포 상태와 비교해 변경된 구성요소만 검증하고 배포한다. 백엔드는 pytest 후 교체·재시작하고, 프런트엔드는 lint/test/build 후 정적 파일만 교체한다. 양쪽이 바뀌었거나 배포 이력이 없으면 둘 다 처리한다. 테스트·스크립트 변경은 백엔드를, 배포 스크립트·워크플로 변경은 양쪽을 다시 검증한다. `main`에서 수동 실행하면 항상 전체 검증과 배포를 수행한다. 서버의 `.deployed-components`는 성공한 구성요소의 Git 식별자를 기록하며 배포 도중 실패하거나 삭제되면 다음 실행은 전체 배포로 돌아간다. 별도 경로로 서버 파일을 변경했다면 이 파일을 삭제하거나 수동 전체 배포를 실행해야 한다. `production` environment의 배포 브랜치를 `main`으로 제한한다. 외부 PR에서는 배포하지 않는다. 배포 스크립트가 환경 파일이나 Caddy 설정을 직접 바꾸지는 않지만 서비스 재시작 시 SQLite schema migration이 실행될 수 있다. Wiki 저장소가 `legacy_external`이어도 migration은 실행된다. [Wiki 전환 작업](docs/plans/wiki-memory-execution-plan.md)의 백업·writer 차단 조건을 확인하기 전에는 이 변경을 운영 배포하지 않는다.
 
 최초 배포 전에 서버에서 환경 파일에 `APP_AUTH_MODE=local`, `APP_ALLOWED_HOSTS=localhost,127.0.0.1,192.168.0.57`, 빈 `CORS_ORIGINS`를 설정한다. 공유기와 방화벽이 외부 웹 접근을 차단하는지 확인한다. 서버 주소가 바뀌면 허용 Host도 수정해야 한다. 기존 환경 파일과 Caddyfile을 백업하고 기존 설정을 보존한다.
 

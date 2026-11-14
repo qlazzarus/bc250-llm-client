@@ -8,8 +8,11 @@ import tarfile
 import pytest
 
 
-@pytest.mark.parametrize('failure', ['restart', 'health', None])
-def test_deployment_never_restarts_old_writer_on_failure(tmp_path, failure):
+@pytest.mark.parametrize(('backend', 'frontend', 'failure'), [
+    (True, True, 'restart'), (True, True, 'health'), (True, True, None),
+    (True, False, None), (False, True, None), (True, False, 'health'),
+])
+def test_deployment_never_restarts_old_writer_on_failure(tmp_path, backend, frontend, failure):
     root = Path(__file__).resolve().parents[1]
     app = tmp_path / 'app'
     (app / 'backend').mkdir(parents=True)
@@ -18,7 +21,7 @@ def test_deployment_never_restarts_old_writer_on_failure(tmp_path, failure):
     (app / 'frontend' / 'dist' / 'index.html').write_text('old-ui')
     (app / '.venv' / 'bin').mkdir(parents=True)
     python = app / '.venv' / 'bin' / 'python'
-    python.write_text('#!/bin/sh\nexit 0\n')
+    python.write_text('#!/bin/sh\nprintf "pip\\n" >> "$DEPLOY_TEST_LOG"\nexit 0\n')
     python.chmod(0o755)
     candidate = tmp_path / 'candidate'
     (candidate / 'backend').mkdir(parents=True)
@@ -27,8 +30,8 @@ def test_deployment_never_restarts_old_writer_on_failure(tmp_path, failure):
     (candidate / 'frontend' / 'dist').mkdir(parents=True)
     (candidate / 'frontend' / 'dist' / 'index.html').write_text('new-ui')
     with tarfile.open(app / '.deploy-release.tar.gz', 'w:gz') as archive:
-        archive.add(candidate / 'backend', arcname='backend')
-        archive.add(candidate / 'frontend', arcname='frontend')
+        if backend: archive.add(candidate / 'backend', arcname='backend')
+        if frontend: archive.add(candidate / 'frontend', arcname='frontend')
     bins = tmp_path / 'bin'
     bins.mkdir()
     log = tmp_path / 'sudo.log'
@@ -47,21 +50,26 @@ def test_deployment_never_restarts_old_writer_on_failure(tmp_path, failure):
     assert 'app=/opt/bc250-llm-client' in original
     script = tmp_path / 'deploy.sh'
     script.write_text(original.replace('app=/opt/bc250-llm-client', 'app=' + shlex.quote(str(app)), 1))
-    result = subprocess.run(['bash', str(script)], env={**os.environ, 'PATH': str(bins) + ':' + os.environ['PATH'],
+    (app / '.deployed-components').write_text('old-state')
+    backend_hash, frontend_hash = 'a' * 40, 'b' * 40
+    result = subprocess.run(['bash', str(script), str(backend).lower(), str(frontend).lower(), backend_hash, frontend_hash], env={**os.environ, 'PATH': str(bins) + ':' + os.environ['PATH'],
                             'DEPLOY_TEST_LOG': str(log)}, capture_output=True, text=True, timeout=20)
-    assert (app / 'backend' / 'version').read_text() == 'new'
-    assert (app / 'frontend' / 'dist' / 'index.html').read_text() == 'new-ui'
-    calls = log.read_text().splitlines()
-    assert sum('restart bc250-llm-client.service' in line and '-l ' not in line for line in calls) == 1
+    assert (app / 'backend' / 'version').read_text() == ('new' if backend else 'old')
+    assert (app / 'frontend' / 'dist' / 'index.html').read_text() == ('new-ui' if frontend else 'old-ui')
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert sum('restart bc250-llm-client.service' in line and '-l ' not in line for line in calls) == int(backend)
+    assert ('pip' in calls) == backend
     stages = list(app.glob('.deploy.????????'))
     if failure:
         assert result.returncode != 0
         assert 'automatic rollback is disabled' in result.stderr
         assert len(stages) == 1
-        assert (stages[0] / 'old-backend' / 'version').read_text() == 'old'
-        assert (stages[0] / 'old-dist' / 'index.html').read_text() == 'old-ui'
+        assert not (app / '.deployed-components').exists()
+        if backend: assert (stages[0] / 'old-backend' / 'version').read_text() == 'old'
+        if frontend: assert (stages[0] / 'old-dist' / 'index.html').read_text() == 'old-ui'
         assert (app / '.deploy-release.tar.gz').exists()
     else:
         assert result.returncode == 0
+        assert (app / '.deployed-components').read_text() == backend_hash + '\n' + frontend_hash + '\n'
         assert not stages
         assert not (app / '.deploy-release.tar.gz').exists()

@@ -19,19 +19,63 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.BC250_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.BC250_SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.BC250_SSH_HOST }}
+          SSH_USER: ${{ secrets.BC250_SSH_USER }}
+          SSH_PORT: ${{ secrets.BC250_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?}" "${SSH_USER:?}" "${SSH_PORT:?}" "${SSH_PRIVATE_KEY:?}" "${SSH_KNOWN_HOSTS:?}"
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$SSH_USER" =~ ^[a-zA-Z0-9_-]+$ && "$SSH_PORT" =~ ^[0-9]+$ ]]
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/bc250_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Compare with deployed state
+        id: changes
+        env:
+          SSH_HOST: ${{ secrets.BC250_SSH_HOST }}
+          SSH_USER: ${{ secrets.BC250_SSH_USER }}
+          SSH_PORT: ${{ secrets.BC250_SSH_PORT }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # Test and deployment machinery changes invalidate the appropriate side.
+          backend=$(git rev-parse HEAD:backend HEAD:tests HEAD:scripts HEAD:gate_candidate HEAD:pytest.ini HEAD:deploy HEAD:.github/workflows/deploy.yml | git hash-object --stdin)
+          frontend=$(git rev-parse HEAD:frontend HEAD:deploy HEAD:.github/workflows/deploy.yml | git hash-object --stdin)
+          state=$(ssh -i ~/.ssh/bc250_deploy -o StrictHostKeyChecking=yes -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'if [ -f /opt/bc250-llm-client/.deployed-components ]; then cat /opt/bc250-llm-client/.deployed-components; fi')
+          expected=$(printf '%s\n%s' "$backend" "$frontend")
+          deploy_backend=true
+          deploy_frontend=true
+          if [[ "$EVENT_NAME" != workflow_dispatch && "$state" =~ ^[0-9a-f]{40}$'\n'[0-9a-f]{40}$ ]]; then
+            [[ "${state%%$'\n'*}" == "$backend" ]] && deploy_backend=false
+            [[ "${state##*$'\n'}" == "$frontend" ]] && deploy_frontend=false
+          fi
+          echo "backend=$deploy_backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=$deploy_frontend" >> "$GITHUB_OUTPUT"
+          echo "backend_hash=$backend" >> "$GITHUB_OUTPUT"
+          echo "frontend_hash=$frontend" >> "$GITHUB_OUTPUT"
+          if [[ "$state" == "$expected" && "$EVENT_NAME" != workflow_dispatch ]]; then echo 'No component changes since the last successful deployment.'; fi
       - uses: actions/setup-python@v5
+        if: steps.changes.outputs.backend == 'true'
         with:
           python-version: '3.12'
+      - name: Test backend
+        if: steps.changes.outputs.backend == 'true'
+        run: |
+          python -m pip install -r backend/requirements.txt
+          PYTHONPATH=. python -m pytest -q
       - uses: actions/setup-node@v4
+        if: steps.changes.outputs.frontend == 'true'
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Test backend
-        run: |
-          python -m pip install -r backend/requirements.txt
-          PYTHONPATH=. python -m pytest -q
       - name: Check and build frontend
+        if: steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: |
           npm ci
@@ -39,24 +83,27 @@ jobs:
           npm test
           npm run build
       - name: Package release
-        run: tar --exclude='__pycache__' -czf /tmp/bc250-release.tar.gz backend frontend/dist
-      - name: Configure SSH
+        if: steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true'
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.BC250_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.BC250_SSH_KNOWN_HOSTS }}
+          BACKEND: ${{ steps.changes.outputs.backend }}
+          FRONTEND: ${{ steps.changes.outputs.frontend }}
         run: |
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/bc250_deploy
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          set -euo pipefail
+          paths=()
+          [[ "$BACKEND" == true ]] && paths+=(backend)
+          [[ "$FRONTEND" == true ]] && paths+=(frontend/dist)
+          tar --exclude='__pycache__' -czf /tmp/bc250-release.tar.gz "${paths[@]}"
       - name: Deploy and check service
+        if: steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true'
         env:
           SSH_HOST: ${{ secrets.BC250_SSH_HOST }}
           SSH_USER: ${{ secrets.BC250_SSH_USER }}
           SSH_PORT: ${{ secrets.BC250_SSH_PORT }}
+          BACKEND: ${{ steps.changes.outputs.backend }}
+          FRONTEND: ${{ steps.changes.outputs.frontend }}
+          BACKEND_HASH: ${{ steps.changes.outputs.backend_hash }}
+          FRONTEND_HASH: ${{ steps.changes.outputs.frontend_hash }}
         run: |
           set -euo pipefail
-          : "${SSH_HOST:?}" "${SSH_USER:?}" "${SSH_PORT:?}"
-          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$SSH_USER" =~ ^[a-zA-Z0-9_-]+$ && "$SSH_PORT" =~ ^[0-9]+$ ]]
           scp -i ~/.ssh/bc250_deploy -o StrictHostKeyChecking=yes -P "$SSH_PORT" /tmp/bc250-release.tar.gz "$SSH_USER@$SSH_HOST:/opt/bc250-llm-client/.deploy-release.tar.gz"
-          ssh -i ~/.ssh/bc250_deploy -o StrictHostKeyChecking=yes -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' < deploy/deploy-release.sh
+          ssh -i ~/.ssh/bc250_deploy -o StrictHostKeyChecking=yes -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "bash -s -- $BACKEND $FRONTEND $BACKEND_HASH $FRONTEND_HASH" < deploy/deploy-release.sh
