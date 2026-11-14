@@ -276,3 +276,15 @@ def search_documents(db: sqlite3.Connection, *, store_id: str, query: str, limit
                 item = dict(row)
                 ranked[item['id']] = (100 + max(0, -item['rank']), item)
     return [item for _, item in sorted(ranked.values(), key=lambda entry: (-entry[0], entry[1]['id']))[:limit]]
+
+
+def title_candidates(db, *, store_id, title):
+    _store(store_id)
+    key = normalize_key(title)
+    if not key:
+        raise ValueError('invalid title')
+    rows = db.execute("""SELECT d.id,d.title,d.category,d.revision FROM wiki_documents d
+        WHERE NOT EXISTS (SELECT 1 FROM memory_document_quarantine q
+        WHERE q.store_id='integrated' AND q.wiki_document_id=d.id) ORDER BY d.id""")
+    matches = [dict(row) for row in rows if normalize_key(row['title']) == key]
+    return sorted(matches, key=lambda row: (row['title'] != title, row['id']))

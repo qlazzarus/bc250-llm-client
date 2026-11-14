@@ -65,3 +65,5 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .layout aside nav{grid-row:2}
   .mode-banner{font-size:12px}
 }
+.wiki-message-actions{display:grid;gap:8px;margin-top:12px;font-size:13px}.wiki-message-actions button{font-size:12px;padding:5px 8px}.wiki-message-actions>button{justify-self:start}.wiki-draft textarea{min-height:220px}.wiki-draft p{margin:0;line-height:1.5}
+.wiki-draft section{display:grid;gap:10px;min-width:0}.wiki-draft-comparison{display:grid;gap:8px;min-width:0}.wiki-draft-comparison pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:#10151c;padding:10px}

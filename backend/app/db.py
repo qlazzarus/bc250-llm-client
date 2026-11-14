@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-LATEST_SCHEMA_VERSION = 21
+LATEST_SCHEMA_VERSION = 22
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -100,6 +100,7 @@ def initialize(path: str) -> None:
         _apply_wiki_revision_migration(connection)
         _apply_wiki_alias_migration(connection)
         _apply_wiki_evidence_migration(connection)
+        _apply_wiki_message_save_migration(connection)
 
 
 def _apply_conversation_mode_migration(connection: sqlite3.Connection) -> None:
@@ -515,4 +516,27 @@ def _apply_wiki_evidence_migration(connection: sqlite3.Connection) -> None:
     except Exception:
         connection.execute('ROLLBACK TO SAVEPOINT wiki_evidence_migration')
         connection.execute('RELEASE SAVEPOINT wiki_evidence_migration')
+        raise
+
+
+def _apply_wiki_message_save_migration(connection: sqlite3.Connection) -> None:
+    if connection.execute('SELECT 1 FROM schema_migrations WHERE version=22').fetchone():
+        return
+    connection.execute('SAVEPOINT wiki_message_save_migration')
+    try:
+        connection.execute("""CREATE TABLE wiki_message_save_receipts (
+            request_id TEXT PRIMARY KEY, input_hash TEXT NOT NULL,
+            document_id INTEGER NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL,
+            source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL)""")
+        connection.execute("""CREATE TABLE wiki_document_sources (
+            document_id INTEGER NOT NULL REFERENCES wiki_documents(id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL, source_text TEXT NOT NULL,
+            source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+            PRIMARY KEY(document_id, revision))""")
+        connection.execute('INSERT INTO schema_migrations(version) VALUES (22)')
+        connection.execute('RELEASE SAVEPOINT wiki_message_save_migration')
+    except Exception:
+        connection.execute('ROLLBACK TO SAVEPOINT wiki_message_save_migration')
+        connection.execute('RELEASE SAVEPOINT wiki_message_save_migration')
         raise

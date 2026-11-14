@@ -99,7 +99,7 @@ def test_previous_v16_initializer_does_not_fence_a_v21_database(tmp_path):
     assert module.LATEST_SCHEMA_VERSION == 16
     module.initialize(path)
     with connect(path) as db:
-        assert db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0] == 21
+        assert db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0] == 22
         # Legacy INSERT omits store_id, demonstrating its interpretation remains
         # implicit even after the new namespace migration.
         db.execute("INSERT INTO conversations(id,title,created_at,updated_at) VALUES ('c','t','t','t')")

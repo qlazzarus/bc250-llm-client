@@ -83,17 +83,37 @@ async def wiki_request(method: str, path: str, **kwargs):
 
 
 def excerpts(documents, query):
-    """Bound the prompt and prefer passages containing terms from the question."""
-    import re
-    terms = [w.casefold() for w in re.findall(r"[^\W_]+", query) if len(w) >= 2]
+    """Choose one bounded passage, favoring less frequent question terms.
+
+    The search remains lexical: missing terms and paraphrases can still miss the
+    relevant passage. Repeated matches are capped to keep the work bounded.
+    """
+    terms = list(dict.fromkeys(w.casefold() for w in re.findall(r"[^\W_]+", query) if len(w) >= 2))[:12]
     result = []
     for doc in documents[:3]:
-        if not isinstance(doc, dict) or not isinstance(doc.get("content"), str) or not isinstance(doc.get("id"), int):
+        if not isinstance(doc, dict) or not isinstance(doc.get("content"), str) or type(doc.get("id")) is not int:
             continue
         content = doc["content"]
+        # Preserve original character offsets even when Unicode case folding expands a character.
         lowered = content.casefold()
-        positions = [lowered.find(term) for term in terms]
-        positions = [p for p in positions if p >= 0]
-        start = max(0, min(positions) - 300) if positions else 0
+        offsets = None
+        if len(lowered) != len(content):
+            offsets = [index for index, character in enumerate(content) for _ in character.casefold()]
+        title = str(doc.get("title", "")).casefold()
+        hits = []
+        for order, term in enumerate(terms):
+            positions = []
+            at = lowered.find(term)
+            while at >= 0 and len(positions) < 32:
+                positions.append(offsets[at] if offsets is not None else at)
+                at = lowered.find(term, at + len(term))
+            if positions:
+                hits.append((term, positions, order))
+        start = 0
+        if hits:
+            # Prefer a non-title term that occurs less often; use later query terms
+            # only as a deterministic tie breaker. Keep 300 characters of context.
+            _, positions, _ = min(hits, key=lambda hit: (len(hit[1]), hit[0] in title, -hit[2]))
+            start = max(0, positions[0] - 300)
         result.append({"id": doc["id"], "title": str(doc.get("title", ""))[:200], "updated_at": str(doc.get("updated_at", ""))[:80], "excerpt": content[start:start + 1000]})
     return result

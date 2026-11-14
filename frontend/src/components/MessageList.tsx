@@ -16,7 +16,7 @@ type ImageCardProps = {
   jobs: ImageJob[]; onCancelImageJob: (job: ImageJob) => Promise<void>;
 };
 
-const ChatMessage = memo(function ChatMessage({ message, mode, conversationId, imageCards }: { message: Message; mode: Mode; conversationId: string; imageCards: ImageCardProps }) {
+const ChatMessage = memo(function ChatMessage({ message, mode, conversationId, imageCards, onWikiDraft, candidateDismissed, onDismissCandidate }: { message: Message; mode: Mode; conversationId: string; imageCards: ImageCardProps; onWikiDraft: (message: Message) => void; candidateDismissed: boolean; onDismissCandidate: (id: string) => void }) {
   const imagePrompt = mode === 'image_prompt' && message.role === 'assistant' ? parseImagePromptConfig(message.content) : undefined;
   return <article className={message.role}><b>{message.role === 'user' ? '나' : 'BC-250'}</b>
     {message.role === 'assistant'
@@ -27,6 +27,10 @@ const ChatMessage = memo(function ChatMessage({ message, mode, conversationId, i
             jobs={imageCards.jobs.filter(job => job.source_message_id === message.id)} onCancelImageJob={imageCards.onCancelImageJob} />
         : <div className="markdown-content">{message.content ? <MarkdownContent content={message.content} /> : (message.id.startsWith('stream-') ? '응답 생성 또는 대기열 처리 중…' : '')}</div>
       : <p>{message.content}</p>}
+    {message.role === 'user' && !message.id.startsWith('local-') && <div className="wiki-message-actions">
+      {Array.from(message.content.trim()).length >= 1000 && !candidateDismissed && <div>긴 자료를 공유 Wiki 문서로 검토할 수 있습니다. <button type="button" className="plain" onClick={() => onWikiDraft(message)}>초안 검토</button> <button type="button" className="plain" aria-label="문서 후보 닫기" onClick={() => onDismissCandidate(message.id)}>닫기</button></div>}
+      <button type="button" className="plain" onClick={() => onWikiDraft(message)}>공유 Wiki에 저장</button>
+    </div>}
     {message.role === 'assistant' && message.wiki_evidence && <details className="wiki-evidence"><summary>Wiki 참고 정보</summary>
       <p>검색 {message.wiki_evidence.retrieved.length}건 · 모델에 전달 {message.wiki_evidence.provided.length}건 · 공유 기억 {message.wiki_evidence.memory_provided.length}건</p>
       <p>전달된 문서 ID 인용: {message.wiki_evidence.cited.length ? message.wiki_evidence.cited.join(', ') : '없음'}</p>
@@ -38,13 +42,14 @@ const ChatMessage = memo(function ChatMessage({ message, mode, conversationId, i
   </article>;
 });
 
-export function MessageList({ mode, messages, hasMore, onLoadOlder, scrollSignal, conversationId, imageCapabilities, imageDrafts, onEnsureImageDraft, onUpdateImageDraft, onPersistImageDraft, onSubmitImageJob, imageJobs, onCancelImageJob }: {
+export function MessageList({ mode, messages, hasMore, onLoadOlder, scrollSignal, conversationId, imageCapabilities, imageDrafts, onEnsureImageDraft, onUpdateImageDraft, onPersistImageDraft, onSubmitImageJob, imageJobs, onCancelImageJob, onWikiDraft }: {
   mode: Mode; messages: Message[]; hasMore: boolean; onLoadOlder: () => Promise<void>; scrollSignal: number;
   conversationId: string; imageCapabilities: ImageCapabilities | undefined; imageDrafts: Record<string, ImageDraftEditor>;
   onEnsureImageDraft: ImageCardProps['onEnsureDraft']; onUpdateImageDraft: ImageCardProps['onUpdateDraft'];
   onPersistImageDraft: ImageCardProps['onPersistDraft']; onSubmitImageJob: ImageCardProps['onSubmitImageJob'];
-  imageJobs: ImageJob[]; onCancelImageJob: ImageCardProps['onCancelImageJob'];
+  imageJobs: ImageJob[]; onCancelImageJob: ImageCardProps['onCancelImageJob']; onWikiDraft: (message: Message) => void;
 }) {
+  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const parentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(true);
   const loadingOlderRef = useRef(false);
@@ -99,6 +104,7 @@ export function MessageList({ mode, messages, hasMore, onLoadOlder, scrollSignal
           const message = messages[item.index];
           return <div key={message.id} ref={virtualizer.measureElement} data-index={item.index} className="virtual-message" style={{ transform: 'translateY(' + item.start + 'px)' }}>
             <ChatMessage message={message} mode={mode} conversationId={conversationId}
+              onWikiDraft={onWikiDraft} candidateDismissed={dismissed.has(message.id)} onDismissCandidate={id => setDismissed(current => new Set(current).add(id))}
               imageCards={{ capabilities: imageCapabilities, drafts: imageDrafts, onEnsureDraft: onEnsureImageDraft, onUpdateDraft: onUpdateImageDraft, onPersistDraft: onPersistImageDraft, onSubmitImageJob, jobs: imageJobs, onCancelImageJob }} />
           </div>;
         })}

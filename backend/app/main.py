@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import secrets
@@ -92,6 +93,20 @@ class WikiDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     instruction: str = Field(min_length=1, max_length=4000)
     content: str = Field(default="", max_length=12000)
+
+
+class WikiMessageSave(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    conversation_id: str = Field(min_length=1, max_length=200)
+    message_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=100000)
+    source: str = Field(default='', max_length=4000)
+    action: Literal['create', 'update']
+    document_id: int | None = Field(default=None, ge=1, strict=True)
+    expected_revision: int | None = Field(default=None, ge=1, strict=True)
+    acknowledged_duplicate_ids: list[int] = Field(default_factory=list, max_length=10000)
 
 
 class WikiAliases(BaseModel):
@@ -1251,6 +1266,60 @@ async def wiki_search(q: str = Query(min_length=1, max_length=4000), limit: int 
     return await _wiki_search(settings, q, limit)
 
 
+
+def _message_save_candidates(db, *, store_id, title):
+    matches = wiki_repository.title_candidates(db, store_id=store_id, title=title)
+    similar = wiki_repository.search_documents(db, store_id=store_id, query=title, limit=5)
+    matched_ids = {item['id'] for item in matches}
+    return {'matches': matches, 'similar': [item for item in similar if item['id'] not in matched_ids]}
+
+
+@app.get('/api/v1/wiki/message-drafts/candidates', dependencies=[Depends(require_key)])
+async def wiki_message_candidates(title: str = Query(min_length=1, max_length=200), settings: Settings = Depends(get_settings)):
+    if settings.wiki_store != 'integrated':
+        raise fail('wiki_store_required', '통합 Wiki에서만 사용할 수 있습니다.', 422)
+    return await asyncio.to_thread(_integrated_wiki_call, settings, _message_save_candidates, snapshot=True, title=title)
+
+
+def _save_message_document(db, *, store_id, body):
+    values = body.model_dump(mode='json')
+    digest = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    request_id = str(body.request_id)
+    receipt = db.execute('SELECT * FROM wiki_message_save_receipts WHERE request_id=?', (request_id,)).fetchone()
+    if receipt:
+        if receipt['input_hash'] != digest:
+            raise fail('wiki_request_conflict', '같은 요청 ID를 다른 내용에 사용할 수 없습니다.', 409)
+        return {'id': receipt['document_id'], 'revision': receipt['revision'], 'status': receipt['action']}
+    source = db.execute("SELECT id FROM messages WHERE id=? AND conversation_id=? AND role='user'", (body.message_id, body.conversation_id)).fetchone()
+    if not source:
+        raise fail('wiki_source_not_found', '원본 사용자 메시지를 찾을 수 없습니다.', 404)
+    if body.action == 'create':
+        if body.document_id is not None or body.expected_revision is not None:
+            raise ValueError('unexpected document')
+        if any(item['id'] not in body.acknowledged_duplicate_ids for item in wiki_repository.title_candidates(db, store_id=store_id, title=body.title)):
+            raise fail('wiki_duplicate_title', '같은 제목의 문서를 확인해 주세요.', 409)
+        doc = wiki_repository.create_document(db, store_id=store_id, title=body.title, content=body.content, category='general')
+        action = 'created'
+    else:
+        if body.document_id is None or body.expected_revision is None:
+            raise ValueError('document and revision required')
+        _reject_managed_document(db, store_id, body.document_id)
+        current = wiki_repository.get_document(db, store_id=store_id, document_id=body.document_id)
+        doc = wiki_repository.update_document(db, store_id=store_id, document_id=body.document_id,
+            expected_revision=body.expected_revision, title=body.title, content=body.content, category=current['category'])
+        action = 'updated'
+    db.execute('INSERT INTO wiki_document_sources VALUES (?,?,?,?)', (doc['id'], doc['revision'], body.source, body.message_id))
+    db.execute('INSERT INTO wiki_message_save_receipts VALUES (?,?,?,?,?,?,?)',
+        (request_id, digest, doc['id'], doc['revision'], action, body.message_id, now()))
+    return {'id': doc['id'], 'revision': doc['revision'], 'status': action}
+
+
+@app.post('/api/v1/wiki/message-drafts/save', dependencies=[Depends(require_key)])
+async def wiki_message_save(body: WikiMessageSave, settings: Settings = Depends(get_settings)):
+    if settings.wiki_store != 'integrated':
+        raise fail('wiki_store_required', '통합 Wiki에서만 사용할 수 있습니다.', 422)
+    return await asyncio.to_thread(_integrated_wiki_call, settings, _save_message_document, write=True, body=body)
+
 @app.get("/api/v1/wiki/documents", dependencies=[Depends(require_key)])
 async def wiki_list(settings: Settings = Depends(get_settings)):
     if settings.wiki_store == 'integrated':
@@ -1269,7 +1338,11 @@ def _get_integrated_document(db, *, store_id, document_id):
     if db.execute('SELECT 1 FROM memory_document_quarantine WHERE store_id=? AND wiki_document_id=?',
                   (store_id, document_id)).fetchone():
         raise wiki_repository.WikiNotFound('document unavailable')
-    return wiki_repository.get_document(db, store_id=store_id, document_id=document_id)
+    doc = wiki_repository.get_document(db, store_id=store_id, document_id=document_id)
+    source = db.execute('SELECT source_text FROM wiki_document_sources WHERE document_id=? AND revision=?', (document_id, doc['revision'])).fetchone()
+    if source:
+        doc['source'] = source['source_text']
+    return doc
 
 
 @app.get('/api/v1/wiki/documents/{doc_id}/revisions', dependencies=[Depends(require_key)])

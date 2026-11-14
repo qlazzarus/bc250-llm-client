@@ -98,6 +98,96 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
   </form></Modal>;
 }
 
+type WikiMessageDraft = { conversationId: string; messageId: string; original: string };
+
+type WikiCandidate = { id: number; title: string; revision: number; category: string };
+type WikiCandidateDocument = WikiCandidate & { content: string; source?: string };
+type WikiSavePayload = { request_id: string; conversation_id: string; message_id: string; title: string; content: string; source: string; action: 'create' | 'update'; document_id: number | null; expected_revision: number | null; acknowledged_duplicate_ids: number[] };
+
+export function WikiDraftDialog({ source, onClose }: { source: WikiMessageDraft; onClose: () => void }) {
+  const initialTitle = Array.from(source.original.split(/\r?\n/).map(line => line.trim()).find(Boolean)?.replace(/\s+/g, ' ') || '대화 자료').slice(0, 200).join('');
+  const [title, setTitle] = useState(initialTitle);
+  const [content, setContent] = useState(source.original);
+  const [sourceText, setSourceText] = useState('');
+  const [candidates, setCandidates] = useState<{ matches: WikiCandidate[]; similar: WikiCandidate[] }>();
+  const [comparison, setComparison] = useState<WikiCandidateDocument>();
+  const [target, setTarget] = useState<WikiCandidateDocument>();
+  const [pending, setPending] = useState<WikiSavePayload>();
+  const [result, setResult] = useState<{ id: number; revision: number; status: string }>();
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const dirty = title !== initialTitle || content !== source.original || Boolean(sourceText);
+  useEffect(() => {
+    if (result) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [result]);
+  const close = () => { if (busyRef.current) return; if (pending ? window.confirm('저장 결과를 아직 확인하지 못했습니다. 닫으면 이 요청으로 재확인할 수 없습니다. 닫을까요?') : result || !dirty || window.confirm('편집한 초안을 버릴까요?')) onClose(); };
+  const review = async () => {
+    if (busyRef.current || !title.trim() || !content.trim()) { if (!title.trim() || !content.trim()) setError('제목과 본문을 입력해 주세요.'); return; }
+    busyRef.current = true; setBusy(true); setError('');
+    try { setCandidates(await request(`/wiki/message-drafts/candidates?title=${encodeURIComponent(title)}`)); setComparison(undefined); setTarget(undefined); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '중복 후보를 불러오지 못했습니다.'); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+  const compare = async (item: WikiCandidate) => {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true); setError('');
+    try { setComparison(await request<WikiCandidateDocument>(`/wiki/documents/${item.id}?store_id=integrated`)); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '문서를 불러오지 못했습니다.'); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+  const send = async (payload: WikiSavePayload) => {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true); setError(''); setPending(payload);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
+    try {
+      const saved = await request<{ id: number; revision: number; status: string }>('/wiki/message-drafts/save', { method: 'POST', body: JSON.stringify(payload), signal: controller.signal });
+      setResult(saved); setPending(undefined);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status < 500) {
+        setPending(undefined);
+        if (caught.code === 'wiki_conflict') { setTarget(undefined); setComparison(undefined); setCandidates(undefined); setError('문서가 변경되었습니다. 초안을 유지했습니다. 중복 후보와 최신 문서를 다시 확인해 주세요.'); }
+        else if (caught.code === 'wiki_duplicate_title') { setCandidates(undefined); setError('같은 제목의 문서가 생겼습니다. 중복 후보를 다시 확인해 주세요.'); }
+        else setError(caught.message);
+      } else setError('저장 결과 확인 필요: 응답을 받지 못했습니다. 같은 요청으로 결과를 확인해 주세요.');
+    } finally { window.clearTimeout(timeout); busyRef.current = false; setBusy(false); }
+  };
+  const save = () => {
+    if (!candidates || busyRef.current) return;
+    void send({ request_id: newRequestId(), conversation_id: source.conversationId, message_id: source.messageId, title, content, source: sourceText,
+      action: target ? 'update' : 'create', document_id: target?.id ?? null, expected_revision: target?.revision ?? null, acknowledged_duplicate_ids: candidates.matches.map(item => item.id) });
+  };
+  const invalidate = () => { setCandidates(undefined); setTarget(undefined); setComparison(undefined); setError(''); };
+  return <Modal titleId="wiki-draft-title" onClose={close}><div className="modal wiki-draft">
+    <header><h2 id="wiki-draft-title">공유 Wiki 문서 초안</h2><button type="button" className="plain" disabled={busy} onClick={close}>닫기</button></header>
+    <p>저장하면 이 앱에 접근할 수 있는 가족에게 공유됩니다. 개인정보와 민감한 내용을 확인해 주세요.</p>
+    <p>선택한 사용자 메시지가 원문입니다. 출처와 내용의 사실성은 자동으로 검증하지 않습니다.</p>
+    <p>초안은 이 화면의 메모리에만 유지됩니다. 새로고침하면 사라지며, 닫거나 대화를 바꾸기 전에 편집 내용 버리기를 확인합니다.</p>
+    <label>제목<input value={title} maxLength={200} disabled={busy || !!pending || !!result} onChange={event => { setTitle(event.target.value); invalidate(); }} /></label>
+    <label>본문<textarea value={content} maxLength={100000} disabled={busy || !!pending || !!result} onChange={event => { setContent(event.target.value); invalidate(); }} /></label>
+    <label>출처 (선택)<input value={sourceText} maxLength={4000} disabled={busy || !!pending || !!result} onChange={event => { setSourceText(event.target.value); invalidate(); }} /></label>
+    {error && <p className="error" role="alert">{error}</p>}
+    {result ? <p role="status">저장 완료 · 문서 {result.id} · revision {result.revision}</p> : pending ? <button type="button" disabled={busy} onClick={() => void send(pending)}>같은 요청으로 결과 확인</button> : <>
+      <button type="button" disabled={busy} onClick={() => void review()}>중복 후보 확인</button>
+      {candidates && <section aria-label="중복 후보"><h3>제목 일치 문서</h3>
+        {candidates.matches.length === 0 && <p>일치하는 제목이 없습니다.</p>}
+        {candidates.matches.map(item => <p key={item.id}>{item.title} · revision {item.revision} <button type="button" disabled={busy} onClick={() => void compare(item)}>비교</button></p>)}
+        <h3>유사 검색 참고</h3><p>검색 결과가 없어도 중복이 없다는 뜻은 아닙니다.</p>
+        {candidates.similar.map(item => <p key={item.id}>{item.title} <button type="button" disabled={busy} onClick={() => void compare(item)}>비교</button></p>)}
+        {comparison && <div className="wiki-draft-comparison"><h3>기존 문서: {comparison.title} · revision {comparison.revision}</h3><pre>{comparison.content}</pre><p>사용자 제공 출처: {comparison.source || '없음'}</p><button type="button" disabled={busy} onClick={() => setTarget(comparison)}>이 문서를 초안 내용으로 편집</button></div>}
+        <p>{target ? `기존 문서 ${target.id}의 revision ${target.revision}을 기준으로 저장합니다.` : '새 문서로 생성합니다. 기존 문서는 변경하지 않습니다.'}</p>
+        {target && <button type="button" disabled={busy} onClick={() => setTarget(undefined)}>새 문서 생성 선택</button>}
+        <button type="button" disabled={busy} onClick={save}>{target ? '기존 문서 변경 확인 및 저장' : '새 문서 생성 확인 및 저장'}</button>
+      </section>}
+    </>}
+    <button type="button" className="plain" disabled={busy} onClick={close}>{result ? '닫기' : '취소'}</button>
+  </div></Modal>;
+}
+
 export function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [active, setActive] = useState<Detail>();
@@ -119,6 +209,7 @@ export function App() {
   const [newDialog, setNewDialog] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
+  const [wikiDraft, setWikiDraft] = useState<WikiMessageDraft>();
   const [imageCapabilities, setImageCapabilities] = useState<ImageCapabilities>();
   const [imageDrafts, setImageDrafts] = useState<Record<string, ImageDraftEditor>>({});
   const [imageJobs, setImageJobs] = useState<Record<string, ImageJob[]>>({});
@@ -487,7 +578,10 @@ export function App() {
         <MessageList mode={active.mode} messages={active.messages} hasMore={active.hasMore} onLoadOlder={loadOlderMessages} scrollSignal={scrollSignal} conversationId={active.id}
           imageCapabilities={imageCapabilities} imageDrafts={imageDrafts} onEnsureImageDraft={ensureImageDraft}
           onUpdateImageDraft={updateImageDraft} onPersistImageDraft={persistImageDraft} onSubmitImageJob={submitImageJob}
-          imageJobs={imageJobs[active.id] || []} onCancelImageJob={cancelImageJob} />
+          imageJobs={imageJobs[active.id] || []} onCancelImageJob={cancelImageJob} onWikiDraft={message => {
+            if (message.role === 'user' && !message.id.startsWith('local-') && active.messages.some(item => item.id === message.id && item.role === 'user' && item.content === message.content))
+              setWikiDraft({ conversationId: active.id, messageId: message.id, original: message.content });
+          }} />
         <div className="composer-panel">
           {active.mode === 'quick' && <div><label><input type="checkbox" checked={wikiEnabled} disabled={busy} onChange={event => { const value = event.target.checked; setWikiEnabled(value); try { localStorage.setItem('bc250-wiki-search', String(value)); } catch { /* Storage may be disabled. */ } }} /> Wiki 검색 참고</label>{' '}
             <label><input type="checkbox" checked={wikiAutoUpdate} disabled={busy} onChange={event => { const value = event.target.checked; setWikiAutoUpdate(value); try { localStorage.setItem('bc250-wiki-auto', String(value)); } catch { /* Storage may be disabled. */ } }} /> Wiki 자동 기억</label>
@@ -507,6 +601,7 @@ export function App() {
         {(notice || modelsUnavailable) && <div className="notice">{notice}{modelsUnavailable && <> 모델 목록을 확인하지 못했습니다. 자동으로 다시 확인합니다. <button className="plain" onClick={() => void refreshModels()}>모델 다시 조회</button></>}{retryInfo && <button className="plain" disabled={busy || modelsUnavailable} onClick={() => void retry()}>재시도</button>}</div>}
       </> : <div className="empty"><h2>새 대화를 시작하세요</h2><button onClick={() => setNewDialog(true)}>대화 만들기</button></div>)}
     </section>
+    {wikiDraft && <WikiDraftDialog source={wikiDraft} onClose={() => setWikiDraft(undefined)} />}
     {newDialog && <NewConversationDialog onClose={() => setNewDialog(false)} onCreate={createConversation} />}
     {settingsDialog && active && <ConversationSettings conversation={active} onClose={() => setSettingsDialog(false)} onSave={saveConversation} />}
   </main>;

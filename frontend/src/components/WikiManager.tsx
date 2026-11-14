@@ -3,7 +3,7 @@ import { ApiError, request } from '../api';
 import './wiki-manager.css';
 
 type WikiSummary = { id: number; title: string; category: string; revision: number };
-type WikiDocument = WikiSummary & { content: string; updated_at: string };
+type WikiDocument = WikiSummary & { content: string; updated_at: string; source?: string };
 type Draft = Pick<WikiDocument, 'title' | 'content' | 'category'>;
 type Revision = { revision: number; created_at: string };
 type Diff = { diff: Record<'title' | 'content' | 'category', string> };
@@ -157,6 +157,7 @@ export function WikiManager({ onClose }: { onClose: () => void }) {
       <div className="wiki-manager-editor"><form onSubmit={save}>
         <h3>{doc ? `문서 편집 · revision ${doc.revision}` : '새 문서'}</h3>
         <label>제목<input value={draft.title} maxLength={200} required onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
+        {doc?.source && <p>사용자 제공 출처: {doc.source} (자동으로 검증하지 않음)</p>}
         <label>분류<input value={draft.category} maxLength={80} onChange={event => setDraft({ ...draft, category: event.target.value })} /></label>
         <label>본문<textarea value={draft.content} maxLength={100000} required onChange={event => setDraft({ ...draft, content: event.target.value })} /></label>
         <div className="wiki-actions"><button type="submit" disabled={busy || !!latest}>저장</button>{doc && <button type="button" className="danger" disabled={busy || !!latest} onClick={remove}>문서 삭제</button>}</div>

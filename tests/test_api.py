@@ -9,7 +9,7 @@ os.environ.update({"APP_API_KEY": "client-key", "LLM_GATE_API_KEY": "gate-key"})
 
 from fastapi.testclient import TestClient
 from backend.app import main
-from backend.app.db import connect, initialize
+from backend.app.db import LATEST_SCHEMA_VERSION, connect, initialize
 
 
 class FakeModelsResponse:
@@ -371,7 +371,7 @@ def test_legacy_database_migrates_without_losing_conversation_data(tmp_path):
     assert old_image["mode_settings"] == '{"style": "legacy"}'
     assert old_image["summary"] == "old summary"
     assert old_roleplay["context_policy"] == "recent"
-    assert [row["version"] for row in versions] == list(range(1, 22))
+    assert [row["version"] for row in versions] == list(range(1, LATEST_SCHEMA_VERSION + 1))
 
 
 def test_image_draft_revision_validation_and_image_job_deletion_guard(monkeypatch):
@@ -2394,5 +2394,61 @@ def test_wiki_evidence_reports_only_references_fitting_context(monkeypatch, cont
                     assert 3 in evidence['invalid_citations']
             else:
                 assert len(evidence['provided']) == 3
+    finally:
+        directory.cleanup()
+
+
+def test_conversation_wiki_document_review_save_search_and_evidence(monkeypatch):
+    import uuid
+    async def model(_settings): return 'mock-model'
+    async def fit(*args, **kwargs): return None
+    captured = []
+    class Gate:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, **kwargs):
+            captured.append(kwargs['json'])
+            return main.httpx.Response(200, request=main.httpx.Request('POST', url), json={
+                'choices': [{'message': {'content': '냉각 설정은 liquid42입니다. [wiki:2]'}, 'finish_reason': 'stop'}]})
+    monkeypatch.setattr(main, 'resolve_gate_model', model)
+    monkeypatch.setattr(main, 'fit_chat_payload', fit)
+    monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
+    monkeypatch.setattr(main, 'start_wiki_memory_task', lambda *_args: None)
+    monkeypatch.setattr(main.httpx, 'AsyncClient', Gate)
+    monkeypatch.setattr(main.settings, 'wiki_store', 'integrated')
+    monkeypatch.setattr(main.settings, 'model_control_enabled', False)
+    monkeypatch.setattr(main.settings, 'llm_context_tokens', 16384)
+    client, directory = make_client(monkeypatch)
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            original = 'BC250 자료\n' + ('긴 설명. ' * 350) + '\n냉각설정 liquid42'
+            with connect(main.get_settings().database_path) as db:
+                db.execute("INSERT INTO messages VALUES ('original',?,'user',?,'2026-01-01')", (cid, original))
+            docs = '/api/v1/wiki/documents'
+            assert client.post(docs, headers=headers, json={'title': 'BC250 자료', 'content': '기존 문서'}).status_code == 201
+            candidates = client.get('/api/v1/wiki/message-drafts/candidates', headers=headers, params={'title': 'BC250 자료'}).json()
+            assert [item['id'] for item in candidates['matches']] == [1]
+            assert client.get(docs, headers=headers).json()[0]['title'] == 'BC250 자료'
+            body = {'request_id': str(uuid.uuid4()), 'conversation_id': cid, 'message_id': 'original',
+                    'title': 'BC250 자료', 'content': original + '\n직접 편집한 내용', 'source': '직접 제공',
+                    'action': 'create', 'acknowledged_duplicate_ids': [1]}
+            assert client.post('/api/v1/wiki/message-drafts/save', json=body).status_code == 401
+            first = client.post('/api/v1/wiki/message-drafts/save', headers=headers, json=body)
+            assert first.status_code == 200 and first.json()['id'] == 2
+            assert client.post('/api/v1/wiki/message-drafts/save', headers=headers, json=body).json() == first.json()
+            assert len(client.get(docs, headers=headers).json()) == 2
+            saved = client.get('/api/v1/wiki/documents/2?store_id=integrated', headers=headers).json()
+            assert saved['source'] == '직접 제공' and saved['content'] == body['content']
+            response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers,
+                                   json={'content': 'BC250 냉각설정', 'wiki': True, 'wiki_evidence': True})
+            assert response.status_code == 200
+            evidence = response.json()['assistant_message']['wiki_evidence']
+            assert 2 in [item['id'] for item in evidence['retrieved']]
+            assert any('liquid42' in item['excerpt'] for item in evidence['provided'] if item['id'] == 2)
+            assert evidence['cited'] == [2]
+            assert 'liquid42' in captured[-1]['messages'][-1]['content']
     finally:
         directory.cleanup()
