@@ -29,7 +29,8 @@ it('shows shared space, searches, and creates a document', async () => {
     throw new Error(`unexpected ${path}`);
   });
   render(<WikiManager />);
-  expect(await screen.findByText(/이 앱에 접근할 수 있는 가족/)).toBeTruthy();
+  expect(await screen.findByRole('heading', { name: '공유 Wiki' })).toBeTruthy();
+  expect(screen.queryByText('공유 범위 안내')).toBeNull();
   fireEvent.change(await screen.findByLabelText('문서 검색'), { target: { value: 'server' } });
   fireEvent.click(screen.getByRole('button', { name: '검색' }));
   await waitFor(() => expect(mock).toHaveBeenCalledWith('/wiki/search?q=server'));

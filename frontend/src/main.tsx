@@ -7,7 +7,7 @@ import { ApiError, newRequestId, request, streamRequest, type Conversation, type
 import { MessageList } from './components/MessageList';
 import { SystemStatus } from './components/SystemStatus';
 import { WikiMemoryStatus } from './components/WikiMemoryStatus';
-import { WikiManager } from './components/WikiManager';
+import { WikiManager, type WikiSection } from './components/WikiManager';
 import './image-prompt.css';
 import './style.css';
 import './scroll.css';
@@ -219,6 +219,7 @@ export function App() {
   const [wikiView, setWikiView] = useState(false);
   const [wikiVisited, setWikiVisited] = useState(false);
   const [wikiDocumentId, setWikiDocumentId] = useState<number>();
+  const [wikiSection, setWikiSection] = useState<WikiSection>('read');
   const [wikiEnabled, setWikiEnabled] = useState(() => { try { return localStorage.getItem('bc250-wiki-search') !== 'false'; } catch { return true; } });
   const [wikiAutoUpdate, setWikiAutoUpdate] = useState(() => { try { return localStorage.getItem('bc250-wiki-auto') !== 'false'; } catch { return true; } });
   const [wikiMemory, setWikiMemory] = useState<WikiMemoryJob[]>([]);
@@ -387,11 +388,12 @@ export function App() {
   useEffect(() => {
     const route = () => {
       const hash = window.location.hash;
-      const wiki = hash.match(/^#\/wiki(?:\/(\d+))?$/);
+      const wiki = hash.match(/^#\/wiki(?:\/(\d+)(?:\/(edit|aliases|history))?)?$/);
       const chat = hash.match(/^#\/chat\/([^/]+)$/);
       if (wiki) {
         setSystemView(false); setWikiVisited(true); setWikiView(true);
         setWikiDocumentId(wiki[1] ? Number(wiki[1]) : undefined);
+        setWikiSection((wiki[2] as WikiSection | undefined) || 'read');
       } else if (chat) {
         try { void loadConversation(decodeURIComponent(chat[1]), true).catch(error => setNotice(error instanceof Error ? error.message : '대화를 불러오지 못했습니다.')); }
         catch { setNotice('잘못된 대화 링크입니다.'); }
@@ -612,21 +614,21 @@ export function App() {
   return <ThemeProvider theme={appTheme}><main className={'layout' + (wikiView ? ' wiki-mode' : '')}>
     <aside className="workspace-sidebar"><h1><span className="brand-mark" aria-hidden="true">✳</span><span className="sidebar-brand-text">BC-250<small>개인 AI 워크스페이스</small></span></h1><button className="mobile-menu-toggle plain" aria-expanded={menuOpen} aria-controls="mobile-workspace-menu" aria-label="메뉴 열기" onClick={() => setMenuOpen(value => !value)}><Menu size={18} aria-hidden="true" /><span className="sidebar-action-label">{menuOpen ? '닫기' : '메뉴'}</span></button><button className="new-chat-button" aria-label="새 대화" onClick={() => { setMenuOpen(false); setNewDialog(true); }}><Plus size={18} aria-hidden="true" /><span className="sidebar-action-label">새 대화</span></button>
       <nav id="conversation-nav" className={menuOpen ? 'mobile-open' : ''} aria-label="대화 목록">{conversations.map(conversation => <a role="button" href={'#/chat/' + encodeURIComponent(conversation.id)} className={active?.id === conversation.id && !systemView && !wikiView ? 'selected' : ''} key={conversation.id} onClick={event => { event.preventDefault(); setMenuOpen(false); void loadConversation(conversation.id, true).catch(error => setNotice(error.message)); }}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></a>)}</nav>
-      <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} aria-label="공유 Wiki" onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); history.pushState(null, '', '#/wiki'); }}><BookOpen size={17} aria-hidden="true" /><span className="sidebar-action-label">공유 Wiki</span></button>
+      <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} aria-label="공유 Wiki" onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); setWikiSection('read'); history.pushState(null, '', '#/wiki'); }}><BookOpen size={17} aria-hidden="true" /><span className="sidebar-action-label">공유 Wiki</span></button>
       <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} aria-label="시스템 상태" onClick={() => { setMenuOpen(false); void showSystem(); }}><Activity size={17} aria-hidden="true" /><span className="sidebar-action-label">시스템 상태</span></button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
     </aside>
     <Drawer className="mobile-workspace-drawer" anchor="left" open={menuOpen} onClose={() => setMenuOpen(false)} slotProps={{ paper: { id: 'mobile-workspace-menu', 'aria-label': '워크스페이스 메뉴' } }}>
       <div className="drawer-heading"><div><span className="brand-mark" aria-hidden="true">✳</span><strong>BC-250</strong></div><button type="button" className="drawer-close" aria-label="메뉴 닫기" onClick={() => setMenuOpen(false)}><X size={20} /></button></div>
       <button type="button" className="drawer-new" onClick={() => { setMenuOpen(false); setNewDialog(true); }}><Plus size={18} /> 새 대화</button>
       <div className="drawer-section-label">워크스페이스</div>
-      <div className="drawer-links"><button type="button" className={wikiView ? 'drawer-selected' : ''} onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); history.pushState(null, '', '#/wiki'); }}><BookOpen size={18} /> 공유 Wiki</button>
+      <div className="drawer-links"><button type="button" className={wikiView ? 'drawer-selected' : ''} onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); setWikiSection('read'); history.pushState(null, '', '#/wiki'); }}><BookOpen size={18} /> 공유 Wiki</button>
       <button type="button" className={systemView && !wikiView ? 'drawer-selected' : ''} onClick={() => { setMenuOpen(false); void showSystem(); }}><Activity size={18} /> 시스템 상태</button></div>
       <div className="drawer-section-label drawer-conversations-heading">대화 <span>{conversations.length}</span></div>
       <nav className="drawer-conversations" aria-label="대화 목록">{conversations.map(conversation => <a role="button" href={'#/chat/' + encodeURIComponent(conversation.id)} className={active?.id === conversation.id && !systemView && !wikiView ? 'drawer-selected' : ''} key={conversation.id} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); setMenuOpen(false); void loadConversation(conversation.id, true).catch(error => setNotice(error.message)); } }}><span>{conversation.title}</span><small>{MODE_META[conversation.mode].label}</small></a>)}</nav>
       <div className="drawer-model">활성 모델 <span>{models[0]?.split('/').pop() || '조회 중…'}</span></div>
     </Drawer>
     <section className="chat">
-      {wikiVisited && <div className="wiki-manager-host" hidden={!wikiView}><WikiManager documentId={wikiDocumentId} onNavigate={id => { setWikiDocumentId(id); history.pushState(null, '', id ? '#/wiki/' + id : '#/wiki'); }} /></div>}
+      {wikiVisited && <div className="wiki-manager-host" hidden={!wikiView}><WikiManager documentId={wikiDocumentId} section={wikiSection} onNavigate={(id, section = 'read', replace = false) => { setWikiDocumentId(id); setWikiSection(section); const hash = id ? '#/wiki/' + id + (section === 'read' ? '' : '/' + section) : '#/wiki'; if (window.location.hash !== hash) { if (replace) history.replaceState(null, '', hash); else history.pushState(null, '', hash); } }} /></div>}
       {!wikiView && (systemView ? <SystemStatus gate={gate} gateError={gateError} loading={gateLoading} models={models} modelsUnavailable={modelsUnavailable} onRefresh={() => { void showSystem(); }} onSwitchSucceeded={refreshModels} />
       : active ? <><header className="chat-header"><div><h2>{active.title}</h2><p className="muted">{MODE_META[active.mode].label} · {active.mode === 'image_prompt' ? '영어 JSON 설정 · 매 요청 독립 작성' : `${LENGTH_LABEL[active.response_length]} · ${active.context_policy === 'none' ? '이전 대화 미포함' : '최근 대화 포함'}`}</p></div><a className="permalink" href={'#/chat/' + encodeURIComponent(active.id)}><Link2 size={16} aria-hidden="true" /> 대화 링크</a><button className="header-action" onClick={() => setSettingsDialog(true)} disabled={busy}><Settings size={16} aria-hidden="true" /> 설정</button><button className="danger header-action" disabled={busy} onClick={() => void deleteConversation(active)}><Trash2 size={16} aria-hidden="true" /> 삭제</button></header>
         {active.mode !== 'image_prompt' && <div className="mode-banner" role="status"><span className="mode-banner-copy">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다. 기억은 대화 설정에서 확인할 수 있습니다.</span><span className="mode-banner-short">최근 대화{active.summary ? '와 장기 기억' : ''} 참고 중</span></div>}
