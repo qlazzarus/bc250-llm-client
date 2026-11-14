@@ -3,6 +3,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { type ImageCapabilities, type ImageJob, type Message, type Mode } from '../api';
 import { ImagePromptResult, parseImagePromptConfig } from './ImagePromptResult';
 import { MarkdownContent } from './MarkdownContent';
+import { copyText } from '../clipboard';
 import type { ImageDraftEditor } from '../main';
 import { classifyWikiProposal, type WikiProposal } from '../wikiProposal';
 
@@ -18,6 +19,11 @@ type ImageCardProps = {
 };
 
 const ChatMessage = memo(function ChatMessage({ message, mode, conversationId, imageCards, onWikiDraft, candidateDismissed, onDismissCandidate, proposal }: { message: Message; mode: Mode; conversationId: string; imageCards: ImageCardProps; onWikiDraft: (message: Message) => void; candidateDismissed: boolean; onDismissCandidate: (id: string) => void; proposal: WikiProposal }) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const copyResponse = async () => {
+    try { await copyText(message.content); setCopyState('copied'); }
+    catch { setCopyState('failed'); }
+  };
   const imagePrompt = mode === 'image_prompt' && message.role === 'assistant' ? parseImagePromptConfig(message.content) : undefined;
   return <article className={message.role}><b>{message.role === 'user' ? '나' : 'BC-250'}</b>
     {message.role === 'assistant'
@@ -28,6 +34,11 @@ const ChatMessage = memo(function ChatMessage({ message, mode, conversationId, i
             jobs={imageCards.jobs.filter(job => job.source_message_id === message.id)} onCancelImageJob={imageCards.onCancelImageJob} />
         : <div className="markdown-content">{message.content ? <MarkdownContent content={message.content} /> : (message.id.startsWith('stream-') ? '응답 생성 또는 대기열 처리 중…' : '')}</div>
       : <p>{message.content}</p>}
+    {message.role === 'assistant' && message.content && <div className="response-copy">
+      <button type="button" className="plain" onClick={() => void copyResponse()}>{copyState === 'copied' ? '복사됨' : '응답 복사'}</button>
+      <span role="status">{copyState === 'copied' ? '응답을 복사했습니다.' : copyState === 'failed' ? '자동 복사에 실패했습니다. 아래 내용을 선택해 복사하세요.' : ''}</span>
+      {copyState === 'failed' && <textarea aria-label="복사할 응답" readOnly value={message.content} onFocus={event => event.currentTarget.select()} />}
+    </div>}
     {message.role === 'user' && !message.id.startsWith('local-') && <div className="wiki-message-actions">
       {!candidateDismissed && proposal === 'contextual' && <div className="wiki-context-proposal" role="region" aria-label="공유 Wiki 저장 제안"><p>이 내용을 다음에도 참고할 수 있도록 가족 공유 Wiki에 저장할까요?</p><small>선택은 이 브라우저 화면에서만 유지되며 새로고침하면 다시 표시될 수 있습니다.</small><div><button type="button" onClick={() => onWikiDraft(message)}>저장 내용 확인</button> <button type="button" className="plain" onClick={() => onDismissCandidate(message.id)}>이번 대화에서만 사용</button></div></div>}
       {!candidateDismissed && proposal === 'ordinary' && <div>이 메시지를 공유 Wiki 문서로 검토할 수 있습니다. <button type="button" className="plain" onClick={() => onWikiDraft(message)}>초안 검토</button> <button type="button" className="plain" aria-label="문서 후보 닫기" onClick={() => onDismissCandidate(message.id)}>닫기</button></div>}

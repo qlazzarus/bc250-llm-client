@@ -68,3 +68,26 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .wiki-message-actions{display:grid;gap:8px;margin-top:12px;font-size:13px}.wiki-message-actions button{font-size:12px;padding:5px 8px}.wiki-message-actions>button{justify-self:start}.wiki-draft textarea{min-height:220px}.wiki-draft p{margin:0;line-height:1.5}
 .wiki-draft section{display:grid;gap:10px;min-width:0}.wiki-draft-comparison{display:grid;gap:8px;min-width:0}.wiki-draft-comparison pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:#10151c;padding:10px}
 .wiki-context-proposal{display:grid;gap:8px;padding:12px;border:1px solid #89bdf7;border-radius:8px;background:#203d5d}.wiki-context-proposal p{margin:0}.wiki-context-proposal>div{display:flex;gap:8px;flex-wrap:wrap}.wiki-context-proposal button{min-height:44px}
+.response-copy{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}.response-copy button{font-size:13px;min-height:36px}.response-copy span{font-size:12px;color:#bdcfe2}.response-copy textarea{flex-basis:100%;min-height:100px;width:100%;resize:vertical}
+@media(max-width:700px){
+  .layout>aside .mobile-nav-action{display:none}
+  .layout>aside .mobile-nav-action.mobile-open{display:block;order:6;flex:1 1 40%}
+  .layout>aside nav{order:5;flex-basis:100%;max-height:min(35dvh,280px)}
+  .layout>aside h1{min-width:0}
+  .chat>header{gap:6px}
+  .chat>header>div:first-child{flex:1 1 100%}
+  .chat>header h2{font-size:1rem;overflow-wrap:anywhere}
+  .chat>header .permalink,.chat>header button{min-height:44px}
+  .wiki-compose-controls{display:flex;align-items:center;gap:4px 12px;flex-wrap:wrap;font-size:13px}
+  .wiki-compose-controls>label{display:inline-flex;align-items:center;gap:5px;min-height:36px}
+  .wiki-compose-controls>small{flex-basis:100%;margin-bottom:4px}
+  .wiki-memory-status{flex-basis:100%}
+  .composer{align-items:flex-end}
+  .composer textarea{resize:none}
+  .response-copy button,.wiki-message-actions button{min-height:44px}
+  .wiki-manager-layout aside{max-height:none}
+  .wiki-manager-layout aside ul{max-height:22dvh;overflow:auto;margin:0}
+  .wiki-manager-layout aside form{grid-template-columns:minmax(0,1fr) auto;align-items:end}
+  .wiki-manager-layout aside form button{min-height:44px}
+  .wiki-actions button,.wiki-manager li a{min-height:44px}
+}

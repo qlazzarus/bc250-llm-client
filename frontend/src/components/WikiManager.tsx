@@ -21,7 +21,7 @@ function ChangedText({ before, after }: { before: string; after: string }) {
     <div><strong>내 초안</strong><pre>{after.slice(0, start)}<ins>{after.slice(start, end ? -end : undefined)}</ins>{end ? after.slice(-end) : ''}</pre></div></div>;
 }
 
-export function WikiManager({ onClose }: { onClose: () => void }) {
+export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () => void; documentId?: number; onNavigate?: (id?: number) => void }) {
   const [mode, setMode] = useState<'loading' | 'integrated' | 'legacy_external' | 'error'>('loading');
   const [docs, setDocs] = useState<WikiSummary[]>([]);
   const [doc, setDoc] = useState<WikiDocument>();
@@ -73,9 +73,18 @@ export function WikiManager({ onClose }: { onClose: () => void }) {
     if (!allowDiscard()) return;
     void exclusive(async () => {
       const selected = await request<WikiDocument>(docPath(id));
-      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); resetHistory();
+      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); resetHistory(); onNavigate?.(selected.id);
     });
   };
+  useEffect(() => {
+    if (mode !== 'integrated' || documentId === doc?.id) return;
+    if (!allowDiscard()) { onNavigate?.(doc?.id); return; }
+    if (documentId === undefined) { setDoc(undefined); setDraft(emptyDraft()); resetHistory(); return; }
+    void exclusive(async () => {
+      const selected = await request<WikiDocument>(docPath(documentId));
+      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); resetHistory();
+    });
+  }, [documentId, mode]);
   const save = (event: FormEvent) => {
     event.preventDefault();
     if (aliases !== undefined && aliases !== savedAliases) { setError('별칭을 먼저 저장하거나 문서를 다시 열어 주세요.'); return; }
@@ -86,7 +95,7 @@ export function WikiManager({ onClose }: { onClose: () => void }) {
         });
         // Save completed: use our submitted content even if a subsequent refresh fails.
         setDoc({ ...draft, id: result.id, revision: result.revision, updated_at: '' });
-        resetHistory(); setNotice('저장했습니다.');
+        resetHistory(); onNavigate?.(result.id); setNotice('저장했습니다.');
         try { await list(); } catch { setNotice('저장했지만 문서 목록을 새로고침하지 못했습니다.'); }
       } catch (caught) {
         if (caught instanceof ApiError && caught.status === 409 && doc) {
@@ -102,7 +111,7 @@ export function WikiManager({ onClose }: { onClose: () => void }) {
     if (!doc || !window.confirm('이 문서와 저장된 revision 이력을 삭제할까요?')) return;
     void exclusive(async () => {
       await request(`${docPath(doc.id)}&expected_revision=${doc.revision}`, { method: 'DELETE' });
-      setDoc(undefined); setDraft(emptyDraft()); resetHistory(); setNotice('삭제했습니다.');
+      setDoc(undefined); setDraft(emptyDraft()); resetHistory(); onNavigate?.(); setNotice('삭제했습니다.');
       try { await list(); } catch { setNotice('삭제했지만 문서 목록을 새로고침하지 못했습니다.'); }
     });
   };
@@ -151,11 +160,11 @@ export function WikiManager({ onClose }: { onClose: () => void }) {
     {error && <p className="error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {mode === 'integrated' && <div className="wiki-manager-layout">
       <aside aria-label="Wiki 문서 목록"><form onSubmit={search}><label>문서 검색<input value={query} onChange={event => setQuery(event.target.value)} maxLength={4000} /></label><button disabled={busy}>검색</button></form>
-        <button type="button" disabled={busy} onClick={() => { if (allowDiscard()) { setDoc(undefined); setDraft(emptyDraft()); resetHistory(); setError(''); setNotice(''); } }}>새 문서</button>
-        <ul>{docs.map(item => <li key={item.id}><button type="button" className="plain" disabled={busy} onClick={() => open(item.id)}>{item.title}</button></li>)}</ul>
+        <button type="button" disabled={busy} onClick={() => { if (allowDiscard()) { setDoc(undefined); setDraft(emptyDraft()); resetHistory(); onNavigate?.(); setError(''); setNotice(''); } }}>새 문서</button>
+        <ul>{docs.map(item => <li key={item.id}><a role="button" href={'#/wiki/' + item.id} onClick={event => { event.preventDefault(); if (!busy) open(item.id); }}>{item.title}</a></li>)}</ul>
       </aside>
       <div className="wiki-manager-editor"><form onSubmit={save}>
-        <h3>{doc ? `문서 편집 · revision ${doc.revision}` : '새 문서'}</h3>
+        <h3>{doc ? `문서 편집 · revision ${doc.revision}` : '새 문서'}</h3>{doc && <a className="permalink" href={'#/wiki/' + doc.id}>문서 링크</a>}
         <label>제목<input value={draft.title} maxLength={200} required onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
         {doc?.source && <p>사용자 제공 출처: {doc.source} (자동으로 검증하지 않음)</p>}
         <label>분류<input value={draft.category} maxLength={80} onChange={event => setDraft({ ...draft, category: event.target.value })} /></label>
