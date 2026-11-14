@@ -85,6 +85,7 @@ it('shows saved revision diff and asks before deleting', async () => {
   });
   render(<WikiManager onClose={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
   fireEvent.click(await screen.findByText('문서 관리'));
   fireEvent.click(await screen.findByRole('button', { name: '이력 불러오기' }));
   fireEvent.click(await screen.findByRole('button', { name: '차이 보기' }));
@@ -135,6 +136,7 @@ it('loads and explicitly saves aliases using the current revision', async () => 
   });
   render(<WikiManager onClose={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
   fireEvent.click(await screen.findByText('문서 관리'));
   fireEvent.click(await screen.findByRole('button', { name: '별칭 불러오기' }));
   fireEvent.change(await screen.findByLabelText('별칭 목록'), { target: { value: 'bc250' } });
@@ -233,4 +235,29 @@ it('groups documents by category and expands search results even after a categor
   fireEvent.click(screen.getByRole('button', { name: '검색' }));
   expect(await screen.findByRole('button', { name: '서버' })).toBeTruthy();
   expect(screen.getByRole('button', { name: /general/ }).getAttribute('aria-expanded')).toBe('true');
+});
+
+it('keeps document management inside edit and discards unsaved alias changes on cancel', async () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  mock.mockImplementation(async path => {
+    if (path === '/wiki/capabilities') return { store_id: 'integrated' } as never;
+    if (path === '/wiki/documents') return [original] as never;
+    if (path === '/wiki/documents/1?store_id=integrated') return original as never;
+    if (path === '/wiki/documents/1/aliases?store_id=integrated') return ['기존 별칭'] as never;
+    throw new Error(`unexpected ${path}`);
+  });
+  render(<WikiManager onClose={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  await screen.findByRole('heading', { name: '서버' });
+  expect(screen.queryByText('문서 관리')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '편집' }));
+  fireEvent.click(screen.getByText('문서 관리'));
+  fireEvent.click(screen.getByRole('button', { name: '별칭 불러오기' }));
+  fireEvent.change(await screen.findByLabelText('별칭 목록'), { target: { value: '저장하지 않은 별칭' } });
+  fireEvent.click(screen.getByRole('button', { name: '취소' }));
+  expect(confirm).toHaveBeenCalled();
+  expect(screen.queryByText('문서 관리')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '편집' }));
+  fireEvent.click(screen.getByText('문서 관리'));
+  expect((screen.getByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('기존 별칭');
 });

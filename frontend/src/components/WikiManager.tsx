@@ -30,7 +30,7 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
   const [doc, setDoc] = useState<WikiDocument>();
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [query, setQuery] = useState('');
-  const [preview, setPreview] = useState(true);
+  const [preview, setPreview] = useState(() => !window.matchMedia?.('(max-width: 700px)').matches);
   const [editing, setEditing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -125,7 +125,7 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
     });
   };
   const remove = () => {
-    if (!doc || !window.confirm('이 문서와 저장된 revision 이력을 삭제할까요?')) return;
+    if (!doc || !window.confirm(dirty ? '저장하지 않은 변경사항을 버리고 이 문서와 저장된 revision 이력을 삭제할까요?' : '이 문서와 저장된 revision 이력을 삭제할까요?')) return;
     void exclusive(async () => {
       await request(`${docPath(doc.id)}&expected_revision=${doc.revision}`, { method: 'DELETE' });
       setDoc(undefined); setDraft(emptyDraft()); resetHistory(); setEditing(false); setCreating(false); setListOpen(true); onNavigate?.(); setNotice('삭제했습니다.');
@@ -187,7 +187,7 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
   const cancelEdit = () => {
     if (!allowDiscard()) return;
     setDraft(doc ? { title: doc.title, category: doc.category, content: doc.content } : emptyDraft());
-    setLatest(undefined); setError(''); setEditing(false); setCreating(false);
+    setAliases(savedAliases); setLatest(undefined); setError(''); setEditing(false); setCreating(false);
     if (!doc) setListOpen(true);
   };
 
@@ -215,19 +215,19 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
           <div className="wiki-reader-body markdown-content"><MarkdownContent content={doc.content} onWikiNavigate={open} /></div>
         </article>}
         {editing && <form className="wiki-editor-form" onSubmit={save}>
-        <div className="wiki-editor-heading"><div><small>{creating ? '새 문서' : '문서 편집'}</small><h3>{creating ? '새로운 문서 작성' : doc?.title}</h3></div><span className="wiki-edit-state">{dirty ? '저장되지 않은 변경' : creating ? '새 초안' : '저장됨'}</span></div>
-        <div className="wiki-fields"><label>제목<input value={draft.title} maxLength={200} required onChange={event => setDraft({ ...draft, title: event.target.value })} placeholder="문서 제목을 입력하세요" /></label>
-        <label>분류<input value={draft.category} maxLength={80} onChange={event => setDraft({ ...draft, category: event.target.value })} /></label></div>
-        <div className="wiki-content-heading"><span>본문 <small>마크다운 지원</small></span><Button size="small" type="button" aria-pressed={preview} onClick={() => setPreview(value => !value)}>{preview ? '미리보기 숨기기' : '미리보기 보기'}</Button></div><div className={preview ? 'wiki-content-layout' : 'wiki-content-layout no-preview'}><label><span className="wiki-field-caption">마크다운 원문</span><textarea aria-label="본문" value={draft.content} maxLength={100000} required onChange={event => setDraft({ ...draft, content: event.target.value })} placeholder="내용을 입력하세요" /></label>{preview && <section className="wiki-preview" aria-label="마크다운 미리보기"><span className="wiki-field-caption">미리보기</span><div className="markdown-content">{draft.content ? <MarkdownContent content={draft.content} onWikiNavigate={open} /> : <p className="muted">본문을 작성하면 여기에 표시됩니다.</p>}</div></section>}</div>
+        <div className="wiki-editor-heading"><div><small>{creating ? '새 문서' : '문서 편집'}</small><h3>{creating ? '새로운 문서 작성' : doc?.title}</h3>{doc && <p className="wiki-editor-version">버전 {doc.revision}</p>}</div><span className={'wiki-edit-state' + (dirty ? ' is-dirty' : '')}>{dirty ? '저장되지 않은 변경' : creating ? '새 초안' : '저장됨'}</span></div>
+        <div className="wiki-fields"><label><span>제목</span><input value={draft.title} maxLength={200} required onChange={event => setDraft({ ...draft, title: event.target.value })} placeholder="문서 제목을 입력하세요" /></label>
+        <label><span>분류</span><input value={draft.category} maxLength={80} onChange={event => setDraft({ ...draft, category: event.target.value })} /></label></div>
+        <div className="wiki-content-heading"><div><strong>본문</strong><small>마크다운으로 작성할 수 있습니다.</small></div><Button size="small" type="button" aria-pressed={preview} onClick={() => setPreview(value => !value)}>{preview ? '미리보기 숨기기' : '미리보기 보기'}</Button></div><div className={preview ? 'wiki-content-layout' : 'wiki-content-layout no-preview'}><label><span className="wiki-field-caption">마크다운 원문</span><textarea aria-label="본문" value={draft.content} maxLength={100000} required onChange={event => setDraft({ ...draft, content: event.target.value })} placeholder="내용을 입력하세요" /></label>{preview && <section className="wiki-preview" aria-label="마크다운 미리보기"><span className="wiki-field-caption">미리보기</span><div className="markdown-content">{draft.content ? <MarkdownContent content={draft.content} onWikiNavigate={open} /> : <p className="muted">본문을 작성하면 여기에 표시됩니다.</p>}</div></section>}</div>
         <div className="wiki-actions"><Button type="submit" variant="contained" disabled={busy || !!latest}>저장</Button><Button type="button" variant="outlined" startIcon={<X size={16} />} disabled={busy} onClick={cancelEdit}>취소</Button></div>
       </form>}
-      {doc && !editing && <details className="wiki-history"><summary>문서 관리 <span>별칭 · 버전 이력 · 삭제</span></summary><div className="wiki-management"><section><h3>문서 별칭</h3><p>검색에 사용할 이름을 한 줄에 하나씩 등록합니다.</p>
-        {aliases === undefined ? <button type="button" disabled={busy} onClick={loadAliases}>별칭 불러오기</button> : <><label>별칭 목록<textarea value={aliases} maxLength={4000} onChange={event => setAliases(event.target.value)} /></label><button type="button" disabled={busy || !!latest} onClick={saveAliases}>별칭 저장</button></>}
-      </section><section><h3>버전 이력</h3><p>최근 100개 버전이 보관됩니다. 문서를 삭제하면 이력도 삭제됩니다.</p><button type="button" disabled={busy} onClick={loadRevisions}>이력 불러오기</button>
+      {doc && editing && <details className="wiki-history wiki-editor-management"><summary><span className="wiki-management-title">문서 관리 <small>별칭 · 버전 이력 · 삭제</small></span><ChevronDown size={18} aria-hidden="true" /></summary><div className="wiki-management"><section className="wiki-management-section"><h3>문서 별칭</h3><p>검색에 사용할 이름을 한 줄에 하나씩 등록합니다. 별칭은 별도로 저장됩니다.</p>
+        {aliases === undefined ? <Button type="button" variant="outlined" disabled={busy} onClick={loadAliases}>별칭 불러오기</Button> : <><label>별칭 목록<textarea value={aliases} maxLength={4000} onChange={event => setAliases(event.target.value)} /></label><Button type="button" variant="outlined" disabled={busy || !!latest} onClick={saveAliases}>별칭 저장</Button></>}
+      </section><section className="wiki-management-section"><h3>버전 이력</h3><p>최근 100개 버전이 보관됩니다. 문서를 삭제하면 이력도 삭제됩니다.</p><Button type="button" variant="outlined" disabled={busy} onClick={loadRevisions}>이력 불러오기</Button>
         {revisions.length > 0 && <><div className="wiki-actions"><label>이전 버전<select value={from} onChange={event => setFrom(event.target.value)}>{revisions.map(r => <option key={r.revision} value={r.revision}>revision {r.revision} · {r.created_at}</option>)}</select></label>
-          <label>비교 버전<select value={to} onChange={event => setTo(event.target.value)}>{revisions.map(r => <option key={r.revision} value={r.revision}>revision {r.revision} · {r.created_at}</option>)}</select></label><button type="button" disabled={busy} onClick={loadDiff}>차이 보기</button></div>
+          <label>비교 버전<select value={to} onChange={event => setTo(event.target.value)}>{revisions.map(r => <option key={r.revision} value={r.revision}>revision {r.revision} · {r.created_at}</option>)}</select></label><Button type="button" variant="outlined" disabled={busy} onClick={loadDiff}>차이 보기</Button></div>
           {diff && (['title', 'category', 'content'] as const).map(field => <div key={field}><h4>{{ title: '제목', category: '분류', content: '본문' }[field]}</h4><pre>{diff.diff[field] || '변경 없음'}</pre></div>)}</>}
-      </section><section><Button type="button" color="error" variant="outlined" disabled={busy} onClick={remove}>문서 삭제</Button></section></div></details>}
+      </section><section className="wiki-management-section wiki-danger-zone"><h3>문서 삭제</h3><p>문서와 보관된 버전 이력이 삭제됩니다.</p><Button type="button" color="error" variant="outlined" disabled={busy} onClick={remove}>문서 삭제</Button></section></div></details>}
       {latest && <section className="wiki-conflict" aria-label="문서 충돌 비교"><h3>최신 저장본과 내 초안</h3><p>내 초안은 저장되지 않았습니다. 차이를 확인하고 최신 revision을 기준으로 다시 저장할 수 있습니다.</p>
         {(['title', 'category', 'content'] as const).map(field => <div key={field}><h4>{{ title: '제목', category: '분류', content: '본문' }[field]}</h4><ChangedText before={latest[field]} after={draft[field]} /></div>)}
         <button type="button" disabled={busy} onClick={() => { setDoc(latest); setLatest(undefined); setNotice('최신 revision을 기준으로 초안을 편집합니다. 저장을 눌러야 반영됩니다.'); }}>최신본 기준으로 계속 편집</button></section>}
