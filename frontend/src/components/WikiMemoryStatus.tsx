@@ -17,10 +17,14 @@ const REASON_LABEL: Record<string, string> = {
   processing_failed: '처리 중 오류', processing_interrupted: '서비스 재시작으로 중단됨',
   conflict: '기존 값과 다름', conflict_kept: '기존 값을 유지함',
   document_input: '긴 자료는 자동 기억 대상이 아님',
+  unsupported_format: '현재 자동 기억에서 지원하지 않는 형식',
 };
 const ACTIVE = new Set(['pending', 'running', 'writing']);
 
 function labelFor(job: WikiMemoryJob) { return STATUS_LABEL[job.status] || job.status; }
+function unsupportedFormat(job: WikiMemoryJob) {
+  return job.store_id === 'integrated' && (job.reason_code === 'unsupported_format' || job.reason_code === 'insufficient_context');
+}
 
 function MemoryRecord({ job, conversationId, onChanged }: { job: WikiMemoryJob; conversationId?: string; onChanged?: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -51,7 +55,7 @@ function MemoryRecord({ job, conversationId, onChanged }: { job: WikiMemoryJob; 
     <h4>{labelFor(job)}{job.explicit ? ' · 명시 요청' : ''}</h4>
     <dl>
       {job.memory_kind && <><dt>분류</dt><dd>{KIND_LABEL[job.memory_kind]}</dd></>}
-      {job.reason_code && <><dt>판정</dt><dd>{REASON_LABEL[job.reason_code] || job.reason_code}</dd></>}
+      {job.reason_code && <><dt>판정</dt><dd>{unsupportedFormat(job) ? '현재 자동 기억에서 지원하지 않는 형식' : (REASON_LABEL[job.reason_code] || job.reason_code)}</dd></>}
       {(job.title || job.document_id != null) && <><dt>대상</dt><dd>{job.title || '제목 없음'}{job.document_id != null ? ` (문서 ${job.document_id})` : ''}{job.store_id === 'legacy_external' ? ' · 기존 Wiki 기록' : ''}</dd></>}
       {job.error_message && <><dt>안내</dt><dd>{job.error_message}</dd></>}
     </dl>
@@ -92,9 +96,10 @@ export function WikiMemoryStatus({ jobs, conversationId, onChanged }: { jobs: Wi
   if (!jobs.length) return null;
   const attention = jobs.find(job => job.needs_attention === 1 || job.status === 'unknown' || job.status === 'failed');
   const active = jobs.find(job => ACTIVE.has(job.status));
-  const highlighted = attention || active;
+  const unsupported = jobs[0].status === 'skipped' && unsupportedFormat(jobs[0]) ? jobs[0] : undefined;
+  const highlighted = attention || active || unsupported;
   return <section className="wiki-memory-status" aria-label="Wiki 자동 기억 상태">
-    {highlighted && <p role="status" aria-live="polite">Wiki 자동 기억: {labelFor(highlighted)}{highlighted.error_message ? ` · ${highlighted.error_message}` : ''}</p>}
+    {highlighted && <p role="status" aria-live="polite">Wiki 자동 기억: {labelFor(highlighted)}{highlighted.error_message ? ` · ${highlighted.error_message}` : unsupportedFormat(highlighted) ? ' · 현재 자동 기억 형식으로 처리할 수 없습니다. 메시지에서 공유 Wiki 문서로 검토할 수 있습니다.' : ''}</p>}
     <button type="button" className="plain" onClick={() => setOpen(true)}>Wiki 자동 기억 기록 ({jobs.length})</button>
     {open && <MemoryHistoryDialog jobs={jobs} onClose={() => setOpen(false)} conversationId={conversationId} onChanged={onChanged} />}
   </section>;

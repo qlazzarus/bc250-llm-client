@@ -134,4 +134,24 @@ def test_integrated_long_material_has_non_failure_status(tmp_path, length):
     process_integrated_job(path, 'g')
     with connect(path) as db:
         row = db.execute("SELECT status,reason_code FROM wiki_memory_jobs WHERE generation_id='g'").fetchone()
-    assert tuple(row) == (('failed', 'insufficient_context') if length == 800 else ('skipped', 'document_input'))
+    assert tuple(row) == (('failed', 'unsupported_format') if length == 800 else ('skipped', 'document_input'))
+
+
+def test_integrated_multifact_material_reports_unsupported_without_writing(tmp_path):
+    from backend.app.integrated_memory import process_integrated_job
+    path = _prepare_history_database(tmp_path, None)
+    timestamp = '2026-11-12T00:00:00+00:00'
+    text = ('다른 답변의 자료입니다.\nBC250 서버 개요\n'
+            '운영체제: Fedora 43\n하드웨어: GPU와 메모리\n' + '서버 구성 설명입니다. ' * 20)
+    assert 200 <= len(text) <= 800
+    with connect(path) as db:
+        db.execute("INSERT INTO conversations (id,title,created_at,updated_at,mode) VALUES ('c','대화',?,?, 'quick')", (timestamp, timestamp))
+        db.execute("INSERT INTO messages VALUES ('u','c','user',?,?)", (text, timestamp))
+        db.execute("INSERT INTO generation_requests (id,conversation_id,user_message_id,status,queued_at,created_at,updated_at) VALUES ('g','c','u','completed',?,?,?)", (timestamp, timestamp, timestamp))
+        db.execute("INSERT INTO wiki_memory_jobs (generation_id,conversation_id,status,explicit,store_id,created_at,updated_at) VALUES ('g','c','pending',0,'integrated',?,?)", (timestamp, timestamp))
+    process_integrated_job(path, 'g')
+    with connect(path) as db:
+        row = db.execute("SELECT status,reason_code,document_id FROM wiki_memory_jobs WHERE generation_id='g'").fetchone()
+        assert tuple(row) == ('skipped', 'unsupported_format', None)
+        assert db.execute('SELECT count(*) FROM wiki_documents').fetchone()[0] == 0
+        assert db.execute('SELECT count(*) FROM memory_records').fetchone()[0] == 0

@@ -114,3 +114,19 @@ it('loads sensitive details only when requested', async () => {
   await screen.findByText('내 휴대폰은 예시 기기입니다.');
   expect(fetchMock).toHaveBeenCalledOnce();
 });
+
+it.each(['unsupported_format', 'insufficient_context'])('explains integrated unsupported input, including old records: %s', reason => {
+  installDialogMocks();
+  render(<WikiMemoryStatus jobs={[base({ store_id: 'integrated', status: 'skipped', reason_code: reason, error_message: null })]} />);
+  expect(screen.getByRole('status').textContent).toContain('현재 자동 기억 형식으로 처리할 수 없습니다');
+  expect(screen.getByRole('status').textContent).toContain('공유 Wiki 문서로 검토');
+  fireEvent.click(screen.getByRole('button', { name: /Wiki 자동 기억 기록/ }));
+  expect(screen.getByText('현재 자동 기억에서 지원하지 않는 형식')).toBeTruthy();
+});
+
+it('preserves legacy model uncertainty as insufficient context', () => {
+  installDialogMocks();
+  render(<WikiMemoryStatus jobs={[base({ store_id: 'legacy_external', status: 'skipped', reason_code: 'insufficient_context' })]} />);
+  fireEvent.click(screen.getByRole('button', { name: /Wiki 자동 기억 기록/ }));
+  expect(screen.getByText('문맥이 부족함')).toBeTruthy();
+});

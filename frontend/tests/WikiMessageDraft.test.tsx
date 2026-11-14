@@ -150,3 +150,11 @@ it('distinguishes searched, provided, valid ID and unrecognized citations, inclu
   expect(screen.queryByText(/확인할 수 없는 인용 형식/)).toBeNull();
   expect(screen.getByText(/이전 기록에는 인용 형식 검사 결과가 없습니다/)).toBeTruthy();
 });
+
+it('offers a review for mid-sized multiline source without any network write', () => {
+  const open = vi.fn(); const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  const message: Message = { id: 'u1', role: 'user', content: 'BC250 자료\n' + '가상 서버 구성입니다. '.repeat(20), created_at: '' };
+  render(<MessageList mode="quick" messages={[message]} hasMore={false} onLoadOlder={async () => {}} scrollSignal={0} conversationId="c" imageCapabilities={undefined} imageDrafts={{}} onEnsureImageDraft={async () => {}} onUpdateImageDraft={() => {}} onPersistImageDraft={async () => {}} onSubmitImageJob={async () => { throw Error(); }} imageJobs={[]} onCancelImageJob={async () => {}} onWikiDraft={open} dismissedWikiProposals={new Set()} onDismissWikiProposal={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: '초안 검토' }));
+  expect(open).toHaveBeenCalledWith(message); expect(fetch).not.toHaveBeenCalled();
+});

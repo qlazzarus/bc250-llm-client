@@ -39,3 +39,20 @@ describe('contextual Wiki proposal is conservative and read-only', () => {
     expect(classifyWikiProposal({ mode: 'quick', message: { ...user, content }, previous: prior('추가 정보를 알려주세요') })).toBe('ordinary');
   });
 });
+
+it('offers an ordinary review entry for 200–999 character multiline material', () => {
+  const material = 'BC250 자료\n' + '가상 서버 항목입니다. '.repeat(20);
+  expect(classifyWikiProposal({ mode: 'quick', message: { ...user, content: material }, previous: prior('추가 정보를 알려주세요') })).toBe('contextual');
+  expect(classifyWikiProposal({ mode: 'quick', message: { ...user, content: material } })).toBe('ordinary');
+  expect(classifyWikiProposal({ mode: 'quick', message: { ...user, content: 'a'.repeat(198) + '\nb' } })).toBe('ordinary');
+  expect(classifyWikiProposal({ mode: 'quick', message: { ...user, content: 'a'.repeat(197) + '\nb' } })).toBe('none');
+  expect(classifyWikiProposal({ mode: 'quick', message: { ...user, content: 'a'.repeat(999) } })).toBe('none');
+});
+
+
+it('recognizes the actual-style follow-up request for a mid-sized multiline message', () => {
+  const assistant = 'Wiki에서 **bc-250**에 대한 검색 결과가 없습니다.\n\n혹시 다른 정보(예: 어떤 분야의 bc-250인지, 전체 이름 등)를 알려주시면, 다시 검색하여 더 정확한 답변을 드릴 수 있습니다.';
+  const material = 'ChatGPT 답변을 붙여넣었습니다.\nBC250 서버 개요\n' + '서버 구성 정보입니다. '.repeat(25);
+  expect(classifyWikiProposal({ mode: 'quick', message: { ...user, content: material }, previous: prior(assistant) })).toBe('contextual');
+  expect(classify(prior('혹시 어떤 분야(예: 부품, 차량)인지 알려주시면 다시 확인하겠습니다.'))).toBe('contextual');
+});

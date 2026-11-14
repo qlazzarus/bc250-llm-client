@@ -323,10 +323,10 @@ def process_integrated_job(database_path: str, generation_id: str) -> None:
                     error_message=?,updated_at=? WHERE generation_id=? AND store_id='integrated' AND status='pending'""",
                     (int(bool(explicit)), '긴 자료는 자동 기억으로 저장할 수 없습니다. 별도로 공유 Wiki 문서에 저장해 주세요.' if explicit else None, _now(), generation_id))
                 return
-            db.execute("""UPDATE wiki_memory_jobs SET status=?,reason_code='insufficient_context',needs_attention=?,
+            db.execute("""UPDATE wiki_memory_jobs SET status=?,reason_code='unsupported_format',needs_attention=?,
                 error_message=?,updated_at=? WHERE generation_id=? AND store_id='integrated' AND status='pending'""",
                 ('failed' if explicit else 'skipped', int(bool(explicit)),
-                 '공유 속성과 값을 명확히 확인하지 못했습니다.' if explicit else None, _now(), generation_id))
+                 '현재 자동 기억 형식으로 처리할 수 없습니다. 공유 Wiki에서 원문을 검토해 주세요.' if explicit else None, _now(), generation_id))
         return
     try:
         create_initial_memory(database_path, generation_id)
