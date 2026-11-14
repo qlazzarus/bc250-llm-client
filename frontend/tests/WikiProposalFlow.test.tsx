@@ -54,9 +54,11 @@ it('uses the completed SSE message identity before a delayed reload and keeps di
   fireEvent.click(screen.getByRole('button', { name: '이번 대화에서만 사용' }));
   expect(screen.queryByRole('region', { name: '공유 Wiki 저장 제안' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '공유 Wiki' }));
-  fireEvent.click(await screen.findByRole('button', { name: '대화로 돌아가기' }));
+  fireEvent.click(screen.getByRole('button', { name: '메뉴 열기' }));
+  const menu = await screen.findByRole('dialog', { name: '워크스페이스 메뉴' });
+  fireEvent.click(within(within(menu).getByRole('navigation', { name: '대화 목록' })).getByRole('button', { name: /대화/ }));
   await waitFor(() => expect(screen.queryByRole('region', { name: '공유 Wiki 저장 제안' })).toBeNull());
-  expect(screen.getAllByRole('button', { name: '공유 Wiki에 저장' })).toHaveLength(2);
+  expect(await screen.findAllByRole('button', { name: '공유 Wiki에 저장' })).toHaveLength(2);
   expect(writes).toEqual([]);
 });
 

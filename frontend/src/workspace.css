@@ -47,3 +47,14 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
  .layout>.workspace-sidebar .new-chat-button{grid-column:3}
  .layout>.workspace-sidebar .sidebar-action-label{display:none}
 }
+
+/* One compact navigation rail across chat, Wiki and system views. */
+@media(min-width:701px){
+ .layout,.layout.wiki-mode{grid-template-columns:72px minmax(0,1fr)}
+ .layout>.workspace-sidebar,.layout.wiki-mode>.workspace-sidebar{align-items:center;padding:18px 10px;gap:8px}
+ .layout>.workspace-sidebar h1,.layout.wiki-mode>.workspace-sidebar h1{padding:0 0 12px}
+ .layout>.workspace-sidebar .sidebar-brand-text,.layout>.workspace-sidebar .sidebar-action-label,.layout>.workspace-sidebar nav,.layout>.workspace-sidebar .model-name{display:none}
+ .layout>.workspace-sidebar .mobile-menu-toggle{display:inline-flex}
+ .layout>.workspace-sidebar>button{justify-content:center;width:48px;height:46px;min-height:46px;padding:0}
+ .layout>.workspace-sidebar .mobile-nav-action{border-radius:10px}
+}

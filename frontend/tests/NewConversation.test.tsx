@@ -51,7 +51,7 @@ it('opens the mobile navigation drawer and closes it after selecting Wiki', asyn
   fireEvent.click(trigger);
   const menu = await screen.findByRole('dialog', { name: '워크스페이스 메뉴' });
   expect(trigger.getAttribute('aria-expanded')).toBe('true');
-  expect(within(menu).getByRole('navigation', { name: '모바일 대화 목록' })).toBeTruthy();
+  expect(within(menu).getByRole('navigation', { name: '대화 목록' })).toBeTruthy();
   fireEvent.click(within(menu).getByRole('button', { name: '공유 Wiki' }));
   expect(await screen.findByText(/통합 Wiki가 아직 활성화되지 않았습니다/)).toBeTruthy();
   await waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));

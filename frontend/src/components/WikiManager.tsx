@@ -24,7 +24,7 @@ function ChangedText({ before, after }: { before: string; after: string }) {
     <div><strong>내 초안</strong><pre>{after.slice(0, start)}<ins>{after.slice(start, end ? -end : undefined)}</ins>{end ? after.slice(-end) : ''}</pre></div></div>;
 }
 
-export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () => void; documentId?: number; onNavigate?: (id?: number) => void }) {
+export function WikiManager({ documentId, onNavigate }: { documentId?: number; onNavigate?: (id?: number) => void }) {
   const [mode, setMode] = useState<'loading' | 'integrated' | 'legacy_external' | 'error'>('loading');
   const [docs, setDocs] = useState<WikiSummary[]>([]);
   const [doc, setDoc] = useState<WikiDocument>();
@@ -192,7 +192,7 @@ export function WikiManager({ onClose, documentId, onNavigate }: { onClose: () =
   };
 
   return <section className="wiki-manager" aria-labelledby="wiki-manager-title">
-    <header className="wiki-topbar"><div><span className="wiki-eyebrow">가족의 지식 공간</span><h2 id="wiki-manager-title">공유 Wiki</h2></div><Button type="button" variant="outlined" startIcon={<ArrowLeft size={16} />} disabled={busy} onClick={() => { if (allowDiscard()) { setDoc(undefined); setDraft(emptyDraft()); resetHistory(); setEditing(false); setCreating(false); setListOpen(true); onClose(); } }}>대화로 돌아가기</Button></header>
+    <header className="wiki-topbar"><div><span className="wiki-eyebrow">가족의 지식 공간</span><h2 id="wiki-manager-title">공유 Wiki</h2></div></header>
     <p className="wiki-intro">이 공간의 문서와 이전 버전은 이 앱에 접근할 수 있는 가족에게 공유됩니다. AI 질문은 대화에서 ‘Wiki 검색 참고’를 켜고 이용하세요.</p><details className="wiki-mobile-intro"><summary>공유 범위 안내</summary><p>앱에 접속할 수 있는 가족에게 문서와 이력이 공유됩니다. 대화에서 ‘Wiki 검색 참고’를 켜면 AI 질문에 활용할 수 있습니다.</p></details>
     {mode === 'loading' && <p role="status">Wiki를 확인하고 있습니다.</p>}
     {mode === 'legacy_external' && <p role="status">통합 Wiki가 아직 활성화되지 않았습니다. 기존 <a href="/wiki/">가족 Wiki</a>를 이용하세요.</p>}

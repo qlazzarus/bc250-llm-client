@@ -28,7 +28,7 @@ it('shows shared space, searches, and creates a document', async () => {
     if (path === '/wiki/documents') return [original] as never;
     throw new Error(`unexpected ${path}`);
   });
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   expect(await screen.findByText(/이 앱에 접근할 수 있는 가족/)).toBeTruthy();
   fireEvent.change(await screen.findByLabelText('문서 검색'), { target: { value: 'server' } });
   fireEvent.click(screen.getByRole('button', { name: '검색' }));
@@ -55,7 +55,7 @@ it('retains the draft after conflict and requires an explicit new save', async (
     if (path === '/wiki/documents/1?store_id=integrated') return (++reads === 1 ? original : latest) as never;
     throw new Error(`unexpected ${path}`);
   });
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   await screen.findByRole('heading', { name: '서버' });
   fireEvent.click(screen.getByRole('button', { name: '편집' }));
@@ -83,7 +83,7 @@ it('shows saved revision diff and asks before deleting', async () => {
     if (options?.method === 'DELETE') return { status: 'deleted' } as never;
     throw new Error(`unexpected ${path}`);
   });
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   fireEvent.click(await screen.findByRole('button', { name: '편집' }));
   fireEvent.click(await screen.findByText('문서 관리'));
@@ -97,7 +97,7 @@ it('shows saved revision diff and asks before deleting', async () => {
 
 it('shows the legacy Wiki link without issuing integrated writes', async () => {
   mock.mockResolvedValueOnce({ store_id: 'legacy_external' } as never);
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   expect((await screen.findByRole('link', { name: '가족 Wiki' })).getAttribute('href')).toBe('/wiki/');
   expect(screen.queryByRole('button', { name: '저장' })).toBeNull();
 });
@@ -111,7 +111,7 @@ it('does not submit duplicate creates while a save is pending', async () => {
     if (path === '/wiki/documents') return [] as never;
     throw new Error(`unexpected ${path}`);
   });
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '새 문서 만들기' }));
   fireEvent.change(screen.getByLabelText('제목'), { target: { value: '제목' } });
   fireEvent.change(screen.getByLabelText('본문'), { target: { value: '본문' } });
@@ -134,7 +134,7 @@ it('loads and explicitly saves aliases using the current revision', async () => 
     if (path === '/wiki/documents/1/aliases?store_id=integrated') return [] as never;
     throw new Error(`unexpected ${path}`);
   });
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   fireEvent.click(await screen.findByRole('button', { name: '편집' }));
   fireEvent.click(await screen.findByText('문서 관리'));
@@ -146,14 +146,17 @@ it('loads and explicitly saves aliases using the current revision', async () => 
 });
 
 it('previews markdown safely while keeping the editable source intact', async () => {
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '새 문서 만들기' }));
   const editor = screen.getByLabelText('본문');
-  const source = '# 제목\n\n**굵게**\n\n<script>alert(1)</script>';
+  const source = '# 제목\n\n**굵게**\n\n- 첫 항목\n  - 하위 항목\n\n1. 번호 항목\n\n<script>alert(1)</script>';
   fireEvent.change(editor, { target: { value: source } });
   const preview = screen.getByRole('region', { name: '마크다운 미리보기' });
   expect(within(preview).getByRole('heading', { name: '제목' })).toBeTruthy();
   expect(within(preview).getByText('굵게').tagName).toBe('STRONG');
+  expect(within(preview).getByText('첫 항목').closest('ul')?.tagName).toBe('UL');
+  expect(within(preview).getByText('하위 항목').closest('ul')?.parentElement?.tagName).toBe('LI');
+  expect(within(preview).getByText('번호 항목').closest('ol')?.tagName).toBe('OL');
   expect(preview.querySelector('script')).toBeNull();
   expect((editor as HTMLTextAreaElement).value).toBe(source);
   fireEvent.click(screen.getByRole('button', { name: '미리보기 숨기기' }));
@@ -172,7 +175,7 @@ it('opens linked Wiki documents in place and protects unsaved edits', async () =
   });
   const navigate = vi.fn();
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-  render(<WikiManager onClose={() => {}} onNavigate={navigate} />);
+  render(<WikiManager onNavigate={navigate} />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   await screen.findByRole('link', { name: '두 번째로 이동' });
   fireEvent.click(screen.getByRole('button', { name: '편집' }));
@@ -188,7 +191,7 @@ it('opens linked Wiki documents in place and protects unsaved edits', async () =
 
 it('opens documents in reading mode and confirms before discarding an edit', async () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   expect(await screen.findByRole('heading', { name: '서버' })).toBeTruthy();
   expect(screen.getByText('Fedora')).toBeTruthy();
@@ -206,7 +209,7 @@ it('opens documents in reading mode and confirms before discarding an edit', asy
 
 it('returns to the current document without discarding its draft', async () => {
   const confirm = vi.spyOn(window, 'confirm');
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   fireEvent.click(await screen.findByRole('button', { name: '편집' }));
   fireEvent.change(screen.getByLabelText('본문'), { target: { value: '보관할 초안' } });
@@ -223,7 +226,7 @@ it('groups documents by category and expands search results even after a categor
     if (path === '/wiki/search?q=%EC%84%9C%EB%B2%84') return [original] as never;
     throw new Error(`unexpected ${path}`);
   });
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   const category = await screen.findByRole('button', { name: /general/ });
   expect(category.getAttribute('aria-expanded')).toBe('true');
   expect(screen.getByRole('button', { name: '서버' })).toBeTruthy();
@@ -246,7 +249,7 @@ it('keeps document management inside edit and discards unsaved alias changes on 
     if (path === '/wiki/documents/1/aliases?store_id=integrated') return ['기존 별칭'] as never;
     throw new Error(`unexpected ${path}`);
   });
-  render(<WikiManager onClose={() => {}} />);
+  render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   await screen.findByRole('heading', { name: '서버' });
   expect(screen.queryByText('문서 관리')).toBeNull();
