@@ -2286,7 +2286,7 @@ def test_opt_in_wiki_evidence_is_persisted_and_replayed(monkeypatch):
         async def __aexit__(self, *args): pass
         async def post(self, url, **kwargs):
             payloads.append(kwargs['json'])
-            return main.httpx.Response(200, request=main.httpx.Request('POST', url), json={'choices': [{'message': {'content': '답 [wiki:1] [wiki:999]'}, 'finish_reason': 'stop'}]})
+            return main.httpx.Response(200, request=main.httpx.Request('POST', url), json={'choices': [{'message': {'content': '답 [wiki:1] [wiki:999] [wiki:Fedora]'}, 'finish_reason': 'stop'}]})
     monkeypatch.setattr(main, 'resolve_gate_model', model)
     monkeypatch.setattr(main, 'fit_chat_payload', fit)
     monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
@@ -2306,6 +2306,7 @@ def test_opt_in_wiki_evidence_is_persisted_and_replayed(monkeypatch):
             message = response.json()['assistant_message']
             evidence = message['wiki_evidence']
             assert evidence['cited'] == [1] and evidence['invalid_citations'] == [999]
+            assert evidence['unrecognized_citations'] == ['[wiki:Fedora]']
             assert evidence['provided'][0]['revision'] == 1
             assert '참고자료 (' not in message['content']
             changed = client.put('/api/v1/wiki/documents/1?store_id=integrated', headers=headers,
@@ -2317,7 +2318,7 @@ def test_opt_in_wiki_evidence_is_persisted_and_replayed(monkeypatch):
             following = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers, json={'content': '다음 질문'})
             assert following.status_code == 200
             assistant_history = [item['content'] for item in payloads[-1]['messages'] if item['role'] == 'assistant']
-            assert assistant_history == ['답 [wiki:1] [wiki:999]']
+            assert assistant_history == ['답 [wiki:1] [wiki:999] [wiki:Fedora]']
     finally:
         directory.cleanup()
 
@@ -2330,7 +2331,7 @@ def test_streaming_wiki_evidence_is_returned_and_stored(monkeypatch):
         async def __aexit__(self, *args): pass
         def raise_for_status(self): pass
         async def aiter_lines(self):
-            yield 'data: {"choices":[{"delta":{"content":"답 [wiki:1]"},"finish_reason":"stop"}]}'
+            yield 'data: {"choices":[{"delta":{"content":"답 [wiki:1] [wiki:Fedora]"},"finish_reason":"stop"}]}'
             yield 'data: [DONE]'
     class Gate:
         def __init__(self, **kwargs): pass
@@ -2355,6 +2356,7 @@ def test_streaming_wiki_evidence_is_returned_and_stored(monkeypatch):
             assert 'event: done' in response.text and 'wiki_evidence' in response.text
             evidence = conversation_messages(client, cid, headers)[-1]['wiki_evidence']
             assert evidence['cited'] == [1]
+            assert evidence['unrecognized_citations'] == ['[wiki:Fedora]']
     finally:
         directory.cleanup()
 
@@ -2410,7 +2412,7 @@ def test_conversation_wiki_document_review_save_search_and_evidence(monkeypatch)
         async def post(self, url, **kwargs):
             captured.append(kwargs['json'])
             return main.httpx.Response(200, request=main.httpx.Request('POST', url), json={
-                'choices': [{'message': {'content': '냉각 설정은 liquid42입니다. [wiki:2]'}, 'finish_reason': 'stop'}]})
+                'choices': [{'message': {'content': '편집 확인값은 fixture-314입니다. [wiki:2] [wiki:BC250 자료]'}, 'finish_reason': 'stop'}]})
     monkeypatch.setattr(main, 'resolve_gate_model', model)
     monkeypatch.setattr(main, 'fit_chat_payload', fit)
     monkeypatch.setattr(main, 'start_title_task', lambda *_args: None)
@@ -2426,14 +2428,21 @@ def test_conversation_wiki_document_review_save_search_and_evidence(monkeypatch)
             cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
             original = 'BC250 자료\n' + ('긴 설명. ' * 350) + '\n냉각설정 liquid42'
             with connect(main.get_settings().database_path) as db:
+                db.execute("INSERT INTO messages VALUES ('prior-user',?,'user','BC250이 무엇인가요?','2025-12-31')", (cid,))
+                db.execute("INSERT INTO messages VALUES ('prior-assistant',?,'assistant','추가 정보를 주시면 더 정확하게 답변해 드릴 수 있습니다!','2025-12-31T01:00')", (cid,))
+                db.execute("""INSERT INTO generation_requests(id,conversation_id,user_message_id,assistant_message_id,status,queued_at,created_at,updated_at)
+                              VALUES ('prior-generation',?,'prior-user','prior-assistant','completed','t','t','t')""", (cid,))
                 db.execute("INSERT INTO messages VALUES ('original',?,'user',?,'2026-01-01')", (cid, original))
+            messages = conversation_messages(client, cid, headers)
+            assert [item['id'] for item in messages][-2:] == ['prior-assistant', 'original']
+            assert messages[-2]['generation_completed'] is True
             docs = '/api/v1/wiki/documents'
             assert client.post(docs, headers=headers, json={'title': 'BC250 자료', 'content': '기존 문서'}).status_code == 201
             candidates = client.get('/api/v1/wiki/message-drafts/candidates', headers=headers, params={'title': 'BC250 자료'}).json()
             assert [item['id'] for item in candidates['matches']] == [1]
             assert client.get(docs, headers=headers).json()[0]['title'] == 'BC250 자료'
             body = {'request_id': str(uuid.uuid4()), 'conversation_id': cid, 'message_id': 'original',
-                    'title': 'BC250 자료', 'content': original + '\n직접 편집한 내용', 'source': '직접 제공',
+                    'title': 'BC250 자료', 'content': original + '\n편집 확인값: fixture-314', 'source': '직접 제공',
                     'action': 'create', 'acknowledged_duplicate_ids': [1]}
             assert client.post('/api/v1/wiki/message-drafts/save', json=body).status_code == 401
             first = client.post('/api/v1/wiki/message-drafts/save', headers=headers, json=body)
@@ -2443,12 +2452,32 @@ def test_conversation_wiki_document_review_save_search_and_evidence(monkeypatch)
             saved = client.get('/api/v1/wiki/documents/2?store_id=integrated', headers=headers).json()
             assert saved['source'] == '직접 제공' and saved['content'] == body['content']
             response = client.post(f'/api/v1/conversations/{cid}/messages', headers=headers,
-                                   json={'content': 'BC250 냉각설정', 'wiki': True, 'wiki_evidence': True})
+                                   json={'content': 'BC250 자료의 편집 확인값은 무엇인가요?', 'wiki': True, 'wiki_evidence': True})
             assert response.status_code == 200
             evidence = response.json()['assistant_message']['wiki_evidence']
             assert 2 in [item['id'] for item in evidence['retrieved']]
-            assert any('liquid42' in item['excerpt'] for item in evidence['provided'] if item['id'] == 2)
+            assert any('fixture-314' in item['excerpt'] for item in evidence['provided'] if item['id'] == 2)
             assert evidence['cited'] == [2]
-            assert 'liquid42' in captured[-1]['messages'][-1]['content']
+            assert evidence['unrecognized_citations'] == ['[wiki:BC250 자료]']
+            assert 'fixture-314' in captured[-1]['messages'][-1]['content']
+    finally:
+        directory.cleanup()
+
+
+def test_message_list_marks_only_completed_assistant_generations(monkeypatch):
+    client, directory = make_client(monkeypatch)
+    try:
+        with client:
+            headers = {'Authorization': 'Bearer client-key'}
+            cid = client.post('/api/v1/conversations', headers=headers, json={}).json()['id']
+            with connect(main.get_settings().database_path) as db:
+                for mid, role, stamp in [('u', 'user', '1'), ('done', 'assistant', '2'), ('unknown', 'assistant', '3')]:
+                    db.execute('INSERT INTO messages VALUES (?,?,?,?,?)', (mid, cid, role, 'text', stamp))
+                db.execute("""INSERT INTO generation_requests(id,conversation_id,user_message_id,assistant_message_id,status,queued_at,created_at,updated_at)
+                              VALUES ('g',?,'u','done','completed','t','t','t')""", (cid,))
+            rows = conversation_messages(client, cid, headers)
+            assert 'generation_completed' not in rows[0]
+            assert rows[1]['generation_completed'] is True
+            assert rows[2]['generation_completed'] is False
     finally:
         directory.cleanup()

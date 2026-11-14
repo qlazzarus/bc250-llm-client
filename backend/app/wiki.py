@@ -107,8 +107,22 @@ def excerpts(documents, query):
             while at >= 0 and len(positions) < 32:
                 positions.append(offsets[at] if offsets is not None else at)
                 at = lowered.find(term, at + len(term))
+            matched_term = term
+            # Only try a Korean particle when the original term was absent.
+            # Require a standalone stem of at least two Hangul syllables in the
+            # document; never broaden document retrieval or stored text.
+            if not positions and re.fullmatch(r'[가-힣]{2,}[은는이가을를]', term):
+                stem = term[:-1]
+                boundary = re.compile(r'(?<![가-힣a-z0-9])' + re.escape(stem) + r'(?![가-힣a-z0-9])')
+                for match in boundary.finditer(lowered):
+                    at = match.start()
+                    positions.append(offsets[at] if offsets is not None else at)
+                    if len(positions) == 32:
+                        break
+                if positions:
+                    matched_term = stem
             if positions:
-                hits.append((term, positions, order))
+                hits.append((matched_term, positions, order))
         start = 0
         if hits:
             # Prefer a non-title term that occurs less often; use later query terms

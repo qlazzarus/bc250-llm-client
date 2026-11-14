@@ -3,6 +3,24 @@ import json
 import re
 
 
+def _unrecognized_citations(answer):
+    """Record bounded malformed wiki markers without treating titles as IDs."""
+    markers = []
+    seen = set()
+    pattern = re.compile(r'\[wiki\b[^\]\r\n\[]*(?:\]|(?=\[|\r|\n|$))', re.IGNORECASE)
+    for match in pattern.finditer(answer):
+        raw = match.group(0).rstrip()
+        if re.fullmatch(r'\[wiki:[1-9][0-9]{0,9}\]', raw):
+            continue
+        display = raw if len(raw) <= 160 else raw[:157] + '...'
+        if display not in seen:
+            seen.add(display)
+            markers.append(display)
+        if len(markers) == 20:
+            break
+    return markers
+
+
 def evidence_snapshot(found, sources, memories, payload, answer, store_id):
     retrieved = []
     for item in found[:3]:
@@ -27,4 +45,5 @@ def evidence_snapshot(found, sources, memories, payload, answer, store_id):
             'cited': [value for value in cited_ids if value in provided_ids],
             'memory_cited': [value for value in cited_ids if value in memory_ids],
             'invalid_citations': [value for value in cited_ids if value not in provided_ids and value not in memory_ids],
+            'unrecognized_citations': _unrecognized_citations(answer),
             'evidence_status': 'citation_only'}

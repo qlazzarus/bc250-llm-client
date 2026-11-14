@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MessageList } from '../src/components/MessageList';
 import { WikiDraftDialog } from '../src/main';
 import type { Message } from '../src/api';
+import { useState } from 'react';
 
 vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: ({ count }: { count: number }) => ({ getTotalSize: () => count * 120, getVirtualItems: () => Array.from({ length: count }, (_, index) => ({ index, start: index * 120 })), measureElement: () => {}, scrollToIndex: () => {} }) }));
 beforeEach(() => { HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); }; HTMLDialogElement.prototype.close = vi.fn(); vi.stubGlobal('requestAnimationFrame', () => 1); });
@@ -17,7 +18,11 @@ it('offers a candidate at 1000 characters and a manual entry only for persisted 
     { id: 'answer', role: 'assistant', content: 'c'.repeat(12000), created_at: '' },
     { id: 'local-pending', role: 'user', content: 'pending', created_at: '' },
   ];
-  render(<MessageList mode="quick" messages={messages} hasMore={false} onLoadOlder={async () => {}} scrollSignal={0} conversationId="c" imageCapabilities={undefined} imageDrafts={{}} onEnsureImageDraft={async () => {}} onUpdateImageDraft={() => {}} onPersistImageDraft={async () => {}} onSubmitImageJob={async () => { throw Error(); }} imageJobs={[]} onCancelImageJob={async () => {}} onWikiDraft={open} />);
+  function List() {
+    const [dismissed, setDismissed] = useState(new Set<string>());
+    return <MessageList mode="quick" messages={messages} hasMore={false} onLoadOlder={async () => {}} scrollSignal={0} conversationId="c" imageCapabilities={undefined} imageDrafts={{}} onEnsureImageDraft={async () => {}} onUpdateImageDraft={() => {}} onPersistImageDraft={async () => {}} onSubmitImageJob={async () => { throw Error(); }} imageJobs={[]} onCancelImageJob={async () => {}} onWikiDraft={open} dismissedWikiProposals={dismissed} onDismissWikiProposal={(conversationId, id) => setDismissed(current => new Set(current).add(JSON.stringify([conversationId, id])))} />;
+  }
+  render(<List />);
   expect(screen.getAllByRole('button', { name: '공유 Wiki에 저장' })).toHaveLength(2);
   fireEvent.click(screen.getByRole('button', { name: '초안 검토' })); expect(open).toHaveBeenCalledWith(messages[1]);
   fireEvent.click(screen.getByRole('button', { name: '문서 후보 닫기' }));
@@ -100,4 +105,48 @@ it('prevents duplicate submission while saving and supports Escape cancellation'
   await screen.findByText(/저장 완료/);
   fireEvent(view.container.querySelector('dialog')!, new Event('cancel', { bubbles: false, cancelable: true }));
   expect(close).toHaveBeenCalledOnce();
+});
+
+it('only emphasizes a long message after a known completed adjacent assistant request', () => {
+  const open = vi.fn();
+  const source: Message = { id: 'u', role: 'user', content: '자료 '.repeat(400), created_at: '' };
+  const assistant: Message = { id: 'a', role: 'assistant', content: '추가 정보를 주시면 더 정확하게 답변해 드릴 수 있습니다!', created_at: '', generation_completed: true };
+  const base = { mode: 'quick' as const, hasMore: false, onLoadOlder: async () => {}, scrollSignal: 0, conversationId: 'c', imageCapabilities: undefined,
+    imageDrafts: {}, onEnsureImageDraft: async () => {}, onUpdateImageDraft: () => {}, onPersistImageDraft: async () => {},
+    onSubmitImageJob: async () => { throw Error(); }, imageJobs: [], onCancelImageJob: async () => {}, onWikiDraft: open,
+    dismissedWikiProposals: new Set<string>(), onDismissWikiProposal: vi.fn() };
+  const view = render(<MessageList {...base} messages={[assistant, source]} />);
+  expect(screen.getByRole('region', { name: '공유 Wiki 저장 제안' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '저장 내용 확인' }));
+  expect(open).toHaveBeenCalledWith(source);
+  view.rerender(<MessageList {...base} messages={[{ ...assistant, generation_completed: false }, source]} />);
+  expect(screen.queryByRole('region', { name: '공유 Wiki 저장 제안' })).toBeNull();
+  expect(screen.getByRole('button', { name: '초안 검토' })).toBeTruthy();
+  view.rerender(<MessageList {...base} messages={[{ ...assistant, generation_completed: undefined }, source]} />);
+  expect(screen.queryByRole('region', { name: '공유 Wiki 저장 제안' })).toBeNull();
+  view.rerender(<MessageList {...base} messages={[assistant, { ...source, id: 'local-pending' }]} />);
+  expect(screen.queryByRole('region', { name: '공유 Wiki 저장 제안' })).toBeNull();
+});
+
+it('distinguishes searched, provided, valid ID and unrecognized citations, including older snapshots', () => {
+  const base = { mode: 'quick' as const, hasMore: false, onLoadOlder: async () => {}, scrollSignal: 0, conversationId: 'c', imageCapabilities: undefined,
+    imageDrafts: {}, onEnsureImageDraft: async () => {}, onUpdateImageDraft: () => {}, onPersistImageDraft: async () => {},
+    onSubmitImageJob: async () => { throw Error(); }, imageJobs: [], onCancelImageJob: async () => {}, onWikiDraft: () => {},
+    dismissedWikiProposals: new Set<string>(), onDismissWikiProposal: () => {} };
+  const evidence = { version: 1, retrieved: [{ id: 1, title: '전달 문서', revision: 1, store_id: 'integrated' }, { id: 2, title: '예산 제외 문서', revision: 1, store_id: 'integrated' }],
+    provided: [{ id: 1, title: '전달 문서', excerpt: '참고 발췌' }], memory_provided: [], cited: [1], invalid_citations: [99], evidence_status: 'citation_only' as const,
+    unrecognized_citations: ['[wiki:전달 문서]', '[wiki:]'] };
+  const answer: Message = { id: 'a', role: 'assistant', content: '답 [wiki:전달 문서]', created_at: '', wiki_evidence: evidence };
+  const view = render(<MessageList {...base} messages={[answer]} />);
+  expect(screen.getByText(/검색 2건 · 모델에 전달 1건/)).toBeTruthy();
+  expect(screen.getByText(/검색됐으나 모델에 전달되지 않은 문서: 예산 제외 문서/)).toBeTruthy();
+  expect(screen.getByText(/전달된 문서 ID 인용: 1/)).toBeTruthy();
+  expect(screen.getByText(/전달하지 않은 문서 ID 인용: 99/)).toBeTruthy();
+  expect(screen.getByText(/확인할 수 없는 인용 형식/)).toBeTruthy();
+  expect(screen.getByText('[wiki:전달 문서]')).toBeTruthy();
+  expect(screen.getByText(/내용 일치는 검증하지 않았습니다/)).toBeTruthy();
+  const oldEvidence = { ...evidence, unrecognized_citations: undefined };
+  view.rerender(<MessageList {...base} messages={[{ ...answer, wiki_evidence: oldEvidence }]} />);
+  expect(screen.queryByText(/확인할 수 없는 인용 형식/)).toBeNull();
+  expect(screen.getByText(/이전 기록에는 인용 형식 검사 결과가 없습니다/)).toBeTruthy();
 });

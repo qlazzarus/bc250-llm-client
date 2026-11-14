@@ -8,8 +8,8 @@ export type ResponseLength = 'short' | 'medium' | 'long';
 export type ModeSettings = Record<string, string>;
 export type WikiEvidence = { version: number; retrieved: { id: number; title: string; revision: number | null; store_id: string }[];
   provided: { id: number; title: string; excerpt: string }[]; memory_provided: { document_id: number; revision: string }[];
-  cited: number[]; memory_cited?: number[]; invalid_citations: number[]; evidence_status: 'citation_only' };
-export type Message = { id: string; role: 'user' | 'assistant'; content: string; created_at: string; wiki_evidence?: WikiEvidence };
+  cited: number[]; memory_cited?: number[]; invalid_citations: number[]; unrecognized_citations?: string[]; evidence_status: 'citation_only' };
+export type Message = { id: string; role: 'user' | 'assistant'; content: string; created_at: string; wiki_evidence?: WikiEvidence; generation_completed?: boolean };
 export type MessagePage = { data: Message[]; next_before: string | null; has_more: boolean };
 export type Conversation = {
   id: string; title: string; title_pending: boolean; mode: Mode; context_policy: 'none' | 'recent'; mode_settings: ModeSettings;
@@ -18,7 +18,7 @@ export type Conversation = {
   created_at: string; updated_at: string;
 };
 export type Generation = {
-  id: string; status: 'pending' | 'completed' | 'failed' | 'cancelled'; finish_reason: string | null;
+  id: string; user_message_id?: string; status: 'pending' | 'completed' | 'failed' | 'cancelled'; finish_reason: string | null;
   error: { code: string; message: string } | null; model_id: string | null; requested_max_tokens: number | null;
   estimated_input_tokens: number | null; usage: Record<string, number> | null; queue_duration_ms: number | null; generation_duration_ms: number | null;
 };

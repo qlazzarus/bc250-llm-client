@@ -104,7 +104,7 @@ type WikiCandidate = { id: number; title: string; revision: number; category: st
 type WikiCandidateDocument = WikiCandidate & { content: string; source?: string };
 type WikiSavePayload = { request_id: string; conversation_id: string; message_id: string; title: string; content: string; source: string; action: 'create' | 'update'; document_id: number | null; expected_revision: number | null; acknowledged_duplicate_ids: number[] };
 
-export function WikiDraftDialog({ source, onClose }: { source: WikiMessageDraft; onClose: () => void }) {
+export function WikiDraftDialog({ source, onClose, onSaved }: { source: WikiMessageDraft; onClose: () => void; onSaved?: () => void }) {
   const initialTitle = Array.from(source.original.split(/\r?\n/).map(line => line.trim()).find(Boolean)?.replace(/\s+/g, ' ') || '대화 자료').slice(0, 200).join('');
   const [title, setTitle] = useState(initialTitle);
   const [content, setContent] = useState(source.original);
@@ -146,7 +146,7 @@ export function WikiDraftDialog({ source, onClose }: { source: WikiMessageDraft;
     const timeout = window.setTimeout(() => controller.abort(), 15000);
     try {
       const saved = await request<{ id: number; revision: number; status: string }>('/wiki/message-drafts/save', { method: 'POST', body: JSON.stringify(payload), signal: controller.signal });
-      setResult(saved); setPending(undefined);
+      setResult(saved); setPending(undefined); onSaved?.();
     } catch (caught) {
       if (caught instanceof ApiError && caught.status < 500) {
         setPending(undefined);
@@ -210,6 +210,8 @@ export function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
   const [wikiDraft, setWikiDraft] = useState<WikiMessageDraft>();
+  const [dismissedWikiProposals, setDismissedWikiProposals] = useState<Set<string>>(() => new Set());
+  const dismissWikiProposal = (conversationId: string, messageId: string) => setDismissedWikiProposals(current => new Set(current).add(JSON.stringify([conversationId, messageId])));
   const [imageCapabilities, setImageCapabilities] = useState<ImageCapabilities>();
   const [imageDrafts, setImageDrafts] = useState<Record<string, ImageDraftEditor>>({});
   const [imageJobs, setImageJobs] = useState<Record<string, ImageJob[]>>({});
@@ -489,6 +491,13 @@ export function App() {
           scheduleStreamFlush();
         }
         if (name === 'done') {
+          const completed = data.generation as Generation | undefined;
+          const assistant = data.assistant_message as Message | undefined;
+          if (completed?.status === 'completed' && typeof completed.user_message_id === 'string' && assistant?.role === 'assistant' && typeof assistant.id === 'string') {
+            if (animationFrame !== undefined) { cancelAnimationFrame(animationFrame); animationFrame = undefined; }
+            const userId = completed.user_message_id;
+            setActive(current => current?.id === conversationId ? { ...current, messages: current.messages.map(message => message.id === 'local-' + requestId ? { ...message, id: userId } : message.id === streamId ? { ...assistant, generation_completed: true } : message) } : current);
+          }
           if (activeIdRef.current === conversationId) {
             setNotice((data.generation as Generation | undefined)?.finish_reason === 'length' ? '답변 길이 제한에 도달했습니다.' : '');
             refreshWikiMemoryRef.current();
@@ -578,7 +587,7 @@ export function App() {
         <MessageList mode={active.mode} messages={active.messages} hasMore={active.hasMore} onLoadOlder={loadOlderMessages} scrollSignal={scrollSignal} conversationId={active.id}
           imageCapabilities={imageCapabilities} imageDrafts={imageDrafts} onEnsureImageDraft={ensureImageDraft}
           onUpdateImageDraft={updateImageDraft} onPersistImageDraft={persistImageDraft} onSubmitImageJob={submitImageJob}
-          imageJobs={imageJobs[active.id] || []} onCancelImageJob={cancelImageJob} onWikiDraft={message => {
+          imageJobs={imageJobs[active.id] || []} onCancelImageJob={cancelImageJob} dismissedWikiProposals={dismissedWikiProposals} onDismissWikiProposal={dismissWikiProposal} onWikiDraft={message => {
             if (message.role === 'user' && !message.id.startsWith('local-') && active.messages.some(item => item.id === message.id && item.role === 'user' && item.content === message.content))
               setWikiDraft({ conversationId: active.id, messageId: message.id, original: message.content });
           }} />
@@ -601,7 +610,7 @@ export function App() {
         {(notice || modelsUnavailable) && <div className="notice">{notice}{modelsUnavailable && <> 모델 목록을 확인하지 못했습니다. 자동으로 다시 확인합니다. <button className="plain" onClick={() => void refreshModels()}>모델 다시 조회</button></>}{retryInfo && <button className="plain" disabled={busy || modelsUnavailable} onClick={() => void retry()}>재시도</button>}</div>}
       </> : <div className="empty"><h2>새 대화를 시작하세요</h2><button onClick={() => setNewDialog(true)}>대화 만들기</button></div>)}
     </section>
-    {wikiDraft && <WikiDraftDialog source={wikiDraft} onClose={() => setWikiDraft(undefined)} />}
+    {wikiDraft && <WikiDraftDialog source={wikiDraft} onClose={() => setWikiDraft(undefined)} onSaved={() => dismissWikiProposal(wikiDraft.conversationId, wikiDraft.messageId)} />}
     {newDialog && <NewConversationDialog onClose={() => setNewDialog(false)} onCreate={createConversation} />}
     {settingsDialog && active && <ConversationSettings conversation={active} onClose={() => setSettingsDialog(false)} onSave={saveConversation} />}
   </main>;

@@ -90,3 +90,77 @@ def test_casefold_offsets_keep_exact_original_passage():
     passage = excerpts([{'id': 1, 'title': '문서', 'content': text}], '고유항목')[0]['excerpt']
     assert '고유항목 결과값' in passage
     assert passage in text
+
+
+@pytest.mark.parametrize('particle', ['은', '는', '이', '가', '을', '를', ''])
+def test_question_particle_finds_saved_passage_in_actual_prompt(long_wiki, particle):
+    db, doc = long_wiki
+    question = f'BC250 서버의 백업경로{particle} 무엇인가요?'
+    found = search_documents(db, store_id='integrated', query=question)
+    assert found and found[0]['id'] == doc['id']
+    sources = excerpts(found, question)
+    assert '/srv/latebackup' in sources[0]['excerpt']
+    payload = {'messages': [{'role': 'user', 'content': wiki_prompt_content(question, sources, [], evidence=True)}]}
+    evidence = evidence_snapshot(found, sources, [], payload, f'[wiki:{doc["id"]}]', 'integrated')
+    assert '/srv/latebackup' in payload['messages'][0]['content']
+    assert evidence['provided'][0]['excerpt'] == sources[0]['excerpt']
+    assert evidence['cited'] == [doc['id']]
+
+
+def test_observed_question_finds_edited_fact_not_title_or_repeated_words(tmp_path):
+    path = str(tmp_path / 'observed.db'); initialize(path)
+    db = connect(path)
+    title = 'D05 검증용 BC250 자료 20261114'
+    content = title + '\n' + ('자료 설명: 이 문장은 공유 Wiki의 긴 메시지 후보와 편집 화면을 확인하기 위한 테스트 문장입니다.\n' * 18) + '편집 확인값: D05-편집-314'
+    with db:
+        db.execute('BEGIN IMMEDIATE')
+        doc = create_document(db, store_id='integrated', title=title, content=content)
+        hidden = create_document(db, store_id='integrated', title='비공개 격리', content='편집 확인값: secret')
+        db.execute("INSERT INTO memory_document_quarantine VALUES ('integrated',?,'owned','t','t')", (hidden['id'],))
+    try:
+        for question in ['D05 검증용 BC250 자료의 편집 확인값은 무엇인가요?', 'D05 검증용 BC250 자료: 편집 확인값']:
+            found = search_documents(db, store_id='integrated', query=question)
+            assert [item['id'] for item in found] == [doc['id']]
+            source = excerpts(found, question)
+            assert 'D05-편집-314' in source[0]['excerpt']
+            assert 'D05-편집-314' in wiki_prompt_content(question, source, [], evidence=True)
+    finally:
+        db.close()
+
+
+def test_particle_fallback_requires_standalone_word_and_two_syllable_stem():
+    # Neither a substring of a longer name nor a single-character stem is used.
+    content = '제목단서 beginning\n' + '가' * 2200 + '\n서별명 확인값추가'
+    doc = {'id': 1, 'title': '제목단서', 'content': content}
+    for question in ['제목단서 서는', '제목단서 확인값은']:
+        passage = excerpts([doc], question)[0]['excerpt']
+        assert 'beginning' in passage and '확인값추가' not in passage
+    name_content = '제목단서 beginning\n' + '가' * 2200 + '\n서: 잘못된 위치'
+    assert '잘못된 위치' not in excerpts([{'id': 1, 'title': '제목단서', 'content': name_content}], '제목단서 서울')[0]['excerpt']
+
+
+def test_exact_term_wins_over_particle_fallback():
+    content = '제목\n확인값은 원래 표기입니다.\n' + '가' * 2500 + '\n확인값 다른 뜻'
+    passage = excerpts([{'id': 1, 'title': '제목', 'content': content}], '확인값은')[0]['excerpt']
+    assert '원래 표기' in passage and '다른 뜻' not in passage
+
+
+def test_particle_fallback_preserves_offsets_in_100000_character_document():
+    content = 'ß' * 1200 + '가' * (100000 - 1200 - len('백업경로: target42')) + '백업경로: target42'
+    assert len(content) == 100000
+    source = excerpts([{'id': 1, 'title': '문서', 'content': content}], '백업경로를')[0]['excerpt']
+    # The boundary rule refuses a match embedded in a longer Korean word.
+    assert 'target42' not in source
+    content = content[:-(len('백업경로: target42') + 1)] + '\n백업경로: target42'
+    assert len(content) == 100000
+    source = excerpts([{'id': 1, 'title': '문서', 'content': content}], '백업경로를')[0]['excerpt']
+    assert '백업경로: target42' in source and source in content and len(source) <= 1000
+
+
+def test_particle_fallback_does_not_expand_document_search(long_wiki):
+    db, doc = long_wiki
+    assert search_documents(db, store_id='integrated', query='백업경로를') == []
+    # Once retrieved by a specific anchor, the same particle may guide the excerpt.
+    found = search_documents(db, store_id='integrated', query='BC250 백업경로를')
+    assert found[0]['id'] == doc['id']
+    assert '/srv/latebackup' in excerpts(found, 'BC250 백업경로를')[0]['excerpt']
