@@ -70,11 +70,13 @@ function NewConversationDialog({ onClose, onCreate }: { onClose: () => void; onC
   </form></Modal>;
 }
 
-function ConversationSettings({ conversation, onClose, onSave }: { conversation: Detail; onClose: () => void; onSave: (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => Promise<void> }) {
+function ConversationSettings({ conversation, wikiEnabled, wikiAutoUpdate, onSaveWiki, onClose, onSave }: { conversation: Detail; wikiEnabled: boolean; wikiAutoUpdate: boolean; onSaveWiki: (search: boolean, auto: boolean) => void; onClose: () => void; onSave: (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => Promise<void> }) {
   const [title, setTitle] = useState(conversation.title);
   const [responseLength, setResponseLength] = useState<ResponseLength>(conversation.response_length);
   const [settings, setSettings] = useState<ModeSettings>(conversation.mode_settings);
   const [summary, setSummary] = useState(conversation.summary);
+  const [wikiSearch, setWikiSearch] = useState(wikiEnabled);
+  const [wikiAuto, setWikiAuto] = useState(wikiAutoUpdate);
   const [error, setError] = useState('');
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -82,6 +84,7 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
       await onSave(conversation.mode === 'image_prompt'
         ? { ...(title !== conversation.title ? { title } : {}) }
         : { ...(title !== conversation.title ? { title } : {}), response_length: responseLength, mode_settings: settings, ...(summary !== conversation.summary ? { summary } : {}) });
+      if (conversation.mode === 'quick') onSaveWiki(wikiSearch, wikiAuto);
       onClose();
     }
     catch (caught) { setError(caught instanceof Error ? caught.message : '설정을 저장하지 못했습니다.'); }
@@ -95,6 +98,11 @@ function ConversationSettings({ conversation, onClose, onSave }: { conversation:
     </select></label>}
     {conversation.mode === 'image_prompt' && <p className="muted">매 요청은 독립적으로 작성됩니다. 원하는 장면을 전체 문장으로 입력하세요. 기존 기록은 보이지만 생성에 사용되지 않습니다.</p>}
     {conversation.mode !== 'image_prompt' && <ModeFields mode={conversation.mode} value={settings} onChange={setSettings} />}
+    {conversation.mode === 'quick' && <fieldset className="wiki-settings"><legend>공유 Wiki</legend>
+      <label className="wiki-setting-option"><input type="checkbox" checked={wikiSearch} onChange={event => setWikiSearch(event.target.checked)} /><span><b>Wiki 검색 참고</b><small>답변할 때 공유 Wiki에서 관련 문서를 찾습니다.</small></span></label>
+      <label className="wiki-setting-option"><input type="checkbox" checked={wikiAuto} onChange={event => setWikiAuto(event.target.checked)} /><span><b>Wiki 자동 기억</b><small>켜면 사용자 발언에서 선택된 원문을 공유 Wiki에 저장할 수 있습니다. 명시적인 기억 요청은 꺼져 있어도 처리합니다.</small></span></label>
+      <small className="muted">이 옵션은 현재 브라우저의 모든 일반 대화에 적용됩니다.</small>
+    </fieldset>}
     {conversation.mode !== 'image_prompt' && <label>장기 기억 요약
       <textarea value={summary} maxLength={12000} onChange={event => setSummary(event.target.value)} placeholder="자동 요약된 대화의 핵심 내용입니다." />
       <small className="muted">{conversation.summary_status === 'pending' || conversation.summary_status === 'running' ? '장기 기억을 정리하고 있습니다. 저장하면 현재 자동 요약 작업을 취소합니다.' : '필요하면 직접 수정할 수 있습니다.'}</small>
@@ -211,7 +219,7 @@ export function App() {
   const [wikiView, setWikiView] = useState(false);
   const [wikiVisited, setWikiVisited] = useState(false);
   const [wikiDocumentId, setWikiDocumentId] = useState<number>();
-  const [wikiEnabled, setWikiEnabled] = useState(() => { try { return localStorage.getItem('bc250-wiki-search') === 'true'; } catch { return false; } });
+  const [wikiEnabled, setWikiEnabled] = useState(() => { try { return localStorage.getItem('bc250-wiki-search') !== 'false'; } catch { return true; } });
   const [wikiAutoUpdate, setWikiAutoUpdate] = useState(() => { try { return localStorage.getItem('bc250-wiki-auto') !== 'false'; } catch { return true; } });
   const [wikiMemory, setWikiMemory] = useState<WikiMemoryJob[]>([]);
   const [newDialog, setNewDialog] = useState(false);
@@ -601,11 +609,11 @@ export function App() {
   };
 
 
-  return <ThemeProvider theme={appTheme}><main className="layout">
-    <aside className="workspace-sidebar"><h1><span className="brand-mark" aria-hidden="true">✳</span><span>BC-250<small>개인 AI 워크스페이스</small></span></h1><button className="mobile-menu-toggle plain" aria-expanded={menuOpen} aria-controls="mobile-workspace-menu" aria-label="메뉴 열기" onClick={() => setMenuOpen(value => !value)}><Menu size={18} aria-hidden="true" />{menuOpen ? '닫기' : '메뉴'}</button><button className="new-chat-button" onClick={() => { setMenuOpen(false); setNewDialog(true); }}><Plus size={18} aria-hidden="true" /> 새 대화</button>
+  return <ThemeProvider theme={appTheme}><main className={'layout' + (wikiView ? ' wiki-mode' : '')}>
+    <aside className="workspace-sidebar"><h1><span className="brand-mark" aria-hidden="true">✳</span><span className="sidebar-brand-text">BC-250<small>개인 AI 워크스페이스</small></span></h1><button className="mobile-menu-toggle plain" aria-expanded={menuOpen} aria-controls="mobile-workspace-menu" aria-label="메뉴 열기" onClick={() => setMenuOpen(value => !value)}><Menu size={18} aria-hidden="true" /><span className="sidebar-action-label">{menuOpen ? '닫기' : '메뉴'}</span></button><button className="new-chat-button" aria-label="새 대화" onClick={() => { setMenuOpen(false); setNewDialog(true); }}><Plus size={18} aria-hidden="true" /><span className="sidebar-action-label">새 대화</span></button>
       <nav id="conversation-nav" className={menuOpen ? 'mobile-open' : ''} aria-label="대화 목록">{conversations.map(conversation => <a role="button" href={'#/chat/' + encodeURIComponent(conversation.id)} className={active?.id === conversation.id && !systemView && !wikiView ? 'selected' : ''} key={conversation.id} onClick={event => { event.preventDefault(); setMenuOpen(false); void loadConversation(conversation.id, true).catch(error => setNotice(error.message)); }}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></a>)}</nav>
-      <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); history.pushState(null, '', '#/wiki'); }}><BookOpen size={17} aria-hidden="true" /> 공유 Wiki</button>
-      <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} onClick={() => { setMenuOpen(false); void showSystem(); }}><Activity size={17} aria-hidden="true" /> 시스템 상태</button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
+      <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} aria-label="공유 Wiki" onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); history.pushState(null, '', '#/wiki'); }}><BookOpen size={17} aria-hidden="true" /><span className="sidebar-action-label">공유 Wiki</span></button>
+      <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} aria-label="시스템 상태" onClick={() => { setMenuOpen(false); void showSystem(); }}><Activity size={17} aria-hidden="true" /><span className="sidebar-action-label">시스템 상태</span></button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
     </aside>
     <Drawer className="mobile-workspace-drawer" anchor="left" open={menuOpen} onClose={() => setMenuOpen(false)} slotProps={{ paper: { id: 'mobile-workspace-menu', 'aria-label': '워크스페이스 메뉴' } }}>
       <div className="drawer-heading"><div><span className="brand-mark" aria-hidden="true">✳</span><strong>BC-250</strong></div><button type="button" className="drawer-close" aria-label="메뉴 닫기" onClick={() => setMenuOpen(false)}><X size={20} /></button></div>
@@ -621,7 +629,7 @@ export function App() {
       {wikiVisited && <div className="wiki-manager-host" hidden={!wikiView}><WikiManager documentId={wikiDocumentId} onNavigate={id => { setWikiDocumentId(id); history.pushState(null, '', id ? '#/wiki/' + id : '#/wiki'); }} onClose={() => { setWikiView(false); history.pushState(null, '', active ? '#/chat/' + encodeURIComponent(active.id) : '#/'); }} /></div>}
       {!wikiView && (systemView ? <SystemStatus gate={gate} gateError={gateError} loading={gateLoading} models={models} modelsUnavailable={modelsUnavailable} onRefresh={() => { void showSystem(); }} onSwitchSucceeded={refreshModels} />
       : active ? <><header className="chat-header"><div><h2>{active.title}</h2><p className="muted">{MODE_META[active.mode].label} · {active.mode === 'image_prompt' ? '영어 JSON 설정 · 매 요청 독립 작성' : `${LENGTH_LABEL[active.response_length]} · ${active.context_policy === 'none' ? '이전 대화 미포함' : '최근 대화 포함'}`}</p></div><a className="permalink" href={'#/chat/' + encodeURIComponent(active.id)}><Link2 size={16} aria-hidden="true" /> 대화 링크</a><button className="header-action" onClick={() => setSettingsDialog(true)} disabled={busy}><Settings size={16} aria-hidden="true" /> 설정</button><button className="danger header-action" disabled={busy} onClick={() => void deleteConversation(active)}><Trash2 size={16} aria-hidden="true" /> 삭제</button></header>
-        {active.mode !== 'image_prompt' && <div className="mode-banner" role="status"><span className="mode-banner-copy">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다.</span><span className="mode-banner-short">최근 대화{active.summary ? '와 장기 기억' : ''} 참고 중</span> <button className="plain" onClick={() => setSettingsDialog(true)} disabled={busy}>기억 확인</button></div>}
+        {active.mode !== 'image_prompt' && <div className="mode-banner" role="status"><span className="mode-banner-copy">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다. 기억은 대화 설정에서 확인할 수 있습니다.</span><span className="mode-banner-short">최근 대화{active.summary ? '와 장기 기억' : ''} 참고 중</span></div>}
         {active.mode === 'image_prompt' && <div className="mode-banner"><span className="mode-banner-copy">매 요청은 독립적으로 작성됩니다. 결과 카드에서 모델·프리셋·프롬프트·세부 옵션을 확인·수정한 뒤, 원할 때만 이미지 생성 요청을 누르세요.</span><span className="mode-banner-short">매 요청은 독립적으로 작성됩니다.</span></div>}
         {active.mode !== 'image_prompt' && active.summary_status !== 'idle' && <div className={active.summary_status === 'failed' ? 'notice error' : 'notice'}>{active.summary_status === 'failed' ? (active.summary_error || '장기 기억 요약에 실패했습니다. 기존 요약은 유지됩니다.') : '장기 기억을 정리하고 있습니다. 완료 전에는 기존 요약과 최근 대화를 참고합니다.'}</div>}
         <MessageList mode={active.mode} messages={active.messages} hasMore={active.hasMore} onLoadOlder={loadOlderMessages} scrollSignal={scrollSignal} conversationId={active.id}
@@ -632,11 +640,7 @@ export function App() {
               setWikiDraft({ conversationId: active.id, messageId: message.id, original: message.content });
           }} />
         <div className="composer-panel">
-          {active.mode === 'quick' && <div className="wiki-compose-controls"><label><input type="checkbox" checked={wikiEnabled} disabled={busy} onChange={event => { const value = event.target.checked; setWikiEnabled(value); try { localStorage.setItem('bc250-wiki-search', String(value)); } catch { /* Storage may be disabled. */ } }} /> Wiki 검색 참고</label>{' '}
-            <label><input type="checkbox" checked={wikiAutoUpdate} disabled={busy} onChange={event => { const value = event.target.checked; setWikiAutoUpdate(value); try { localStorage.setItem('bc250-wiki-auto', String(value)); } catch { /* Storage may be disabled. */ } }} /> Wiki 자동 기억</label>
-            <small className="wiki-compose-explanation">켜면 사용자 발언에서 LLM이 고른 원문을 Wiki에 저장할 수 있습니다. 명시적인 기억 요청은 꺼져 있어도 처리합니다.</small><details className="wiki-compose-help"><summary>Wiki 기억 안내</summary><p>켜면 사용자 발언에서 LLM이 고른 원문을 Wiki에 저장할 수 있습니다. 명시적인 기억 요청은 꺼져 있어도 처리합니다.</p></details>
-            <WikiMemoryStatus jobs={wikiMemory} conversationId={active.id} onChanged={() => refreshWikiMemoryRef.current()} />
-          </div>}
+          {active.mode === 'quick' && <WikiMemoryStatus jobs={wikiMemory} conversationId={active.id} onChanged={() => refreshWikiMemoryRef.current()} />}
           {active.mode === 'image_prompt' && <details className="image-compose-disclosure"><summary>프롬프트 설정 · {promptMode === 'ai_optimized' ? 'AI 최적화' : promptMode === 'direct_translation' ? '직접 번역' : '원본 그대로'} · {imageCapabilities?.models.find(model => model.model_id === imageModelId)?.display_name || '추천받기'}</summary><div className="image-compose-settings" aria-label="이미지 프롬프트 작성 설정">
             <div className="image-compose-heading"><span className="image-compose-icon" aria-hidden="true">✦</span><div><strong>프롬프트 설정</strong><small>원하는 방식과 모델을 선택하세요</small></div></div>
             <div className="image-compose-fields">
@@ -652,7 +656,10 @@ export function App() {
     </section>
     {wikiDraft && <WikiDraftDialog source={wikiDraft} onClose={() => setWikiDraft(undefined)} onSaved={() => dismissWikiProposal(wikiDraft.conversationId, wikiDraft.messageId)} />}
     {newDialog && <NewConversationDialog onClose={() => setNewDialog(false)} onCreate={createConversation} />}
-    {settingsDialog && active && <ConversationSettings conversation={active} onClose={() => setSettingsDialog(false)} onSave={saveConversation} />}
+    {settingsDialog && active && <ConversationSettings conversation={active} wikiEnabled={wikiEnabled} wikiAutoUpdate={wikiAutoUpdate} onSaveWiki={(search, auto) => {
+      setWikiEnabled(search); setWikiAutoUpdate(auto);
+      try { localStorage.setItem('bc250-wiki-search', String(search)); localStorage.setItem('bc250-wiki-auto', String(auto)); } catch { /* Storage may be disabled. */ }
+    }} onClose={() => setSettingsDialog(false)} onSave={saveConversation} />}
   </main></ThemeProvider>;
 }
 

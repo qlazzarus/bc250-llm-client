@@ -56,3 +56,45 @@ it('opens the mobile navigation drawer and closes it after selecting Wiki', asyn
   expect(await screen.findByText(/통합 Wiki가 아직 활성화되지 않았습니다/)).toBeTruthy();
   await waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
 });
+
+it('defaults Wiki options on, applies them only when saved, and remembers explicit choices', async () => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); };
+  vi.stubGlobal('requestAnimationFrame', () => 1);
+  const values = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith('/conversations')) return json({ data: [conversation] });
+    if (url.endsWith('/conversations/created')) return json(conversation);
+    if (url.includes('/messages?')) return json({ data: [], next_before: null, has_more: false });
+    if (url.endsWith('/models')) return json({ data: [] });
+    if (url.includes('/wiki-memory?')) return json({ data: [] });
+    if (url.endsWith('/image-generation/capabilities')) return json({ models: [], available: false });
+    throw new Error(url);
+  }));
+  const { App } = await import('../src/main');
+  render(<App />);
+  fireEvent.click(await within(await screen.findByRole('navigation', { name: '대화 목록' })).findByRole('button', { name: /새 대화/ }));
+  await screen.findByLabelText('메시지 입력');
+  expect(screen.queryByLabelText('Wiki 검색 참고')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '설정' }));
+  let dialog = screen.getByRole('dialog', { name: '대화 설정' });
+  expect((within(dialog).getByLabelText(/Wiki 검색 참고/) as HTMLInputElement).checked).toBe(true);
+  expect((within(dialog).getByLabelText(/Wiki 자동 기억/) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(within(dialog).getByLabelText(/Wiki 검색 참고/));
+  fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
+  expect(values.has('bc250-wiki-search')).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: '설정' }));
+  dialog = screen.getByRole('dialog', { name: '대화 설정' });
+  expect((within(dialog).getByLabelText(/Wiki 검색 참고/) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(within(dialog).getByLabelText(/Wiki 검색 참고/));
+  fireEvent.click(within(dialog).getByLabelText(/Wiki 자동 기억/));
+  fireEvent.click(within(dialog).getByRole('button', { name: '저장' }));
+  await waitFor(() => expect(values.get('bc250-wiki-search')).toBe('false'));
+  expect(values.get('bc250-wiki-auto')).toBe('false');
+  fireEvent.click(screen.getByRole('button', { name: '설정' }));
+  dialog = screen.getByRole('dialog', { name: '대화 설정' });
+  expect((within(dialog).getByLabelText(/Wiki 검색 참고/) as HTMLInputElement).checked).toBe(false);
+  expect((within(dialog).getByLabelText(/Wiki 자동 기억/) as HTMLInputElement).checked).toBe(false);
+});

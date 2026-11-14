@@ -212,3 +212,25 @@ it('returns to the current document without discarding its draft', async () => {
   expect(confirm).not.toHaveBeenCalled();
   expect((screen.getByLabelText('본문') as HTMLTextAreaElement).value).toBe('보관할 초안');
 });
+
+it('groups documents by category and expands search results even after a category was collapsed', async () => {
+  const other = { ...original, id: 2, title: '공유 일정', category: '일정' };
+  mock.mockImplementation(async path => {
+    if (path === '/wiki/capabilities') return { store_id: 'integrated' } as never;
+    if (path === '/wiki/documents') return [original, other] as never;
+    if (path === '/wiki/search?q=%EC%84%9C%EB%B2%84') return [original] as never;
+    throw new Error(`unexpected ${path}`);
+  });
+  render(<WikiManager onClose={() => {}} />);
+  const category = await screen.findByRole('button', { name: /general/ });
+  expect(category.getAttribute('aria-expanded')).toBe('true');
+  expect(screen.getByRole('button', { name: '서버' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /일정/, expanded: true })).toBeTruthy();
+  fireEvent.click(category);
+  expect(category.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByRole('button', { name: '서버' })).toBeNull();
+  fireEvent.change(screen.getByLabelText('문서 검색'), { target: { value: '서버' } });
+  fireEvent.click(screen.getByRole('button', { name: '검색' }));
+  expect(await screen.findByRole('button', { name: '서버' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /general/ }).getAttribute('aria-expanded')).toBe('true');
+});
