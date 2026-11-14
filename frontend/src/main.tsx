@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } f
 import { createRoot } from 'react-dom/client';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import Drawer from '@mui/material/Drawer';
-import { BookOpen, Menu, Plus, Activity, Settings, Trash2, Link2, MessageSquare, X } from 'lucide-react';
+import { BookOpen, Menu, Plus, Activity, Settings, Trash2, MessageSquare, X } from 'lucide-react';
 import { ApiError, newRequestId, request, streamRequest, type Conversation, type Generation, type ImageCapabilities, type ImageDraft, type ImageJob, type ImagePresetName, type Message, type MessagePage, type Mode, type ModeSettings, type PromptMode, type ResponseLength, type WikiMemoryJob } from './api';
 import { MessageList } from './components/MessageList';
 import { SystemStatus } from './components/SystemStatus';
