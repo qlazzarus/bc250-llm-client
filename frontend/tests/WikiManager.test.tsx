@@ -87,8 +87,18 @@ it('shows saved revision diff and asks before deleting', async () => {
   render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   fireEvent.click(await screen.findByRole('button', { name: '버전 이력' }));
-  fireEvent.click(await screen.findByRole('button', { name: '차이 보기' }));
-  expect(await screen.findByText('-old +new')).toBeTruthy();
+  const earlier = await screen.findByLabelText('이전 버전 r1');
+  expect((earlier as HTMLInputElement).checked).toBe(true);
+  expect((screen.getByLabelText('비교 버전 r2') as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByLabelText('이전 버전 r2'));
+  expect((screen.getByRole('button', { name: '차이 보기' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(earlier);
+  fireEvent.click(screen.getByRole('button', { name: '차이 보기' }));
+  expect((await screen.findByText('-old')).className).toBe('wiki-diff-removed');
+  expect(screen.getByText('+new').className).toBe('wiki-diff-added');
+  expect(mock).toHaveBeenCalledWith(expect.stringContaining('from_revision=1&to_revision=2'));
+  fireEvent.click(screen.getByLabelText('이전 버전 r2'));
+  expect(screen.queryByRole('region', { name: '버전 차이' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '문서로 돌아가기' }));
   fireEvent.click(await screen.findByRole('button', { name: '편집' }));
   fireEvent.click(await screen.findByText('문서 관리'));
@@ -207,15 +217,19 @@ it('opens documents in reading mode and confirms before discarding an edit', asy
   expect(screen.queryByLabelText('본문')).toBeNull();
 });
 
-it('returns to the current document without discarding its draft', async () => {
-  const confirm = vi.spyOn(window, 'confirm');
+it('confirms before opening the current document from an edited draft', async () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
   fireEvent.click(await screen.findByRole('button', { name: '편집' }));
   fireEvent.change(screen.getByLabelText('본문'), { target: { value: '보관할 초안' } });
   fireEvent.click(screen.getByRole('button', { name: '서버' }));
-  expect(confirm).not.toHaveBeenCalled();
+  expect(confirm).toHaveBeenCalled();
   expect((screen.getByLabelText('본문') as HTMLTextAreaElement).value).toBe('보관할 초안');
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole('button', { name: '서버' }));
+  expect(screen.queryByLabelText('본문')).toBeNull();
+  expect(screen.getByText('Fedora')).toBeTruthy();
 });
 
 it('groups documents by category and expands search results even after a category was collapsed', async () => {
@@ -261,4 +275,25 @@ it('confirms before leaving the separate alias page with unsaved changes', async
   fireEvent.click(screen.getByRole('button', { name: '문서로 돌아가기' }));
   fireEvent.click(await screen.findByRole('button', { name: '별칭' }));
   expect((await screen.findByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('기존 별칭');
+});
+
+it('opens a different document from the history page', async () => {
+  const other = { ...original, id: 2, title: '다른 문서', content: '다른 본문' };
+  const navigate = vi.fn();
+  mock.mockImplementation(async path => {
+    if (path === '/wiki/capabilities') return { store_id: 'integrated' } as never;
+    if (path === '/wiki/documents') return [original, other] as never;
+    if (path === '/wiki/documents/1?store_id=integrated') return original as never;
+    if (path === '/wiki/documents/2?store_id=integrated') return other as never;
+    if (path.includes('/revisions?')) return [{ revision: 1, created_at: 't' }] as never;
+    throw new Error(`unexpected ${path}`);
+  });
+  render(<WikiManager onNavigate={navigate} />);
+  fireEvent.click(await screen.findByRole('button', { name: '서버' }));
+  fireEvent.click(await screen.findByRole('button', { name: '버전 이력' }));
+  await screen.findByLabelText('비교 버전 r1');
+  fireEvent.click(screen.getByRole('button', { name: '다른 문서' }));
+  expect(await screen.findByRole('heading', { name: '다른 문서' })).toBeTruthy();
+  expect(screen.getByText('다른 본문')).toBeTruthy();
+  expect(navigate).toHaveBeenLastCalledWith(2);
 });

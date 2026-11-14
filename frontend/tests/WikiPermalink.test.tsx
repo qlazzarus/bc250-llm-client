@@ -26,7 +26,7 @@ it.each(['edit', 'aliases', 'history'] as const)('opens a direct %s permalink', 
   render(<App />);
   if (section === 'edit') expect(await screen.findByLabelText('본문')).toBeTruthy();
   if (section === 'aliases') expect((await screen.findByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('별칭값');
-  if (section === 'history') expect(await screen.findByLabelText('이전 버전')).toBeTruthy();
+  if (section === 'history') expect(await screen.findByLabelText('비교 버전 r1')).toBeTruthy();
   if (section !== 'edit') expect(screen.queryByLabelText('본문')).toBeNull();
   expect(window.location.hash).toBe(`#/wiki/2/${section}`);
 });
@@ -50,7 +50,7 @@ it.each([['별칭', 'aliases'], ['버전 이력', 'history']] as const)('opens %
   fireEvent.click(await screen.findByRole('button', { name: label }));
   await waitFor(() => expect(window.location.hash).toBe(`#/wiki/2/${section}`));
   if (section === 'aliases') expect(await screen.findByLabelText('별칭 목록')).toBeTruthy();
-  else expect(await screen.findByLabelText('이전 버전')).toBeTruthy();
+  else expect(await screen.findByLabelText('비교 버전 r1')).toBeTruthy();
   expect(screen.queryByLabelText('본문')).toBeNull();
   expect(screen.queryByRole('link', { name: '편집 링크' })).toBeNull();
 });
@@ -87,5 +87,18 @@ it('keeps unsaved aliases and the alias URL when browser navigation is declined'
   await waitFor(() => expect(window.location.hash).toBe('#/wiki/2/aliases'));
   expect((screen.getByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('수정한 별칭');
   expect(screen.queryByLabelText('본문')).toBeNull();
-  expect(screen.queryByLabelText('이전 버전')).toBeNull();
+  expect(screen.queryByLabelText('비교 버전 r1')).toBeNull();
+});
+
+it.each(['edit', 'history', 'aliases'] as const)('opens the current document from its %s page using the list', async section => {
+  history.replaceState(null, '', `/#/wiki/2/${section}`);
+  const { App } = await import('../src/main');
+  render(<App />);
+  if (section === 'edit') await screen.findByLabelText('본문');
+  if (section === 'history') await screen.findByLabelText('비교 버전 r1');
+  if (section === 'aliases') await screen.findByLabelText('별칭 목록');
+  fireEvent.click(screen.getByRole('button', { name: '문서' }));
+  await waitFor(() => expect(window.location.hash).toBe('#/wiki/2'));
+  expect(await screen.findByRole('heading', { name: '문서' })).toBeTruthy();
+  expect(screen.queryByLabelText('본문')).toBeNull();
 });
