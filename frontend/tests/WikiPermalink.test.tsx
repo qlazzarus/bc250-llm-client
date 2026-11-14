@@ -41,3 +41,35 @@ it('keeps the editing URL and draft when navigation to the document is declined'
   await waitFor(() => expect(window.location.hash).toBe('#/wiki/2/edit'));
   expect((screen.getByLabelText('본문') as HTMLTextAreaElement).value).toBe('수정 초안');
 });
+
+it.each([['별칭', 'aliases'], ['버전 이력', 'history']] as const)('opens %s from the document action row', async (label, section) => {
+  history.replaceState(null, '', '/#/wiki/2');
+  const { App } = await import('../src/main');
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: label }));
+  await waitFor(() => expect(window.location.hash).toBe(`#/wiki/2/${section}`));
+  if (section === 'aliases') expect(await screen.findByLabelText('별칭 목록')).toBeTruthy();
+  else expect(await screen.findByLabelText('이전 버전')).toBeTruthy();
+  expect(screen.queryByRole('link', { name: '편집 링크' })).toBeNull();
+});
+
+it('copies the document permalink without navigating', async () => {
+  history.replaceState(null, '', '/#/wiki/2');
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  const { App } = await import('../src/main');
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: '문서 링크' }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(new URL('/#/wiki/2', window.location.href).href));
+  expect(await screen.findByText('문서 링크를 복사했습니다.')).toBeTruthy();
+  expect(window.location.hash).toBe('#/wiki/2');
+});
+
+it('shows a selectable document link when clipboard access fails', async () => {
+  history.replaceState(null, '', '/#/wiki/2');
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+  const { App } = await import('../src/main');
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: '문서 링크' }));
+  expect((await screen.findByLabelText('복사할 문서 링크') as HTMLInputElement).value).toBe(new URL('/#/wiki/2', window.location.href).href);
+});

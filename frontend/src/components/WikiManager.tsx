@@ -3,6 +3,7 @@ import { ApiError, request } from '../api';
 import Button from '@mui/material/Button';
 import { ArrowLeft, BookOpen, FileText, Link2, Pencil, Plus, Search, X, ChevronDown, Folder } from 'lucide-react';
 import { MarkdownContent } from './MarkdownContent';
+import { copyText } from '../clipboard';
 import './wiki-manager.css';
 
 export type WikiSection = 'read' | 'edit' | 'aliases' | 'history';
@@ -45,6 +46,7 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
   const listRef = useRef<HTMLElement>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [linkCopy, setLinkCopy] = useState<{ id: number; status: 'copied' | 'failed' }>();
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [latest, setLatest] = useState<WikiDocument>();
@@ -191,6 +193,12 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
     if (activeSection === 'history' && revisions.length === 0) loadRevisions();
     sectionRef.current?.scrollIntoView?.({ block: 'start' });
   }, [doc?.id, activeSection, editing, busy]);
+  const copyDocumentLink = async () => {
+    if (!doc) return;
+    const id = doc.id;
+    try { await copyText(new URL('#/wiki/' + id, window.location.href).href); setLinkCopy({ id, status: 'copied' }); }
+    catch { setLinkCopy({ id, status: 'failed' }); }
+  };
   const goSection = (next: WikiSection) => {
     if (!doc || busyRef.current || next === activeSection) return;
     if (next === 'read' && !allowDiscard()) return;
@@ -241,12 +249,13 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
       <div className="wiki-manager-editor" ref={editorRef} tabIndex={-1}>
         <Button className="wiki-mobile-return" type="button" startIcon={<ArrowLeft size={16} />} onClick={() => { setListOpen(true); listRef.current?.scrollIntoView?.({ block: 'start' }); }}>문서 목록</Button>
         {!editing && !doc && <div className="wiki-welcome"><div className="wiki-welcome-icon"><BookOpen size={26} /></div><h3>함께 쌓아가는 이야기</h3><p>문서를 선택해 내용을 살펴보거나<br />새 문서를 만들어 가족과 공유하세요.</p><Button variant="contained" startIcon={<Plus size={17} />} onClick={startNew}>새 문서 만들기</Button></div>}
-        {!editing && doc && <article className="wiki-reader"><div className="wiki-reader-top"><div className="wiki-breadcrumb"><BookOpen size={15} /> 공유 Wiki <span>/</span> {doc.category || 'general'}</div><div className="wiki-reader-actions"><a className="wiki-link-action" href={'#/wiki/' + doc.id}><Link2 size={15} /> 문서 링크</a><Button variant="contained" startIcon={<Pencil size={15} />} disabled={busy} onClick={() => goSection('edit')}>편집</Button></div></div>
+        {!editing && doc && <article className="wiki-reader"><div className="wiki-reader-top"><div className="wiki-breadcrumb"><BookOpen size={15} /> 공유 Wiki <span>/</span> {doc.category || 'general'}</div><div className="wiki-reader-actions"><Button type="button" className="wiki-copy-link" startIcon={<Link2 size={15} />} onClick={() => void copyDocumentLink()}>{linkCopy?.id === doc.id && linkCopy.status === 'copied' ? '복사됨' : '문서 링크'}</Button><Button variant="contained" startIcon={<Pencil size={15} />} disabled={busy} onClick={() => goSection('edit')}>편집</Button><Button type="button" variant="outlined" disabled={busy} onClick={() => goSection('aliases')}>별칭</Button><Button type="button" variant="outlined" disabled={busy} onClick={() => goSection('history')}>버전 이력</Button></div></div>
+          {linkCopy?.id === doc.id && <div className="wiki-link-feedback" role="status">{linkCopy.status === 'copied' ? '문서 링크를 복사했습니다.' : <label>자동 복사에 실패했습니다. 주소를 선택해 복사하세요.<input aria-label="복사할 문서 링크" readOnly value={new URL('#/wiki/' + doc.id, window.location.href).href} onFocus={event => event.currentTarget.select()} /></label>}</div>}
           <h3>{doc.title}</h3><div className="wiki-doc-meta"><span>버전 {doc.revision}</span>{doc.updated_at && <span>수정 {doc.updated_at}</span>}</div>{doc.source && <p className="wiki-source">사용자 제공 출처: {doc.source} (자동으로 검증하지 않음)</p>}
           <div className="wiki-reader-body markdown-content"><MarkdownContent content={doc.content} onWikiNavigate={open} /></div>
         </article>}
         {editing && <form className="wiki-editor-form" onSubmit={save}>
-        <div className="wiki-editor-heading"><div><small>{creating ? '새 문서' : '문서 편집'}</small><h3>{creating ? '새로운 문서 작성' : doc?.title}</h3>{doc && <p className="wiki-editor-version"><span>버전 {doc.revision}</span> · {sectionLink('edit', '편집 링크')}</p>}</div><span className={'wiki-edit-state' + (dirty ? ' is-dirty' : '')}>{dirty ? '저장되지 않은 변경' : creating ? '새 초안' : '저장됨'}</span></div>
+        <div className="wiki-editor-heading"><div><small>{creating ? '새 문서' : '문서 편집'}</small><h3>{creating ? '새로운 문서 작성' : doc?.title}</h3>{doc && <p className="wiki-editor-version">버전 {doc.revision}</p>}</div><span className={'wiki-edit-state' + (dirty ? ' is-dirty' : '')}>{dirty ? '저장되지 않은 변경' : creating ? '새 초안' : '저장됨'}</span></div>
         <div className="wiki-fields"><label><span>제목</span><input value={draft.title} maxLength={200} required onChange={event => setDraft({ ...draft, title: event.target.value })} placeholder="문서 제목을 입력하세요" /></label>
         <label><span>분류</span><input value={draft.category} maxLength={80} onChange={event => setDraft({ ...draft, category: event.target.value })} /></label></div>
         <div className="wiki-content-heading"><div><strong>본문</strong><small>마크다운으로 작성할 수 있습니다.</small></div><Button size="small" type="button" aria-pressed={preview} onClick={() => setPreview(value => !value)}>{preview ? '미리보기 숨기기' : '미리보기 보기'}</Button></div><div className={preview ? 'wiki-content-layout' : 'wiki-content-layout no-preview'}><label><span className="wiki-field-caption">마크다운 원문</span><textarea aria-label="본문" value={draft.content} maxLength={100000} required onChange={event => setDraft({ ...draft, content: event.target.value })} placeholder="내용을 입력하세요" /></label>{preview && <section className="wiki-preview" aria-label="마크다운 미리보기"><span className="wiki-field-caption">미리보기</span><div className="markdown-content">{draft.content ? <MarkdownContent content={draft.content} onWikiNavigate={open} /> : <p className="muted">본문을 작성하면 여기에 표시됩니다.</p>}</div></section>}</div>
