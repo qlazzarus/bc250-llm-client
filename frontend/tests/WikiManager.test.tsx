@@ -86,11 +86,12 @@ it('shows saved revision diff and asks before deleting', async () => {
   });
   render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
-  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
-  fireEvent.click(await screen.findByText('문서 관리'));
-  fireEvent.click(await screen.findByRole('button', { name: '이력 불러오기' }));
+  fireEvent.click(await screen.findByRole('button', { name: '버전 이력' }));
   fireEvent.click(await screen.findByRole('button', { name: '차이 보기' }));
   expect(await screen.findByText('-old +new')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '문서로 돌아가기' }));
+  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.click(await screen.findByText('문서 관리'));
   fireEvent.click(screen.getByRole('button', { name: '문서 삭제' }));
   expect(await screen.findByText('삭제했습니다.')).toBeTruthy();
   expect(window.confirm).toHaveBeenCalled();
@@ -137,13 +138,11 @@ it('loads and explicitly saves aliases using the current revision', async () => 
   });
   render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
-  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
-  fireEvent.click(await screen.findByText('문서 관리'));
-  fireEvent.click(await screen.findByRole('button', { name: '별칭 불러오기' }));
+  fireEvent.click(await screen.findByRole('button', { name: '별칭' }));
   fireEvent.change(await screen.findByLabelText('별칭 목록'), { target: { value: 'bc250' } });
   fireEvent.click(screen.getByRole('button', { name: '별칭 저장' }));
   expect(await screen.findByText('별칭을 저장했습니다.')).toBeTruthy();
-  expect(screen.getByText('버전 2')).toBeTruthy();
+  expect(screen.getByText(/서버 · 버전 2/)).toBeTruthy();
 });
 
 it('previews markdown safely while keeping the editable source intact', async () => {
@@ -241,8 +240,8 @@ it('groups documents by category and expands search results even after a categor
   expect(screen.getByRole('button', { name: /general/ }).getAttribute('aria-expanded')).toBe('true');
 });
 
-it('keeps document management inside edit and discards unsaved alias changes on cancel', async () => {
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+it('confirms before leaving the separate alias page with unsaved changes', async () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   mock.mockImplementation(async path => {
     if (path === '/wiki/capabilities') return { store_id: 'integrated' } as never;
     if (path === '/wiki/documents') return [original] as never;
@@ -252,16 +251,14 @@ it('keeps document management inside edit and discards unsaved alias changes on 
   });
   render(<WikiManager />);
   fireEvent.click(await screen.findByRole('button', { name: '서버' }));
-  await screen.findByRole('heading', { name: '서버' });
-  expect(screen.queryByText('문서 관리')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '편집' }));
-  fireEvent.click(screen.getByText('문서 관리'));
-  fireEvent.click(screen.getByRole('button', { name: '별칭 불러오기' }));
+  fireEvent.click(await screen.findByRole('button', { name: '별칭' }));
   fireEvent.change(await screen.findByLabelText('별칭 목록'), { target: { value: '저장하지 않은 별칭' } });
-  fireEvent.click(screen.getByRole('button', { name: '취소' }));
+  expect(screen.queryByLabelText('본문')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '문서로 돌아가기' }));
   expect(confirm).toHaveBeenCalled();
-  expect(screen.queryByText('문서 관리')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '편집' }));
-  fireEvent.click(screen.getByText('문서 관리'));
-  expect((screen.getByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('기존 별칭');
+  expect((screen.getByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('저장하지 않은 별칭');
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole('button', { name: '문서로 돌아가기' }));
+  fireEvent.click(await screen.findByRole('button', { name: '별칭' }));
+  expect((await screen.findByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('기존 별칭');
 });

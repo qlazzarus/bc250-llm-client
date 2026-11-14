@@ -24,9 +24,10 @@ it.each(['edit', 'aliases', 'history'] as const)('opens a direct %s permalink', 
   history.replaceState(null, '', `/#/wiki/2/${section}`);
   const { App } = await import('../src/main');
   render(<App />);
-  expect(await screen.findByLabelText('본문')).toBeTruthy();
+  if (section === 'edit') expect(await screen.findByLabelText('본문')).toBeTruthy();
   if (section === 'aliases') expect((await screen.findByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('별칭값');
   if (section === 'history') expect(await screen.findByLabelText('이전 버전')).toBeTruthy();
+  if (section !== 'edit') expect(screen.queryByLabelText('본문')).toBeNull();
   expect(window.location.hash).toBe(`#/wiki/2/${section}`);
 });
 
@@ -50,6 +51,7 @@ it.each([['별칭', 'aliases'], ['버전 이력', 'history']] as const)('opens %
   await waitFor(() => expect(window.location.hash).toBe(`#/wiki/2/${section}`));
   if (section === 'aliases') expect(await screen.findByLabelText('별칭 목록')).toBeTruthy();
   else expect(await screen.findByLabelText('이전 버전')).toBeTruthy();
+  expect(screen.queryByLabelText('본문')).toBeNull();
   expect(screen.queryByRole('link', { name: '편집 링크' })).toBeNull();
 });
 
@@ -72,4 +74,18 @@ it('shows a selectable document link when clipboard access fails', async () => {
   render(<App />);
   fireEvent.click(await screen.findByRole('button', { name: '문서 링크' }));
   expect((await screen.findByLabelText('복사할 문서 링크') as HTMLInputElement).value).toBe(new URL('/#/wiki/2', window.location.href).href);
+});
+
+it('keeps unsaved aliases and the alias URL when browser navigation is declined', async () => {
+  history.replaceState(null, '', '/#/wiki/2/aliases');
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+  const { App } = await import('../src/main');
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText('별칭 목록'), { target: { value: '수정한 별칭' } });
+  history.replaceState(null, '', '/#/wiki/2/history');
+  fireEvent(window, new HashChangeEvent('hashchange'));
+  await waitFor(() => expect(window.location.hash).toBe('#/wiki/2/aliases'));
+  expect((screen.getByLabelText('별칭 목록') as HTMLTextAreaElement).value).toBe('수정한 별칭');
+  expect(screen.queryByLabelText('본문')).toBeNull();
+  expect(screen.queryByLabelText('이전 버전')).toBeNull();
 });

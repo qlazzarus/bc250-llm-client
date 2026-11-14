@@ -37,7 +37,6 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
   const [activeSection, setActiveSection] = useState<WikiSection>('read');
   const [managementOpen, setManagementOpen] = useState(false);
   const loadAttempt = useRef('');
-  const sectionRef = useRef<HTMLElement>(null);
   const [creating, setCreating] = useState(false);
   const [searched, setSearched] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => new Set());
@@ -104,16 +103,16 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
     if (mode !== 'integrated') return;
     if (documentId === doc?.id) {
       if (!doc || section === activeSection) return;
-      if (section === 'read' && !allowDiscard()) { onNavigate?.(doc.id, activeSection, true); return; }
-      if (section === 'read') { setDraft({ title: doc.title, category: doc.category, content: doc.content }); setAliases(savedAliases); setLatest(undefined); }
-      setEditing(section !== 'read'); setCreating(false); setActiveSection(section); setManagementOpen(section === 'aliases' || section === 'history'); setListOpen(false);
+      if (!allowDiscard()) { onNavigate?.(doc.id, activeSection, true); return; }
+      setDraft({ title: doc.title, category: doc.category, content: doc.content }); setAliases(savedAliases); setLatest(undefined);
+      setEditing(section === 'edit'); setCreating(false); setActiveSection(section); setManagementOpen(false); setListOpen(false);
       return;
     }
     if (!allowDiscard()) { onNavigate?.(doc?.id, activeSection, true); return; }
     if (documentId === undefined) { setDoc(undefined); setDraft(emptyDraft()); resetHistory(); setEditing(false); setActiveSection('read'); setManagementOpen(false); setCreating(false); return; }
     void exclusive(async () => {
       const selected = await request<WikiDocument>(docPath(documentId));
-      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); revealCategory(selected.category); resetHistory(); setEditing(section !== 'read'); setActiveSection(section); setManagementOpen(section === 'aliases' || section === 'history'); setCreating(false); setListOpen(false);
+      setDoc(selected); setDraft({ title: selected.title, content: selected.content, category: selected.category }); revealCategory(selected.category); resetHistory(); setEditing(section === 'edit'); setActiveSection(section); setManagementOpen(false); setCreating(false); setListOpen(false);
     });
   }, [documentId, section, mode]);
   const save = (event: FormEvent) => {
@@ -184,14 +183,13 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
   };
 
   useEffect(() => {
-    if (!doc || !editing || (activeSection !== 'aliases' && activeSection !== 'history')) { loadAttempt.current = ''; return; }
+    if (!doc || (activeSection !== 'aliases' && activeSection !== 'history')) { loadAttempt.current = ''; return; }
     if (busy) return;
     const key = `${doc.id}:${activeSection}`;
     if (loadAttempt.current === key) return;
     loadAttempt.current = key;
     if (activeSection === 'aliases' && aliases === undefined) loadAliases();
     if (activeSection === 'history' && revisions.length === 0) loadRevisions();
-    sectionRef.current?.scrollIntoView?.({ block: 'start' });
   }, [doc?.id, activeSection, editing, busy]);
   const copyDocumentLink = async () => {
     if (!doc) return;
@@ -201,9 +199,9 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
   };
   const goSection = (next: WikiSection) => {
     if (!doc || busyRef.current || next === activeSection) return;
-    if (next === 'read' && !allowDiscard()) return;
-    if (next === 'read') { setDraft({ title: doc.title, category: doc.category, content: doc.content }); setAliases(savedAliases); setLatest(undefined); }
-    setEditing(next !== 'read'); setCreating(false); setActiveSection(next); setManagementOpen(next === 'aliases' || next === 'history'); setListOpen(false);
+    if (!allowDiscard()) return;
+    setDraft({ title: doc.title, category: doc.category, content: doc.content }); setAliases(savedAliases); setLatest(undefined);
+    setEditing(next === 'edit'); setCreating(false); setActiveSection(next); setManagementOpen(false); setListOpen(false);
     onNavigate?.(doc.id, next);
   };
   const sectionLink = (next: WikiSection, label: string) => doc && <a className="wiki-section-link" href={'#/wiki/' + doc.id + '/' + next} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); goSection(next); } }}>{label}</a>;
@@ -249,7 +247,7 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
       <div className="wiki-manager-editor" ref={editorRef} tabIndex={-1}>
         <Button className="wiki-mobile-return" type="button" startIcon={<ArrowLeft size={16} />} onClick={() => { setListOpen(true); listRef.current?.scrollIntoView?.({ block: 'start' }); }}>문서 목록</Button>
         {!editing && !doc && <div className="wiki-welcome"><div className="wiki-welcome-icon"><BookOpen size={26} /></div><h3>함께 쌓아가는 이야기</h3><p>문서를 선택해 내용을 살펴보거나<br />새 문서를 만들어 가족과 공유하세요.</p><Button variant="contained" startIcon={<Plus size={17} />} onClick={startNew}>새 문서 만들기</Button></div>}
-        {!editing && doc && <article className="wiki-reader"><div className="wiki-reader-top"><div className="wiki-breadcrumb"><BookOpen size={15} /> 공유 Wiki <span>/</span> {doc.category || 'general'}</div><div className="wiki-reader-actions"><Button type="button" className="wiki-copy-link" startIcon={<Link2 size={15} />} onClick={() => void copyDocumentLink()}>{linkCopy?.id === doc.id && linkCopy.status === 'copied' ? '복사됨' : '문서 링크'}</Button><Button variant="contained" startIcon={<Pencil size={15} />} disabled={busy} onClick={() => goSection('edit')}>편집</Button><Button type="button" variant="outlined" disabled={busy} onClick={() => goSection('aliases')}>별칭</Button><Button type="button" variant="outlined" disabled={busy} onClick={() => goSection('history')}>버전 이력</Button></div></div>
+        {!editing && doc && activeSection === 'read' && <article className="wiki-reader"><div className="wiki-reader-top"><div className="wiki-breadcrumb"><BookOpen size={15} /> 공유 Wiki <span>/</span> {doc.category || 'general'}</div><div className="wiki-reader-actions"><Button type="button" className="wiki-copy-link" startIcon={<Link2 size={15} />} onClick={() => void copyDocumentLink()}>{linkCopy?.id === doc.id && linkCopy.status === 'copied' ? '복사됨' : '문서 링크'}</Button><Button variant="contained" startIcon={<Pencil size={15} />} disabled={busy} onClick={() => goSection('edit')}>편집</Button><Button type="button" variant="outlined" disabled={busy} onClick={() => goSection('aliases')}>별칭</Button><Button type="button" variant="outlined" disabled={busy} onClick={() => goSection('history')}>버전 이력</Button></div></div>
           {linkCopy?.id === doc.id && <div className="wiki-link-feedback" role="status">{linkCopy.status === 'copied' ? '문서 링크를 복사했습니다.' : <label>자동 복사에 실패했습니다. 주소를 선택해 복사하세요.<input aria-label="복사할 문서 링크" readOnly value={new URL('#/wiki/' + doc.id, window.location.href).href} onFocus={event => event.currentTarget.select()} /></label>}</div>}
           <h3>{doc.title}</h3><div className="wiki-doc-meta"><span>버전 {doc.revision}</span>{doc.updated_at && <span>수정 {doc.updated_at}</span>}</div>{doc.source && <p className="wiki-source">사용자 제공 출처: {doc.source} (자동으로 검증하지 않음)</p>}
           <div className="wiki-reader-body markdown-content"><MarkdownContent content={doc.content} onWikiNavigate={open} /></div>
@@ -261,13 +259,18 @@ export function WikiManager({ documentId, section = 'read', onNavigate }: { docu
         <div className="wiki-content-heading"><div><strong>본문</strong><small>마크다운으로 작성할 수 있습니다.</small></div><Button size="small" type="button" aria-pressed={preview} onClick={() => setPreview(value => !value)}>{preview ? '미리보기 숨기기' : '미리보기 보기'}</Button></div><div className={preview ? 'wiki-content-layout' : 'wiki-content-layout no-preview'}><label><span className="wiki-field-caption">마크다운 원문</span><textarea aria-label="본문" value={draft.content} maxLength={100000} required onChange={event => setDraft({ ...draft, content: event.target.value })} placeholder="내용을 입력하세요" /></label>{preview && <section className="wiki-preview" aria-label="마크다운 미리보기"><span className="wiki-field-caption">미리보기</span><div className="markdown-content">{draft.content ? <MarkdownContent content={draft.content} onWikiNavigate={open} /> : <p className="muted">본문을 작성하면 여기에 표시됩니다.</p>}</div></section>}</div>
         <div className="wiki-actions"><Button type="submit" variant="contained" disabled={busy || !!latest}>저장</Button><Button type="button" variant="outlined" startIcon={<X size={16} />} disabled={busy} onClick={cancelEdit}>취소</Button></div>
       </form>}
-      {doc && editing && <details className="wiki-history wiki-editor-management" open={managementOpen} onToggle={event => { const open = event.currentTarget.open; setManagementOpen(open); if (!open && (activeSection === 'aliases' || activeSection === 'history')) { setActiveSection('edit'); onNavigate?.(doc.id, 'edit'); } }}><summary><span className="wiki-management-title">문서 관리 <small>별칭 · 버전 이력 · 삭제</small></span><ChevronDown size={18} aria-hidden="true" /></summary><div className="wiki-management"><section ref={activeSection === 'aliases' ? sectionRef : undefined} className="wiki-management-section" id="wiki-aliases"><div className="wiki-management-heading"><h3>문서 별칭</h3>{sectionLink('aliases', '별칭 링크')}</div><p>검색에 사용할 이름을 한 줄에 하나씩 등록합니다. 별칭은 별도로 저장됩니다.</p>
-        {aliases === undefined ? <Button type="button" variant="outlined" disabled={busy} onClick={loadAliases}>별칭 불러오기</Button> : <><label>별칭 목록<textarea value={aliases} maxLength={4000} onChange={event => setAliases(event.target.value)} /></label><Button type="button" variant="outlined" disabled={busy || !!latest} onClick={saveAliases}>별칭 저장</Button></>}
-      </section><section ref={activeSection === 'history' ? sectionRef : undefined} className="wiki-management-section" id="wiki-history"><div className="wiki-management-heading"><h3>버전 이력</h3>{sectionLink('history', '이력 링크')}</div><p>최근 100개 버전이 보관됩니다. 문서를 삭제하면 이력도 삭제됩니다.</p><Button type="button" variant="outlined" disabled={busy} onClick={loadRevisions}>이력 불러오기</Button>
-        {revisions.length > 0 && <><div className="wiki-actions"><label>이전 버전<select value={from} onChange={event => setFrom(event.target.value)}>{revisions.map(r => <option key={r.revision} value={r.revision}>revision {r.revision} · {r.created_at}</option>)}</select></label>
-          <label>비교 버전<select value={to} onChange={event => setTo(event.target.value)}>{revisions.map(r => <option key={r.revision} value={r.revision}>revision {r.revision} · {r.created_at}</option>)}</select></label><Button type="button" variant="outlined" disabled={busy} onClick={loadDiff}>차이 보기</Button></div>
-          {diff && (['title', 'category', 'content'] as const).map(field => <div key={field}><h4>{{ title: '제목', category: '분류', content: '본문' }[field]}</h4><pre>{diff.diff[field] || '변경 없음'}</pre></div>)}</>}
-      </section><section className="wiki-management-section wiki-danger-zone"><h3>문서 삭제</h3><p>문서와 보관된 버전 이력이 삭제됩니다.</p><Button type="button" color="error" variant="outlined" disabled={busy} onClick={remove}>문서 삭제</Button></section></div></details>}
+      {doc && editing && <details className="wiki-history wiki-editor-management" open={managementOpen} onToggle={event => setManagementOpen(event.currentTarget.open)}><summary><span className="wiki-management-title">문서 관리 <small>문서 삭제</small></span><ChevronDown size={18} aria-hidden="true" /></summary><div className="wiki-management"><section className="wiki-management-section wiki-danger-zone"><h3>문서 삭제</h3><p>문서와 보관된 버전 이력이 삭제됩니다.</p><Button type="button" color="error" variant="outlined" disabled={busy} onClick={remove}>문서 삭제</Button></section></div></details>}
+      {doc && activeSection === 'aliases' && <section className="wiki-subpage" aria-labelledby="wiki-alias-page-title"><div className="wiki-subpage-heading"><div><small>{doc.title} · 버전 {doc.revision}</small><h3 id="wiki-alias-page-title">문서 별칭</h3><p>검색에 사용할 이름을 한 줄에 하나씩 등록합니다.</p></div>{sectionLink('aliases', '별칭 링크')}</div>
+        {aliases === undefined ? <Button type="button" variant="outlined" disabled={busy} onClick={loadAliases}>{busy ? '불러오는 중' : '별칭 다시 불러오기'}</Button> : <><label>별칭 목록<textarea value={aliases} maxLength={4000} onChange={event => setAliases(event.target.value)} /></label><p className="wiki-subpage-hint">별칭은 문서 본문과 별도로 저장됩니다.</p><div className="wiki-actions"><Button type="button" variant="contained" disabled={busy || !!latest} onClick={saveAliases}>별칭 저장</Button><Button type="button" variant="outlined" disabled={busy} onClick={() => goSection('read')}>문서로 돌아가기</Button></div></>}
+        {aliases === undefined && <Button type="button" disabled={busy} onClick={() => goSection('read')}>문서로 돌아가기</Button>}
+      </section>}
+      {doc && activeSection === 'history' && <section className="wiki-subpage" aria-labelledby="wiki-history-page-title"><div className="wiki-subpage-heading"><div><small>{doc.title} · 버전 {doc.revision}</small><h3 id="wiki-history-page-title">버전 이력</h3><p>최근 100개 버전이 보관됩니다. 문서를 삭제하면 이력도 삭제됩니다.</p></div>{sectionLink('history', '이력 링크')}</div>
+        {revisions.length === 0 && <Button type="button" variant="outlined" disabled={busy} onClick={loadRevisions}>{busy ? '불러오는 중' : '이력 다시 불러오기'}</Button>}
+        {revisions.length > 0 && <><div className="wiki-actions wiki-history-controls"><label>이전 버전<select value={from} onChange={event => setFrom(event.target.value)}>{revisions.map(r => <option key={r.revision} value={r.revision}>revision {r.revision} · {r.created_at}</option>)}</select></label>
+          <label>비교 버전<select value={to} onChange={event => setTo(event.target.value)}>{revisions.map(r => <option key={r.revision} value={r.revision}>revision {r.revision} · {r.created_at}</option>)}</select></label><Button type="button" variant="contained" disabled={busy} onClick={loadDiff}>차이 보기</Button></div>
+          {diff && (['title', 'category', 'content'] as const).map(field => <div className="wiki-diff-field" key={field}><h4>{{ title: '제목', category: '분류', content: '본문' }[field]}</h4><pre>{diff.diff[field] || '변경 없음'}</pre></div>)}</>}
+        <Button type="button" variant="outlined" disabled={busy} onClick={() => goSection('read')}>문서로 돌아가기</Button>
+      </section>}
       {latest && <section className="wiki-conflict" aria-label="문서 충돌 비교"><h3>최신 저장본과 내 초안</h3><p>내 초안은 저장되지 않았습니다. 차이를 확인하고 최신 revision을 기준으로 다시 저장할 수 있습니다.</p>
         {(['title', 'category', 'content'] as const).map(field => <div key={field}><h4>{{ title: '제목', category: '분류', content: '본문' }[field]}</h4><ChangedText before={latest[field]} after={draft[field]} /></div>)}
         <button type="button" disabled={busy} onClick={() => { setDoc(latest); setLatest(undefined); setNotice('최신 revision을 기준으로 초안을 편집합니다. 저장을 눌러야 반영됩니다.'); }}>최신본 기준으로 계속 편집</button></section>}
