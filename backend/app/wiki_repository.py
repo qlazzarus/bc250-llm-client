@@ -11,6 +11,7 @@ import re
 import sqlite3
 import unicodedata
 from .wiki_query import NORMALIZATION_VERSION, entity_keys, normalize_key
+from . import wiki_paths
 
 
 class WikiNotFound(LookupError):
@@ -56,13 +57,17 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def create_document(db: sqlite3.Connection, *, store_id: str, title: str, content: str, category: str = 'general') -> dict:
+def create_document(db: sqlite3.Connection, *, store_id: str, title: str, content: str, category: str = 'general', category_path: list[str] | None = None) -> dict:
     _store(store_id)
     _fields(title, content, category)
     _write_transaction(db)
     timestamp = _now()
     cursor = db.execute('INSERT INTO wiki_documents(title,content,category,created_at,updated_at) VALUES (?,?,?,?,?)',
                         (title, content, category, timestamp, timestamp))
+    parts = category_path if category_path is not None else [category or '미분류']
+    parts = [f'분류-{cursor.lastrowid}' if part in ('.', '..') else part for part in parts]
+    address_title = f'문서-{cursor.lastrowid}' if title in ('.', '..') else title
+    wiki_paths.register(db, cursor.lastrowid, parts + [address_title], collision_suffix=True)
     return get_document(db, store_id=store_id, document_id=cursor.lastrowid)
 
 
@@ -72,17 +77,20 @@ def get_document(db: sqlite3.Connection, *, store_id: str, document_id: int) -> 
     row = db.execute('SELECT * FROM wiki_documents WHERE id=?', (document_id,)).fetchone()
     if row is None:
         raise WikiNotFound('document not found')
-    return dict(row)
+    result = dict(row)
+    result['path_segments'] = wiki_paths.current(db, document_id)
+    return result
 
 
 def list_documents(db: sqlite3.Connection, *, store_id: str, limit: int = 100) -> list[dict]:
     _store(store_id)
     if type(limit) is not int or not 1 <= limit <= 500:
         raise ValueError('invalid limit')
-    return [dict(row) for row in db.execute('''SELECT d.id,d.title,d.category,d.revision,d.created_at,d.updated_at
+    rows = db.execute('''SELECT d.id,d.title,d.category,d.revision,d.created_at,d.updated_at
         FROM wiki_documents d WHERE NOT EXISTS (SELECT 1 FROM memory_document_quarantine q
           WHERE q.store_id='integrated' AND q.wiki_document_id=d.id)
-        ORDER BY d.updated_at DESC,d.id DESC LIMIT ?''', (limit,)).fetchall()]
+        ORDER BY d.updated_at DESC,d.id DESC LIMIT ?''', (limit,)).fetchall()
+    return [{**dict(row), 'path_segments': wiki_paths.current(db, row['id'])} for row in rows]
 
 
 def list_aliases(db: sqlite3.Connection, *, store_id: str, document_id: int) -> list[str]:
@@ -119,13 +127,13 @@ def replace_aliases(db: sqlite3.Connection, *, store_id: str, document_id: int,
 
 
 def update_document(db: sqlite3.Connection, *, store_id: str, document_id: int, expected_revision: int,
-                    title: str, content: str, category: str = 'general') -> dict:
+                    title: str, content: str, category: str = 'general', category_path: list[str] | None = None) -> dict:
     _store(store_id)
     _document_id(document_id)
     _revision(expected_revision)
     _fields(title, content, category)
     _write_transaction(db)
-    current = db.execute('SELECT updated_at FROM wiki_documents WHERE id=?', (document_id,)).fetchone()
+    current = db.execute('SELECT updated_at,title,category FROM wiki_documents WHERE id=?', (document_id,)).fetchone()
     if current is None:
         raise WikiNotFound('document not found')
     try:
@@ -139,6 +147,17 @@ def update_document(db: sqlite3.Connection, *, store_id: str, document_id: int, 
                            WHERE id=? AND revision=?''', (title, content, category, timestamp, document_id, expected_revision))
     if cursor.rowcount != 1:
         _raise_missing_or_conflict(db, document_id)
+    existing_path = wiki_paths.current(db, document_id)
+    if category_path is not None:
+        parts = category_path
+    elif existing_path and category == current['category']:
+        parts = existing_path[:-1]
+    else:
+        parts = [category or '미분류']
+    parts = [f'분류-{document_id}' if part in ('.', '..') else part for part in parts]
+    desired = parts + [f'문서-{document_id}' if title in ('.', '..') else title]
+    if existing_path is None or title != current['title'] or category != current['category'] or (category_path is not None and category_path != existing_path[:-1]):
+        wiki_paths.register(db, document_id, desired, collision_suffix=True)
     return get_document(db, store_id=store_id, document_id=document_id)
 
 

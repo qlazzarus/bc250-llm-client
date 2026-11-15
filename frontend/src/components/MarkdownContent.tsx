@@ -14,6 +14,7 @@ function safeUrl(url: string) {
 }
 
 import { copyText } from '../clipboard';
+import { BASE } from '../wikiRoutes';
 
 function CodeBlock({ className, children }: { className?: string; children?: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
@@ -32,7 +33,7 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
   return <div className="markdown-code"><button type="button" onClick={() => void copy()}>{copied ? '복사됨' : '코드 복사'}</button><pre><code className={className}>{text}</code></pre></div>;
 }
 
-export const MarkdownContent = memo(function MarkdownContent({ content, onWikiNavigate }: { content: string; onWikiNavigate?: (id: number) => void }) {
+export const MarkdownContent = memo(function MarkdownContent({ content, onWikiNavigate, onWikiPathNavigate }: { content: string; onWikiNavigate?: (id: number) => void; onWikiPathNavigate?: (segments: string[]) => void }) {
   return <ReactMarkdown
     remarkPlugins={[remarkGfm]}
     rehypePlugins={[rehypeSanitize]}
@@ -41,13 +42,16 @@ export const MarkdownContent = memo(function MarkdownContent({ content, onWikiNa
       a: ({ href, children }) => {
         if (!href) return <>{children}</>;
         let wikiId: number | undefined;
+        let wikiPath: string[] | undefined;
         if (onWikiNavigate) {
           try {
             const target = new URL(href, window.location.href);
-            const match = target.origin === window.location.origin && target.pathname === window.location.pathname && target.hash.match(/^#\/wiki\/(\d+)$/);
+            const match = target.origin === window.location.origin && (target.pathname === window.location.pathname || target.pathname === BASE + '/') && target.hash.match(/^#\/wiki\/(\d+)$/);
             if (match) wikiId = Number(match[1]);
+            if (onWikiPathNavigate && target.origin === window.location.origin && target.pathname.startsWith(BASE + '/wiki/')) wikiPath = target.pathname.slice((BASE + '/wiki/').length).split('/').map(decodeURIComponent);
           } catch { /* Preserve normal link behavior. */ }
         }
+        if (wikiPath && onWikiPathNavigate) return <a href={href} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); onWikiPathNavigate(wikiPath!); } }}>{children}</a>;
         return wikiId !== undefined ? <a href={href} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); onWikiNavigate?.(wikiId); } }}>{children}</a>
           : <a href={href} target="_blank" rel="noreferrer">{children}</a>;
       },

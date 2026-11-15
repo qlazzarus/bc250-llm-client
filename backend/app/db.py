@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-LATEST_SCHEMA_VERSION = 22
+LATEST_SCHEMA_VERSION = 23
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -101,6 +101,7 @@ def initialize(path: str) -> None:
         _apply_wiki_alias_migration(connection)
         _apply_wiki_evidence_migration(connection)
         _apply_wiki_message_save_migration(connection)
+        _apply_wiki_paths_migration(connection)
 
 
 def _apply_conversation_mode_migration(connection: sqlite3.Connection) -> None:
@@ -539,4 +540,19 @@ def _apply_wiki_message_save_migration(connection: sqlite3.Connection) -> None:
     except Exception:
         connection.execute('ROLLBACK TO SAVEPOINT wiki_message_save_migration')
         connection.execute('RELEASE SAVEPOINT wiki_message_save_migration')
+        raise
+
+
+def _apply_wiki_paths_migration(connection: sqlite3.Connection) -> None:
+    if connection.execute('SELECT 1 FROM schema_migrations WHERE version=23').fetchone():
+        return
+    from .wiki_paths import migrate
+    connection.execute('SAVEPOINT wiki_paths_migration')
+    try:
+        migrate(connection)
+        connection.execute('INSERT INTO schema_migrations(version) VALUES (23)')
+        connection.execute('RELEASE SAVEPOINT wiki_paths_migration')
+    except Exception:
+        connection.execute('ROLLBACK TO SAVEPOINT wiki_paths_migration')
+        connection.execute('RELEASE SAVEPOINT wiki_paths_migration')
         raise

@@ -31,7 +31,7 @@ async def test_integrated_http_auth_and_concurrent_revision(tmp_path):
             payload = {'title': '서버', 'content': 'Fedora'}
             created = await client.post('/api/v1/wiki/documents', json=payload)
             assert created.status_code == 201
-            assert created.json() == {'id': 1, 'status': 'created', 'revision': 1}
+            assert created.json() == {'id': 1, 'status': 'created', 'revision': 1, 'path_segments': ['general', '서버']}
             assert (await client.get('/api/v1/wiki/documents/1')).status_code == 422
             assert (await client.get('/api/v1/wiki/documents/1?store_id=legacy_external')).status_code == 422
             assert (await client.get('/api/v1/wiki/documents/999?store_id=integrated')).status_code == 404

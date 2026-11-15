@@ -36,7 +36,7 @@ def test_integrated_crud_search_revision_and_namespace(setup, monkeypatch):
     monkeypatch.setattr(main, 'wiki_request', no_external)
     body = main.WikiDocument(title='서버', content='Fedora')
     assert run(main.wiki_search(q='Fedora', limit=5, settings=settings)) == []
-    assert run(main.wiki_create(body, settings)) == {'id': 1, 'status': 'created', 'revision': 1}
+    assert run(main.wiki_create(body, settings)) == {'id': 1, 'status': 'created', 'revision': 1, 'path_segments': ['general', '서버']}
     for store in (None, 'legacy_external'):
         with pytest.raises(HTTPException) as exc:
             run(main.wiki_get(1, store, settings))

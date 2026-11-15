@@ -85,6 +85,7 @@ class WikiDocument(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(min_length=1, max_length=100000)
     category: str = Field(default="general", max_length=80)
+    category_path: list[str] | None = Field(default=None, min_length=1, max_length=16)
     expected_updated_at: str | None = None
     expected_revision: int | None = Field(default=None, ge=1, strict=True)
 
@@ -1253,7 +1254,10 @@ def _document_store(store_id, active_store):
 
 async def _wiki_search(settings, query, limit):
     if getattr(settings, 'wiki_store', 'legacy_external') == 'integrated':
-        return await asyncio.to_thread(_integrated_wiki_call, settings, wiki_repository.search_documents,
+        def search_with_paths(db, *, store_id, query, limit):
+            rows = wiki_repository.search_documents(db, store_id=store_id, query=query, limit=limit)
+            return [{**row, 'path_segments': wiki_repository.wiki_paths.current(db, row['id'])} for row in rows]
+        return await asyncio.to_thread(_integrated_wiki_call, settings, search_with_paths,
                                        query=query, limit=limit)
     return await wiki_request('GET', '/api/search', params={'q': query, 'limit': limit})
 
@@ -1329,6 +1333,23 @@ async def wiki_list(settings: Settings = Depends(get_settings)):
         return await asyncio.to_thread(_integrated_wiki_call, settings, wiki_repository.list_documents, limit=500)
     return await wiki_request("GET", "/api/documents")
 
+class WikiPathResolve(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    segments: list[str] = Field(min_length=2, max_length=17)
+
+
+@app.post('/api/v1/wiki/resolve-path', dependencies=[Depends(require_key)])
+async def wiki_resolve_path(body: WikiPathResolve, settings: Settings = Depends(get_settings)):
+    if settings.wiki_store != 'integrated':
+        raise fail('wiki_not_found', '통합 Wiki 문서를 찾을 수 없습니다.', 404)
+    def resolve_path(db, *, store_id, segments):
+        result = wiki_repository.wiki_paths.resolve(db, segments)
+        if result is None:
+            raise wiki_repository.WikiNotFound('path not found')
+        return result
+    return await asyncio.to_thread(_integrated_wiki_call, settings, resolve_path, snapshot=True, segments=body.segments)
+
+
 @app.get("/api/v1/wiki/documents/{doc_id}", dependencies=[Depends(require_key)])
 async def wiki_get(doc_id: int, store_id: str | None = None, settings: Settings = Depends(get_settings)):
     _document_store(store_id, settings.wiki_store)
@@ -1390,9 +1411,9 @@ async def wiki_diff(doc_id: int, from_revision: int = Query(ge=1), to_revision: 
 async def wiki_create(body: WikiDocument, settings: Settings = Depends(get_settings)):
     if settings.wiki_store == 'integrated':
         doc = await asyncio.to_thread(_integrated_wiki_call, settings, wiki_repository.create_document, write=True,
-                                      title=body.title, content=body.content, category=body.category)
-        return {'id': doc['id'], 'status': 'created', 'revision': doc['revision']}
-    return await wiki_request("POST", "/api/documents", json=body.model_dump(exclude={"expected_updated_at", "expected_revision"}))
+                                      title=body.title, content=body.content, category=body.category, category_path=body.category_path)
+        return {'id': doc['id'], 'status': 'created', 'revision': doc['revision'], 'path_segments': doc['path_segments']}
+    return await wiki_request("POST", "/api/documents", json=body.model_dump(exclude={"expected_updated_at", "expected_revision", "category_path"}))
 
 
 def _update_integrated_document(db, *, store_id, document_id, body):
@@ -1405,7 +1426,7 @@ def _update_integrated_document(db, *, store_id, document_id, body):
     else:
         expected_revision = body.expected_revision
     return wiki_repository.update_document(db, store_id=store_id, document_id=document_id,
-        expected_revision=expected_revision, title=body.title, content=body.content, category=body.category)
+        expected_revision=expected_revision, title=body.title, content=body.content, category=body.category, category_path=body.category_path)
 
 
 def _reject_managed_document(db, store_id, document_id):
@@ -1425,11 +1446,11 @@ async def wiki_update(doc_id: int, body: WikiDocument, store_id: str | None = No
     if settings.wiki_store == 'integrated':
         doc = await asyncio.to_thread(_integrated_wiki_call, settings, _update_integrated_document,
                                       write=True, document_id=doc_id, body=body)
-        return {'id': doc['id'], 'status': 'updated', 'revision': doc['revision']}
+        return {'id': doc['id'], 'status': 'updated', 'revision': doc['revision'], 'path_segments': doc['path_segments']}
     current = await wiki_request("GET", f"/api/documents/{doc_id}")
     if not body.expected_updated_at or current.get("updated_at") != body.expected_updated_at:
         raise fail("wiki_conflict", "문서가 변경되었습니다. 최신 내용을 다시 불러와 확인해 주세요.", 409)
-    return await wiki_request("PUT", f"/api/documents/{doc_id}", json=body.model_dump(exclude={"expected_updated_at", "expected_revision"}))
+    return await wiki_request("PUT", f"/api/documents/{doc_id}", json=body.model_dump(exclude={"expected_updated_at", "expected_revision", "category_path"}))
 
 @app.delete("/api/v1/wiki/documents/{doc_id}", dependencies=[Depends(require_key)])
 async def wiki_delete(doc_id: int, store_id: str | None = None, expected_revision: int | None = Query(default=None, ge=1),

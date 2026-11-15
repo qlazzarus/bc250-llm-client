@@ -62,8 +62,9 @@ it('copies the document permalink without navigating', async () => {
   const { App } = await import('../src/main');
   render(<App />);
   fireEvent.click(await screen.findByRole('button', { name: '문서 링크' }));
-  await waitFor(() => expect(writeText).toHaveBeenCalledWith(new URL('/#/wiki/2', window.location.href).href));
-  expect(await screen.findByText('문서 링크를 복사했습니다.')).toBeTruthy();
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(new URL('/llm/#/wiki/2', window.location.href).href));
+  expect(await screen.findByRole('button', { name: '복사됨' })).toBeTruthy();
+  expect(screen.queryByText('문서 링크를 복사했습니다.')).toBeNull();
   expect(window.location.hash).toBe('#/wiki/2');
 });
 
@@ -73,7 +74,7 @@ it('shows a selectable document link when clipboard access fails', async () => {
   const { App } = await import('../src/main');
   render(<App />);
   fireEvent.click(await screen.findByRole('button', { name: '문서 링크' }));
-  expect((await screen.findByLabelText('복사할 문서 링크') as HTMLInputElement).value).toBe(new URL('/#/wiki/2', window.location.href).href);
+  expect((await screen.findByLabelText('복사할 문서 링크') as HTMLInputElement).value).toBe(new URL('/llm/#/wiki/2', window.location.href).href);
 });
 
 it('keeps unsaved aliases and the alias URL when browser navigation is declined', async () => {

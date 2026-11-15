@@ -391,6 +391,14 @@ yeppyshiba ALL=(root) NOPASSWD: /usr/bin/systemctl restart bc250-llm-client.serv
 
 ## 가족 Wiki 연동
 
+### 통합 Wiki 주소와 분류
+
+`WIKI_STORE=integrated`에서는 대화 주소를 `/llm/chat/{대화 ID}`, Wiki 문서 주소를 `/llm/wiki/{분류}/{세부 분류}/{문서 제목}`으로 사용한다. 문서 편집, 별칭, 이력은 각각 `?view=edit`, `?view=aliases`, `?view=history`로 연다. 기존 `#/chat/...`과 `#/wiki/{ID}` 주소도 계속 열리며, 문서를 확인한 뒤 새 주소로 전환된다. 제목이나 분류를 변경해도 이전 문서 주소는 같은 문서로 연결된다. 삭제된 문서의 주소는 다른 문서에 재사용하지 않는다.
+
+새 문서의 분류에 `general/iot`처럼 입력하면 분류를 계층으로 나누어 표시하고 주소에도 반영한다. 기존 데이터에 저장된 슬래시가 포함된 분류는 마이그레이션 시 자동으로 나누지 않는다. 문서 제목과 분류를 조합한 주소가 이미 사용 중이면 다른 문서로 연결되는 것을 막기 위해 새 주소 끝에 문서 ID 등을 붙인다. 같은 주소의 판별에는 Unicode 정규화와 대소문자 무시를 적용한다.
+
+이 기능은 SQLite schema 23으로 기존 문서의 주소 기록을 생성한다. 운영 반영 전에 기존 Wiki 데이터베이스를 백업하고 복구 절차를 확인한다. 웹 서버는 `/llm/api/*`를 API로 전달하고 나머지 `/llm/*`에 SPA의 `index.html` fallback을 제공해야 한다. 기존 외부 Wiki 모드는 ID 기반 주소를 유지한다.
+
 아래 설명은 기본값인 `WIKI_STORE=legacy_external`의 기존 외부 Wiki 경로에 해당한다. `WIKI_STORE=integrated`에서는 Client 내부 공유 Wiki를 사용하며 자동 기억은 승인된 네 공유 속성만 처리한다. 통합 전환은 [실행 계획](docs/plans/wiki-memory-execution-plan.md)의 I09/I10을 따른다.
 
 같은 서버의 `127.0.0.1:8020`에 사용자가 제공한 BC-250 Family Wiki API가 실행 중이면 채팅에서 Wiki 검색과 자동 기억을 이용할 수 있다. 일반 대화의 **Wiki 검색 참고**를 켜면 각 질문으로 검색해 최대 세 문서의 발췌를 기존 gate를 통해 전달한다. 답변 아래에 검색된 문서의 ID, 제목, 수정 시각과 전달한 발췌를 기록한다. 이는 모델이 실제로 인용한 문서 목록이 아니라 검색 참고자료다. 검색 결과가 없으면 답변에 표시하며, Wiki 연결 실패 시에는 생성이 실패하므로 참조를 끄고 새 요청을 보낼 수 있다. 이미지 프롬프트와 롤플레잉은 Wiki를 검색하지 않는다.

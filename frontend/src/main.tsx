@@ -8,6 +8,7 @@ import { MessageList } from './components/MessageList';
 import { SystemStatus } from './components/SystemStatus';
 import { WikiMemoryStatus } from './components/WikiMemoryStatus';
 import { WikiManager, type WikiSection } from './components/WikiManager';
+import { BASE, chatUrl, wikiUrl, wikiIdUrl } from './wikiRoutes';
 import './image-prompt.css';
 import './style.css';
 import './scroll.css';
@@ -220,6 +221,13 @@ export function App() {
   const [wikiVisited, setWikiVisited] = useState(false);
   const [wikiDocumentId, setWikiDocumentId] = useState<number>();
   const [wikiSection, setWikiSection] = useState<WikiSection>('read');
+  const [wikiRouteError, setWikiRouteError] = useState('');
+  const wikiPathsRef = useRef(new Map<number, string[]>());
+  const routeSequenceRef = useRef(0);
+  const wikiViewRef = useRef(false); wikiViewRef.current = wikiView;
+  const wikiLeaveGuardRef = useRef<(() => boolean) | undefined>(undefined);
+  const lastWikiUrlRef = useRef(BASE + '/wiki');
+  const registerWikiGuard = useCallback((guard: (() => boolean) | undefined) => { wikiLeaveGuardRef.current = guard; }, []);
   const [wikiEnabled, setWikiEnabled] = useState(() => { try { return localStorage.getItem('bc250-wiki-search') !== 'false'; } catch { return true; } });
   const [wikiAutoUpdate, setWikiAutoUpdate] = useState(() => { try { return localStorage.getItem('bc250-wiki-auto') !== 'false'; } catch { return true; } });
   const [wikiMemory, setWikiMemory] = useState<WikiMemoryJob[]>([]);
@@ -353,10 +361,12 @@ export function App() {
     const response = await request<{ data: ImageJob }>('/image-jobs/' + job.id + '/cancel', { method: 'POST' });
     replaceImageJob(response.data);
   }, [replaceImageJob]);
-  const loadConversation = async (id: string, select = false) => {
+  const loadConversation = async (id: string, select = false, replace = false) => {
     if (select) {
-      const hash = '#/chat/' + encodeURIComponent(id);
-      if (window.location.hash !== hash) history.pushState(null, '', hash);
+      if (wikiViewRef.current && wikiLeaveGuardRef.current && !wikiLeaveGuardRef.current()) { history.replaceState(null, '', lastWikiUrlRef.current); return; }
+      routeSequenceRef.current++;
+      const path = chatUrl(id);
+      if (window.location.pathname + window.location.search + window.location.hash !== path) { if (replace) history.replaceState(null, '', path); else history.pushState(null, '', path); }
       activeIdRef.current = id;
       setSystemView(false); setWikiView(false);
       if (inFlightRef.current?.conversationId !== id) {
@@ -387,20 +397,44 @@ export function App() {
   useEffect(() => { refresh().catch(error => setNotice(error.message)); }, []);
   useEffect(() => {
     const route = () => {
+      const sequence = ++routeSequenceRef.current;
       const hash = window.location.hash;
-      const wiki = hash.match(/^#\/wiki(?:\/(\d+)(?:\/(edit|aliases|history))?)?$/);
-      const chat = hash.match(/^#\/chat\/([^/]+)$/);
-      if (wiki) {
-        setSystemView(false); setWikiVisited(true); setWikiView(true);
-        setWikiDocumentId(wiki[1] ? Number(wiki[1]) : undefined);
-        setWikiSection((wiki[2] as WikiSection | undefined) || 'read');
-      } else if (chat) {
-        try { void loadConversation(decodeURIComponent(chat[1]), true).catch(error => setNotice(error instanceof Error ? error.message : '대화를 불러오지 못했습니다.')); }
+      const legacyWiki = hash.match(/^#\/wiki(?:\/(\d+)(?:\/(edit|aliases|history))?)?$/);
+      const legacyChat = hash.match(/^#\/chat\/([^/]+)$/);
+      const path = window.location.pathname;
+      const chat = path.match(/^\/llm\/chat\/([^/]+)\/?$/);
+      if (legacyWiki) {
+        lastWikiUrlRef.current = window.location.pathname + window.location.search + window.location.hash;
+        setWikiRouteError(''); setSystemView(false); setWikiVisited(true); setWikiView(true);
+        setWikiDocumentId(legacyWiki[1] ? Number(legacyWiki[1]) : undefined);
+        setWikiSection((legacyWiki[2] as WikiSection | undefined) || 'read');
+      } else if (legacyChat || chat) {
+        try { void loadConversation(decodeURIComponent((legacyChat || chat)![1]), true, Boolean(legacyChat)).catch(error => setNotice(error instanceof Error ? error.message : '대화를 불러오지 못했습니다.')); }
         catch { setNotice('잘못된 대화 링크입니다.'); }
-      } else if (!hash || hash === '#/') { setWikiView(false); setSystemView(false); }
+      } else if (path.startsWith(BASE + '/wiki/')) {
+        let segments: string[];
+        try { segments = path.slice((BASE + '/wiki/').length).split('/').map(decodeURIComponent); }
+        catch { setWikiRouteError('잘못된 Wiki 주소입니다.'); setWikiVisited(true); setWikiView(true); return; }
+        const value = new URLSearchParams(window.location.search).get('view');
+        const selected: WikiSection = value === 'edit' || value === 'aliases' || value === 'history' ? value : 'read';
+        setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiRouteError('');
+        void request<{ id: number; path_segments: string[] }>('/wiki/resolve-path', { method: 'POST', body: JSON.stringify({ segments }) }).then(result => {
+          if (sequence !== routeSequenceRef.current) return;
+          wikiPathsRef.current.set(result.id, result.path_segments);
+          setWikiDocumentId(result.id); setWikiSection(selected);
+          const canonical = wikiUrl(result.path_segments, selected);
+          if (window.location.pathname + window.location.search !== canonical) history.replaceState(null, '', canonical);
+          lastWikiUrlRef.current = canonical;
+        }).catch(error => { if (sequence === routeSequenceRef.current) setWikiRouteError(error instanceof Error ? error.message : 'Wiki 문서를 찾을 수 없습니다.'); });
+      } else if (path === BASE + '/wiki' || path === BASE + '/wiki/') {
+        lastWikiUrlRef.current = BASE + '/wiki'; setWikiRouteError(''); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); setWikiSection('read');
+      } else if (!hash || hash === '#/') {
+        if (wikiViewRef.current && wikiLeaveGuardRef.current && !wikiLeaveGuardRef.current()) { history.replaceState(null, '', lastWikiUrlRef.current); return; }
+        setWikiView(false); setSystemView(false);
+      }
     };
-    route(); window.addEventListener('hashchange', route);
-    return () => window.removeEventListener('hashchange', route);
+    route(); window.addEventListener('hashchange', route); window.addEventListener('popstate', route);
+    return () => { routeSequenceRef.current++; window.removeEventListener('hashchange', route); window.removeEventListener('popstate', route); };
   }, []);
   useEffect(() => {
     if (!active || !['pending', 'running'].includes(active.summary_status)) return;
@@ -596,9 +630,11 @@ export function App() {
     if (target?.id === retryInfo.conversationId) await runGeneration(target, retryInfo.content, retryInfo.requestId, true, retryInfo.promptMode, retryInfo.imageModelId);
   };
   const showSystem = async () => {
+    if (wikiViewRef.current && wikiLeaveGuardRef.current && !wikiLeaveGuardRef.current()) return;
+    routeSequenceRef.current++;
     setWikiView(false); setSystemView(true); setGateLoading(true); setGateError('');
     void refreshModels();
-    if (window.location.hash !== '#/') history.pushState(null, '', '#/');
+    if (window.location.pathname !== BASE + '/' || window.location.hash) history.pushState(null, '', BASE + '/');
     try { setGate(await request<unknown>('/admin/gate-status')); }
     catch (error) { setGate(undefined); setGateError(error instanceof Error ? error.message : 'LLM gate 상태를 가져오지 못했습니다.'); }
     finally { setGateLoading(false); }
@@ -606,29 +642,30 @@ export function App() {
   const deleteConversation = async (conversation: Detail) => {
     if (!confirm('이 대화를 삭제할까요?')) return;
     await request('/conversations/' + conversation.id, { method: 'DELETE' });
-    if (activeIdRef.current === conversation.id) { activeIdRef.current = undefined; setActive(undefined); history.replaceState(null, '', '#/'); }
+    if (activeIdRef.current === conversation.id) { activeIdRef.current = undefined; setActive(undefined); history.replaceState(null, '', BASE + '/'); }
     await refresh();
   };
 
 
   return <ThemeProvider theme={appTheme}><main className={'layout' + (wikiView ? ' wiki-mode' : '')}>
     <aside className="workspace-sidebar"><h1><span className="brand-mark" aria-hidden="true">✳</span><span className="sidebar-brand-text">BC-250<small>개인 AI 워크스페이스</small></span></h1><button className="mobile-menu-toggle plain" aria-expanded={menuOpen} aria-controls="mobile-workspace-menu" aria-label="메뉴 열기" onClick={() => setMenuOpen(value => !value)}><Menu size={18} aria-hidden="true" /><span className="sidebar-action-label">{menuOpen ? '닫기' : '메뉴'}</span></button><button className="new-chat-button" aria-label="새 대화" onClick={() => { setMenuOpen(false); setNewDialog(true); }}><Plus size={18} aria-hidden="true" /><span className="sidebar-action-label">새 대화</span></button>
-      <nav id="conversation-nav" className={menuOpen ? 'mobile-open' : ''} aria-label="대화 목록">{conversations.map(conversation => <a role="button" href={'#/chat/' + encodeURIComponent(conversation.id)} className={active?.id === conversation.id && !systemView && !wikiView ? 'selected' : ''} key={conversation.id} onClick={event => { event.preventDefault(); setMenuOpen(false); void loadConversation(conversation.id, true).catch(error => setNotice(error.message)); }}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></a>)}</nav>
-      <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} aria-label="공유 Wiki" onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); setWikiSection('read'); history.pushState(null, '', '#/wiki'); }}><BookOpen size={17} aria-hidden="true" /><span className="sidebar-action-label">공유 Wiki</span></button>
+      <nav id="conversation-nav" className={menuOpen ? 'mobile-open' : ''} aria-label="대화 목록">{conversations.map(conversation => <a role="button" href={chatUrl(conversation.id)} className={active?.id === conversation.id && !systemView && !wikiView ? 'selected' : ''} key={conversation.id} onClick={event => { event.preventDefault(); setMenuOpen(false); void loadConversation(conversation.id, true).catch(error => setNotice(error.message)); }}>{conversation.title}<small>{MODE_META[conversation.mode].label}</small></a>)}</nav>
+      <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} aria-label="공유 Wiki" onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); setWikiSection('read'); setWikiRouteError(''); history.pushState(null, '', BASE + '/wiki'); }}><BookOpen size={17} aria-hidden="true" /><span className="sidebar-action-label">공유 Wiki</span></button>
       <button className={'mobile-nav-action' + (menuOpen ? ' mobile-open' : '')} aria-label="시스템 상태" onClick={() => { setMenuOpen(false); void showSystem(); }}><Activity size={17} aria-hidden="true" /><span className="sidebar-action-label">시스템 상태</span></button><small className="model-name">활성 모델: {models[0]?.split('/').pop() || '조회 중…'}</small>
     </aside>
     <Drawer className="mobile-workspace-drawer" anchor="left" open={menuOpen} onClose={() => setMenuOpen(false)} slotProps={{ paper: { id: 'mobile-workspace-menu', 'aria-label': '워크스페이스 메뉴' } }}>
       <div className="drawer-heading"><div><span className="brand-mark" aria-hidden="true">✳</span><strong>BC-250</strong></div><button type="button" className="drawer-close" aria-label="메뉴 닫기" onClick={() => setMenuOpen(false)}><X size={20} /></button></div>
       <button type="button" className="drawer-new" onClick={() => { setMenuOpen(false); setNewDialog(true); }}><Plus size={18} /> 새 대화</button>
       <div className="drawer-section-label">워크스페이스</div>
-      <div className="drawer-links"><button type="button" className={wikiView ? 'drawer-selected' : ''} onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); setWikiSection('read'); history.pushState(null, '', '#/wiki'); }}><BookOpen size={18} /> 공유 Wiki</button>
+      <div className="drawer-links"><button type="button" className={wikiView ? 'drawer-selected' : ''} onClick={() => { setMenuOpen(false); setSystemView(false); setWikiVisited(true); setWikiView(true); setWikiDocumentId(undefined); setWikiSection('read'); setWikiRouteError(''); history.pushState(null, '', BASE + '/wiki'); }}><BookOpen size={18} /> 공유 Wiki</button>
       <button type="button" className={systemView && !wikiView ? 'drawer-selected' : ''} onClick={() => { setMenuOpen(false); void showSystem(); }}><Activity size={18} /> 시스템 상태</button></div>
       <div className="drawer-section-label drawer-conversations-heading">대화 <span>{conversations.length}</span></div>
-      <nav className="drawer-conversations" aria-label="대화 목록">{conversations.map(conversation => <a role="button" href={'#/chat/' + encodeURIComponent(conversation.id)} className={active?.id === conversation.id && !systemView && !wikiView ? 'drawer-selected' : ''} key={conversation.id} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); setMenuOpen(false); void loadConversation(conversation.id, true).catch(error => setNotice(error.message)); } }}><span>{conversation.title}</span><small>{MODE_META[conversation.mode].label}</small></a>)}</nav>
+      <nav className="drawer-conversations" aria-label="대화 목록">{conversations.map(conversation => <a role="button" href={chatUrl(conversation.id)} className={active?.id === conversation.id && !systemView && !wikiView ? 'drawer-selected' : ''} key={conversation.id} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); setMenuOpen(false); void loadConversation(conversation.id, true).catch(error => setNotice(error.message)); } }}><span>{conversation.title}</span><small>{MODE_META[conversation.mode].label}</small></a>)}</nav>
       <div className="drawer-model">활성 모델 <span>{models[0]?.split('/').pop() || '조회 중…'}</span></div>
     </Drawer>
     <section className="chat">
-      {wikiVisited && <div className="wiki-manager-host" hidden={!wikiView}><WikiManager documentId={wikiDocumentId} section={wikiSection} onNavigate={(id, section = 'read', replace = false) => { setWikiDocumentId(id); setWikiSection(section); const hash = id ? '#/wiki/' + id + (section === 'read' ? '' : '/' + section) : '#/wiki'; if (window.location.hash !== hash) { if (replace) history.replaceState(null, '', hash); else history.pushState(null, '', hash); } }} /></div>}
+      {wikiView && wikiRouteError && <div className="notice error" role="alert">{wikiRouteError}</div>}
+      {wikiVisited && <div className="wiki-manager-host" hidden={!wikiView || !!wikiRouteError}><WikiManager documentId={wikiDocumentId} section={wikiSection} onLeaveGuard={registerWikiGuard} onNavigate={(id, section = 'read', replace = false, segments) => { if (id && segments) wikiPathsRef.current.set(id, segments); setWikiDocumentId(id); setWikiSection(section); setWikiRouteError(''); const path = id ? (wikiPathsRef.current.has(id) ? wikiUrl(wikiPathsRef.current.get(id)!, section) : wikiIdUrl(id, section)) : BASE + '/wiki'; routeSequenceRef.current++; lastWikiUrlRef.current = path; if (window.location.pathname + window.location.search + window.location.hash !== path) { if (replace) history.replaceState(null, '', path); else history.pushState(null, '', path); } }} /></div>}
       {!wikiView && (systemView ? <SystemStatus gate={gate} gateError={gateError} loading={gateLoading} models={models} modelsUnavailable={modelsUnavailable} onRefresh={() => { void showSystem(); }} onSwitchSucceeded={refreshModels} />
       : active ? <><header className="chat-header"><div><h2>{active.title}</h2><p className="muted">{MODE_META[active.mode].label} · {active.mode === 'image_prompt' ? '영어 JSON 설정 · 매 요청 독립 작성' : `${LENGTH_LABEL[active.response_length]} · ${active.context_policy === 'none' ? '이전 대화 미포함' : '최근 대화 포함'}`}</p></div><button className="header-action" onClick={() => setSettingsDialog(true)} disabled={busy}><Settings size={16} aria-hidden="true" /> 설정</button><button className="danger header-action" disabled={busy} onClick={() => void deleteConversation(active)}><Trash2 size={16} aria-hidden="true" /> 삭제</button></header>
         {active.mode !== 'image_prompt' && <div className="mode-banner" role="status"><span className="mode-banner-copy">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다. 기억은 대화 설정에서 확인할 수 있습니다.</span><span className="mode-banner-short">최근 대화{active.summary ? '와 장기 기억' : ''} 참고 중</span></div>}
