@@ -2,7 +2,7 @@ import re
 from functools import lru_cache
 from typing import Literal
 from pathlib import Path
-from pydantic import PrivateAttr, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from .imagegen import validate_imagegen_url
 
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     llm_gate_hold_id: str = ""
     llm_timeout_seconds: float = 180
     max_request_bytes: int = 65536
-    max_history_messages: int = 200
+    max_history_messages: int = Field(default=200, ge=1)
     max_completion_tokens: int = 2048
     default_max_tokens: int = 512
     max_concurrent_generations: int = 2
@@ -46,8 +46,12 @@ class Settings(BaseSettings):
     max_image_asset_bytes: int = 20 * 1024 * 1024
     image_job_poll_min_interval_seconds: float = 2
     roleplay_summary_trigger_tokens: int = 5000
-    roleplay_summary_keep_recent_turns: int = 6
+    roleplay_summary_keep_recent_turns: int = Field(default=6, ge=0)
     roleplay_summary_max_tokens: int = 512
+    context_compaction_max_attempts: int = Field(default=3, ge=1, le=10)
+    context_compaction_timeout_seconds: float = Field(default=30, gt=0)
+    summary_job_max_attempts: int = Field(default=3, ge=1, le=10)
+    summary_job_timeout_seconds: float = Field(default=180, gt=0)
 
     @model_validator(mode="after")
     def validate_token_settings(self) -> "Settings":

@@ -14,6 +14,7 @@ export type MessagePage = { data: Message[]; next_before: string | null; has_mor
 export type Conversation = {
   id: string; title: string; title_pending: boolean; mode: Mode; context_policy: 'none' | 'recent'; mode_settings: ModeSettings;
   response_length: ResponseLength; summary: string; summary_up_to_message_id: string | null;
+  summary_revision: number;
   summary_status: 'idle' | 'pending' | 'running' | 'failed'; summary_error: string | null;
   created_at: string; updated_at: string;
 };

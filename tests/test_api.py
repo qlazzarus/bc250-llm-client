@@ -1023,9 +1023,10 @@ def test_context_history_never_starts_with_an_orphaned_assistant(monkeypatch):
             assert client.post(f"/api/v1/conversations/{cid}/messages", headers=headers, json={"content": "첫 질문"}).status_code == 200
             assert client.post(f"/api/v1/conversations/{cid}/messages", headers=headers, json={"content": "둘째 질문"}).status_code == 200
 
-            assert [message["content"] for message in captured[-1]["messages"]] == [
+            chat_payload = next(p for p in reversed(captured) if p["messages"][-1]["content"] == "둘째 질문")
+            assert [message["content"] for message in chat_payload["messages"]] == [
                 "당신은 롤플레잉을 진행합니다. 설정을 일관되게 지키고 이야기 속 역할로 답하세요.",
-                "둘째 질문",
+                "첫 질문", "응답", "둘째 질문",
             ]
     finally:
         directory.cleanup()

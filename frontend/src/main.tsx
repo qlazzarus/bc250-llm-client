@@ -71,11 +71,12 @@ function NewConversationDialog({ onClose, onCreate }: { onClose: () => void; onC
   </form></Modal>;
 }
 
-function ConversationSettings({ conversation, wikiEnabled, wikiAutoUpdate, onSaveWiki, onClose, onSave }: { conversation: Detail; wikiEnabled: boolean; wikiAutoUpdate: boolean; onSaveWiki: (search: boolean, auto: boolean) => void; onClose: () => void; onSave: (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => Promise<void> }) {
+function ConversationSettings({ conversation, wikiEnabled, wikiAutoUpdate, onSaveWiki, onClose, onSave }: { conversation: Detail; wikiEnabled: boolean; wikiAutoUpdate: boolean; onSaveWiki: (search: boolean, auto: boolean) => void; onClose: () => void; onSave: (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string; expected_summary_revision?: number }) => Promise<void> }) {
   const [title, setTitle] = useState(conversation.title);
   const [responseLength, setResponseLength] = useState<ResponseLength>(conversation.response_length);
   const [settings, setSettings] = useState<ModeSettings>(conversation.mode_settings);
   const [summary, setSummary] = useState(conversation.summary);
+  const [summaryRevision] = useState(conversation.summary_revision);
   const [wikiSearch, setWikiSearch] = useState(wikiEnabled);
   const [wikiAuto, setWikiAuto] = useState(wikiAutoUpdate);
   const [error, setError] = useState('');
@@ -84,7 +85,7 @@ function ConversationSettings({ conversation, wikiEnabled, wikiAutoUpdate, onSav
     try {
       await onSave(conversation.mode === 'image_prompt'
         ? { ...(title !== conversation.title ? { title } : {}) }
-        : { ...(title !== conversation.title ? { title } : {}), response_length: responseLength, mode_settings: settings, ...(summary !== conversation.summary ? { summary } : {}) });
+        : { ...(title !== conversation.title ? { title } : {}), response_length: responseLength, mode_settings: settings, ...(summary !== conversation.summary ? { summary, expected_summary_revision: summaryRevision } : {}) });
       if (conversation.mode === 'quick') onSaveWiki(wikiSearch, wikiAuto);
       onClose();
     }
@@ -480,7 +481,7 @@ export function App() {
     const created = await request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify(data) });
     setNewDialog(false); await refresh(); await loadConversation(created.id, true);
   };
-  const saveConversation = async (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string }) => {
+  const saveConversation = async (data: { title?: string; response_length?: ResponseLength; mode_settings?: ModeSettings; summary?: string; expected_summary_revision?: number }) => {
     if (!active) return;
     await request('/conversations/' + active.id, { method: 'PATCH', body: JSON.stringify(data) });
     await refresh(); await loadConversation(active.id);
@@ -668,7 +669,7 @@ export function App() {
       {wikiVisited && <div className="wiki-manager-host" hidden={!wikiView || !!wikiRouteError}><WikiManager documentId={wikiDocumentId} section={wikiSection} onLeaveGuard={registerWikiGuard} onNavigate={(id, section = 'read', replace = false, segments) => { if (id && segments) wikiPathsRef.current.set(id, segments); setWikiDocumentId(id); setWikiSection(section); setWikiRouteError(''); const path = id ? (wikiPathsRef.current.has(id) ? wikiUrl(wikiPathsRef.current.get(id)!, section) : wikiIdUrl(id, section)) : BASE + '/wiki'; routeSequenceRef.current++; lastWikiUrlRef.current = path; if (window.location.pathname + window.location.search + window.location.hash !== path) { if (replace) history.replaceState(null, '', path); else history.pushState(null, '', path); } }} /></div>}
       {!wikiView && (systemView ? <SystemStatus gate={gate} gateError={gateError} loading={gateLoading} models={models} modelsUnavailable={modelsUnavailable} onRefresh={() => { void showSystem(); }} onSwitchSucceeded={refreshModels} />
       : active ? <><header className="chat-header"><div><h2>{active.title}</h2><p className="muted">{MODE_META[active.mode].label} · {active.mode === 'image_prompt' ? '영어 JSON 설정 · 매 요청 독립 작성' : `${LENGTH_LABEL[active.response_length]} · ${active.context_policy === 'none' ? '이전 대화 미포함' : '최근 대화 포함'}`}</p></div><button className="header-action" onClick={() => setSettingsDialog(true)} disabled={busy}><Settings size={16} aria-hidden="true" /> 설정</button><button className="danger header-action" disabled={busy} onClick={() => void deleteConversation(active)}><Trash2 size={16} aria-hidden="true" /> 삭제</button></header>
-        {active.mode !== 'image_prompt' && <div className="mode-banner" role="status"><span className="mode-banner-copy">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용은 요약하거나 제외할 수 있습니다. 기억은 대화 설정에서 확인할 수 있습니다.</span><span className="mode-banner-short">최근 대화{active.summary ? '와 장기 기억' : ''} 참고 중</span></div>}
+        {active.mode !== 'image_prompt' && <div className="mode-banner" role="status"><span className="mode-banner-copy">최근 완료 대화{active.summary ? '와 장기 기억 요약' : ''}을 참고합니다. 대화가 길어지면 오래된 내용을 요약합니다. 문맥을 보존할 수 없으면 요청을 중단하고 안내합니다. 기억은 대화 설정에서 확인할 수 있습니다.</span><span className="mode-banner-short">최근 대화{active.summary ? '와 장기 기억' : ''} 참고 중</span></div>}
         {active.mode === 'image_prompt' && <div className="mode-banner"><span className="mode-banner-copy">매 요청은 독립적으로 작성됩니다. 결과 카드에서 모델·프리셋·프롬프트·세부 옵션을 확인·수정한 뒤, 원할 때만 이미지 생성 요청을 누르세요.</span><span className="mode-banner-short">매 요청은 독립적으로 작성됩니다.</span></div>}
         {active.mode !== 'image_prompt' && active.summary_status !== 'idle' && <div className={active.summary_status === 'failed' ? 'notice error' : 'notice'}>{active.summary_status === 'failed' ? (active.summary_error || '장기 기억 요약에 실패했습니다. 기존 요약은 유지됩니다.') : '장기 기억을 정리하고 있습니다. 완료 전에는 기존 요약과 최근 대화를 참고합니다.'}</div>}
         <MessageList mode={active.mode} messages={active.messages} hasMore={active.hasMore} onLoadOlder={loadOlderMessages} scrollSignal={scrollSignal} conversationId={active.id}

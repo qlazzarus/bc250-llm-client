@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from backend.app.db import connect, initialize
+from backend.app.db import LATEST_SCHEMA_VERSION, connect, initialize
 from backend.app.integrated_memory import create_initial_memory
 from backend.app.wiki_repository import create_document, list_documents, search_documents
 
@@ -99,7 +99,7 @@ def test_previous_v16_initializer_does_not_fence_a_v21_database(tmp_path):
     assert module.LATEST_SCHEMA_VERSION == 16
     module.initialize(path)
     with connect(path) as db:
-        assert db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0] == 23
+        assert db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0] == LATEST_SCHEMA_VERSION
         # Legacy INSERT omits store_id, demonstrating its interpretation remains
         # implicit even after the new namespace migration.
         db.execute("INSERT INTO conversations(id,title,created_at,updated_at) VALUES ('c','t','t','t')")

@@ -98,3 +98,37 @@ it('defaults Wiki options on, applies them only when saved, and remembers explic
   expect((within(dialog).getByLabelText(/Wiki 검색 참고/) as HTMLInputElement).checked).toBe(false);
   expect((within(dialog).getByLabelText(/Wiki 자동 기억/) as HTMLInputElement).checked).toBe(false);
 });
+
+it('sends the opened summary revision and preserves edits on a conflict', async () => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); };
+  vi.stubGlobal('requestAnimationFrame', () => 1);
+  const current = { ...conversation, summary: '기존 기억', summary_revision: 7 };
+  const saved: Record<string, unknown>[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/conversations/created') && init?.method === 'PATCH') {
+      saved.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ error: { code: 'summary_revision_conflict', message: '요약이 변경되었습니다. 다시 확인해 주세요.' } }), { status: 409 });
+    }
+    if (url.endsWith('/conversations')) return json({ data: [current] });
+    if (url.endsWith('/conversations/created')) return json(current);
+    if (url.includes('/messages?')) return json({ data: [], next_before: null, has_more: false });
+    if (url.endsWith('/models')) return json({ data: [] });
+    if (url.includes('/wiki-memory?')) return json({ data: [] });
+    if (url.endsWith('/image-generation/capabilities')) return json({ models: [], available: false });
+    throw new Error(url);
+  }));
+  const { App } = await import('../src/main');
+  render(<App />);
+  fireEvent.click(await within(await screen.findByRole('navigation', { name: '대화 목록' })).findByRole('button', { name: /새 대화/ }));
+  await screen.findByLabelText('메시지 입력');
+  fireEvent.click(screen.getByRole('button', { name: '설정' }));
+  const dialog = screen.getByRole('dialog', { name: '대화 설정' });
+  const field = within(dialog).getByLabelText(/장기 기억 요약/) as HTMLTextAreaElement;
+  fireEvent.change(field, { target: { value: '내 수정 내용' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: '저장' }));
+  await within(dialog).findByText('요약이 변경되었습니다. 다시 확인해 주세요.');
+  expect(saved[0]).toMatchObject({ summary: '내 수정 내용', expected_summary_revision: 7 });
+  expect(field.value).toBe('내 수정 내용');
+});

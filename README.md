@@ -20,7 +20,7 @@ Browser ─ HTTPS ─ Caddy (/llm/, /llm/api/*) ─ loopback ─ FastAPI:8010
 
 기본 제목 `새 대화`로 만든 채팅방은 첫 답변이 완료된 후 첫 메시지를 바탕으로 제목을 자동 생성합니다. 직접 지정하거나 변경한 제목은 유지합니다. 제목 생성이 실패하면 첫 메시지의 일부를 제목으로 사용합니다.
 
-대화와 메시지는 SQLite에 저장합니다. assistant 최종 `content`만 저장·표시하며 `reasoning_content`는 저장하지 않습니다. 일반 대화와 롤플레잉은 최근 완료 대화와 장기 기억 요약을 참고합니다. 기본 생성값은 `temperature=0.7`, `max_tokens=512`, 최근 최대 200개 메시지이며 토큰 예산을 넘는 오래된 턴은 제외합니다. gate가 이미지 작업을 우선하면 클라이언트는 대기 안내를 보입니다.
+대화와 메시지는 SQLite에 저장합니다. assistant 최종 `content`만 저장·표시하며 `reasoning_content`는 저장하지 않습니다. 일반 대화와 롤플레잉은 최근 완료 대화와 장기 기억 요약을 참고합니다. 기본 생성값은 `temperature=0.7`, `max_tokens=512`, 최근 200개 메시지는 압축 목표이며, 토큰 예산을 넘으면 요청 전에 오래된 완료 턴을 요약합니다. 미요약 이력을 보존할 수 없으면 명시적 오류로 중단합니다. gate가 이미지 작업을 우선하면 클라이언트는 대기 안내를 보입니다.
 
 Chat replies use Server-Sent Events: only final answer token deltas are rendered and saved. Reasoning deltas are discarded. If a model consumes its entire budget on reasoning and produces no final content, the UI explains this rather than exposing reasoning.
 
@@ -132,9 +132,13 @@ ROLEPLAY_SUMMARY_KEEP_RECENT_TURNS=6
 ROLEPLAY_SUMMARY_MAX_TOKENS=512
 ```
 
-서버의 실제 컨텍스트 한도를 확인해 `LLM_CONTEXT_TOKENS`를 설정하세요. 기존 서버 환경 파일은 자동으로 바뀌지 않으므로 16k 서버에서는 `LLM_CONTEXT_TOKENS=16384`, `MAX_HISTORY_MESSAGES=200`을 직접 반영해야 합니다. 토큰 수는 현재 UTF-8 바이트 기반 추정치이며 모델의 정확한 토큰 수가 아닙니다.
+서버의 실제 컨텍스트 한도를 확인해 `LLM_CONTEXT_TOKENS`를 설정하세요. 기존 서버 환경 파일은 자동으로 바뀌지 않으므로 16k 서버에서는 `LLM_CONTEXT_TOKENS=16384`, `MAX_HISTORY_MESSAGES=200`을 직접 반영해야 합니다. model control 활성 시 gate의 실제 payload 토큰 계수를 사용하고, 비활성 시 UTF-8 바이트 기반 추정치를 사용합니다. 추정치는 실제 모델 토큰 수의 상한을 보장하지 않습니다.
 
-일반 대화와 롤플레잉의 장기 기억 요약은 위 임계값을 넘은 **완료된** 턴만 대상으로 백그라운드에서 실행됩니다. 요약은 기존 gate를 통해서만 실행되며, image_priority 대기 정책과 생성 동시성 제한을 공유합니다. 실패하면 기존 요약은 유지됩니다.
+일반 대화와 롤플레잉의 장기 기억 요약은 위 임계값을 넘은 **완료된** 턴만 대상으로 백그라운드에서 실행됩니다. 요약은 기존 gate를 통해서만 실행되며, image_priority 대기 정책과 생성 동시성 제한을 공유합니다. 실패하면 기존 요약은 유지됩니다. 메시지 개수 또는 토큰 예산 압박 시 요청 전 압축을 수행하며, 압축 실패 후에도 전체 이력을 담을 수 있을 때만 답변합니다. 요약 출력이 잘리면 커서를 이동하지 않습니다.
+
+요청 전 압축 기본 한도는 `CONTEXT_COMPACTION_MAX_ATTEMPTS=3`, `CONTEXT_COMPACTION_TIMEOUT_SECONDS=30`입니다. 요약 작업 한도는 `SUMMARY_JOB_MAX_ATTEMPTS=3`, `SUMMARY_JOB_TIMEOUT_SECONDS=180`입니다. 재시작 복구는 DB 옆 `.summary-locks` 디렉터리의 OS 파일 잠금으로 다른 worker를 보호합니다. 같은 호스트의 로컬 SQLite/잠금 디렉터리를 공유해야 합니다.
+
+[구현 결과·배포·롤백·2차 계획](docs/plans/chat-context-stabilization-2026-11-17.md)을 참고하세요.
 
 Install and start only the new service:
 

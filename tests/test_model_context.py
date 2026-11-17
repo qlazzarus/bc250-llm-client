@@ -123,7 +123,7 @@ async def test_title_budget_failure_uses_fallback_without_inference(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_chat_context_reselection_keeps_current_and_complete_recent_turns():
+async def test_chat_context_overflow_rejects_without_removing_turns():
     settings = Settings(_env_file=None, model_control_enabled=True, llm_context_tokens=200, llm_context_safety_tokens=50)
     model = main.GateModel('model', 'a' * 32, 200)
     payload = {'max_tokens': 50, 'messages': [
@@ -138,9 +138,11 @@ async def test_chat_context_reselection_keeps_current_and_complete_recent_turns(
         body = json.loads(request.content); seen.append(body)
         return httpx.Response(200, json={'input_tokens': 120 if any(m['content'] == 'old' for m in body['messages']) else 80})
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle), base_url='http://gate') as client:
-        assert await main.fit_chat_payload(settings, payload, client, model) == 80
-    assert [m['content'] for m in payload['messages']] == ['system', 'recent', 'recent answer', 'current']
-    assert len(seen) == 2
+        with pytest.raises(main.HTTPException) as error:
+            await main.fit_chat_payload(settings, payload, client, model)
+    assert error.value.detail['code'] == 'context_budget_exceeded'
+    assert [m['content'] for m in payload['messages']] == ['system', 'old', 'old answer', 'recent', 'recent answer', 'current']
+    assert len(seen) == 1
 
 
 @pytest.mark.asyncio

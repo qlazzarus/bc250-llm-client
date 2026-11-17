@@ -77,11 +77,9 @@ async def test_client_gate_snapshot_and_admission(tmp_path, monkeypatch, stream,
                 cid = (await client.post('/api/v1/conversations', headers=headers, json={})).json()['id']
                 response = await client.post(f'/api/v1/conversations/{cid}/messages', headers=headers, json={'content': 'question', 'stream': stream})
                 if context == 600:
-                    if stream:
-                        assert response.status_code == 200 and 'context_budget_exceeded' in response.text
-                    else:
-                        assert response.status_code == 422
-                        assert response.json()['error']['code'] == 'context_budget_exceeded'
+                    # Mandatory context is validated before opening the SSE response.
+                    assert response.status_code == 422
+                    assert response.json()['error']['code'] == 'context_budget_exceeded'
                     assert not requests and not observed
                     from backend.app.db import connect
                     with connect(settings.database_path) as db:

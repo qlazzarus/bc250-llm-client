@@ -20,7 +20,7 @@ def supported_test_features(monkeypatch):
 async def test_summary_selects_whole_turns_and_preserves_cursor_on_failure(tmp_path, monkeypatch, failure):
     settings = Settings(_env_file=None, model_control_enabled=True, database_path=str(tmp_path / 'db'),
                         llm_gate_url='http://gate', llm_context_tokens=600,
-                        llm_context_safety_tokens=100, roleplay_summary_max_tokens=100)
+                        llm_context_safety_tokens=100, roleplay_summary_max_tokens=100, summary_job_max_attempts=3 if failure in {"stale", "gate_rejection"} else 1)
     initialize(settings.database_path)
     with connect(settings.database_path) as db:
         db.execute("INSERT INTO conversations (id,title,created_at,updated_at,summary) VALUES ('c','title','t','t','old')")
@@ -50,7 +50,7 @@ async def test_summary_selects_whole_turns_and_preserves_cursor_on_failure(tmp_p
         if failure == 'summary_changed':
             with connect(settings.database_path) as db:
                 db.execute("UPDATE conversations SET summary='edited' WHERE id='c'")
-        return httpx.Response(200, json={'choices': [{'message': {'content': 'new summary'}}]})
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {'content': 'new summary'}}]})
     original = httpx.AsyncClient
     monkeypatch.setattr(main.httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handle), **kw))
     await main.run_summary_job(settings, 'job')

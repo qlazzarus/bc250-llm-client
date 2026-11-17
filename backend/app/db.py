@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-LATEST_SCHEMA_VERSION = 23
+LATEST_SCHEMA_VERSION = 24
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -102,6 +102,7 @@ def initialize(path: str) -> None:
         _apply_wiki_evidence_migration(connection)
         _apply_wiki_message_save_migration(connection)
         _apply_wiki_paths_migration(connection)
+        _apply_context_preservation_migration(connection)
 
 
 def _apply_conversation_mode_migration(connection: sqlite3.Connection) -> None:
@@ -556,3 +557,14 @@ def _apply_wiki_paths_migration(connection: sqlite3.Connection) -> None:
         connection.execute('ROLLBACK TO SAVEPOINT wiki_paths_migration')
         connection.execute('RELEASE SAVEPOINT wiki_paths_migration')
         raise
+
+
+def _apply_context_preservation_migration(connection: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(conversations)")}
+    if "summary_revision" not in columns:
+        connection.execute("ALTER TABLE conversations ADD COLUMN summary_revision INTEGER NOT NULL DEFAULT 0")
+    connection.execute("""CREATE TABLE IF NOT EXISTS summary_job_state (
+        job_id TEXT PRIMARY KEY REFERENCES summary_jobs(id) ON DELETE CASCADE,
+        base_revision INTEGER NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0
+    )""")
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (24)")
