@@ -1,17 +1,19 @@
-# M4-02 설치 경계 템플릿
+# 모델 제어 배포 구성
 
-이 디렉터리는 검토용 후보이며 운영에 그대로 설치하지 않는다. 구체적 포장·마이그레이션·백업·복구와 실제 Linux 검증은 M7/M6에서 완성한다.
+이 디렉터리는 공용 worker·protocol 3 gate·Client·Studio를 연결하는 systemd 템플릿, credential 설정 예시, CLI launcher와 bootstrap을 제공한다. 기능 설명은 [모델 제어](../../docs/model-control.md), 운영 절차는 [개발과 운영](../../docs/operations.md), 남은 작업은 [TODO](../../docs/TODO.md)를 따른다.
 
-검토 중인 순서와 남은 차단 조건은 [설치·복구 절차 초안](../../docs/plans/llm-model-switch-install-recovery.md)을 따른다.
+## 실행 경계
 
-- 현재 서버의 Client UID와 socket 그룹은 `yeppyshiba`를 사용한다. socket은 root 소유·`yeppyshiba` 그룹 `0660`, 상위 디렉터리는 root 소유 `0755`다. Client UID는 socket peer 검사에도 사용되며 같은 UID를 쓰는 프로세스는 동일하게 신뢰한다. 다른 서버에 맞게 변경하려면 runtime의 `CLIENT_USER`, socket unit과 필요 시 Client unit의 계정·그룹을 함께 변경해야 한다. 추후 설정 가능하게 일반화할 수 있다.
-- 가정용 단일 관리자 전제에서 기존 `/opt/bc250-llm-client`와 `yeppyshiba` 배포를 사용할 수 있다. `bc250-llm-client.service.d/identity.conf` 및 별도 root 관리 Client runtime은 과거 강화안의 **선택적 예시**이며 필수 설치 대상이 아니다. 기존 배포는 worker·공유 lock·gate/Studio 계약을 설치하지 않으므로 M7에서 필요한 설치와 롤백을 별도로 준비한다.
-- 기존 `/llm` 주소와 origin을 사용한다. 동일 origin 전체의 asset provenance·CSP·서명 manifest는 이번 모델 전환의 필수 선행 조건이 아니다. 앱과 운영자 인증은 유지하며, Wiki의 모델 조율 및 Client 통합은 사용자 지정 후속 예외다.
-- 현재 운영 gate와 보존된 protocol 2 후보는 epoch admission을 제공하지 않는다. worker는 protocol 3·durable 상태·32자리 hex epoch를 요구한다. M5-02에서 gate·Studio·Client를 함께 구현하기 전 활성화할 수 없다.
-- `/run/bc250-gpu/gpu.lock`과 `/var/lib/bc250-model-control/switch.json`은 root가 사전 준비한 공유 파일이어야 한다. ACL·SELinux·group 접근과 양쪽 namespace의 inode를 M6에서 실제 확인한다. 운영 Studio의 기존 lock 경로를 지금 바꾸거나 파일을 생성하지 않는다.
+- worker는 root 실행과 Unix peer 검사를 사용한다. runtime의 Client 계정은 `yeppyshiba`이며 socket은 root 소유, Client 그룹 0660을 사용한다. 다른 계정에서는 runtime·socket·서비스 설정을 함께 맞춘다.
+- 공유 GPU lock은 `/run/bc250-gpu/gpu.lock`, journal은 `/var/lib/bc250-model-control/switch.json`이다. Studio와 worker가 같은 파일을 사용하는지 namespace·inode·권한·SELinux를 확인한다.
+- gate runtime은 별도 `/opt/bc250-llm-gate`와 `/var/lib/bc250-llm-gate`를 사용하며 service가 state를 자동 provision하지 않는다. systemd credential 파일로 역할 키와 upstream 키를 전달한다.
+- worker bootstrap은 `/opt/bc250-model-control`의 실행 트리를 검사한다. Client 일반 배포 스크립트는 이 runtime과 외부 Studio를 설치하지 않는다.
+- Client `MODEL_CONTROL_ENABLED`와 worker `MODEL_CONTROL_SWITCH_ENABLED`는 별도 활성화 값이다. Client의 activation EnvironmentFile은 기본 환경 파일 이후에 읽혀야 한다.
 
-- [origin-review-contract.md](origin-review-contract.md)는 과거 강화안의 참고 자료다. 해당 승격·잠금 체계가 활성화 전 필수라는 뜻은 아니다. 전환 중 배포/restart 경합을 피하는 운영 절차와 미해결 전환 보존은 M7에서 준비한다.
+## 적용과 상태 관리
 
-## 단일 관리자 운영 절차
+템플릿의 계정·경로·credential·서비스 이름을 대상 환경에 맞춰 사용한다. gate state가 이미 있으면 초기화 도구를 다시 실행하지 않는다. 기존 pause와 다른 소유자의 hold를 보존하며 불명 상태에서는 새 전환과 임의 해제를 중단한다.
 
-자동 Client 배포가 시작되는 main push를 포함해 Client·gate·Studio·worker 또는 llama를 배포하거나 재시작하기 전, 관리자는 모델 전환 요청을 중단하고 실행 중 작업이 terminal 상태인지 확인한다. `recovery_required`, 결과 불명, journal/hold 불일치 또는 응답 실패가 있으면 배포와 새 전환을 중단하고 기록과 hold를 보존해 조사한다. 전환이 진행되는 동안 push·수동 배포·서비스 재시작을 하지 않는다. 배포 중에도 전환을 요청하지 않으며, 서비스가 정상 복귀하고 조율 상태를 확인한 뒤 재개한다. 이 절차는 단일 관리자의 수동 조율이며 자동 배포와 worker 사이의 강제 잠금은 아니다. M7에서 실제 설치 상태에 맞는 확인 명령과 복구·롤백 절차를 확정한다.
+전환 중에는 Client·gate·Studio·worker·llama를 배포하거나 재시작하지 않는다. 자동 main 배포도 같은 단일 관리자 조율 대상이다. `ai-model status`와 작업 ID 조회를 통해 완료를 확인한다. 결과 불명이나 recovery_required는 복구 검사 대상으로 남긴다.
+
+[origin-review-contract.md](origin-review-contract.md)의 별도 검토 모듈과 `identity.conf` 등 강화 템플릿은 기본 구성의 필수 설치 대상이 아니다.

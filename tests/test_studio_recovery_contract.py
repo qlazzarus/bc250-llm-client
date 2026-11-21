@@ -1,42 +1,24 @@
-"""Exercise the Studio recovery patch against its archived source candidate."""
+"""Client/Studio contract regression using minimal frozen method fixtures.
+
+Actual Studio integration is covered separately with BC250_STUDIO_SOURCE.
+"""
 import ast
 import asyncio
 import hashlib
 import hmac
 import json
-import subprocess
-import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-ARCHIVE = ROOT / 'docs/handoff/imagegen-20261107/source.tar.gz'
-PATCH = ROOT / 'deploy/ai-studio-model-switch-recovery.patch'
-CLOSEOUT = ROOT / 'docs/handoff/imagegen-closeout-20261107/source.tar.gz'
-CLOSEOUT_PATCH = ROOT / 'deploy/ai-studio-closeout-model-switch-recovery.patch'
-
-
-def test_closeout_patch_applies_without_fuzz(tmp_path):
-    with tarfile.open(CLOSEOUT) as archive:
-        for name in ('backend/app/main.py', 'backend/app/services/llm.py', 'backend/app/services/gpu.py'):
-            target = tmp_path / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.extractfile(name).read())
-    subprocess.run(['patch', '--fuzz=0', '-p1', '-i', str(CLOSEOUT_PATCH)],
-                   cwd=tmp_path, check=True, capture_output=True)
+FIXTURES = ROOT / 'tests/fixtures/studio_contract'
 
 
 @pytest.fixture
 def endpoint(tmp_path):
-    with tarfile.open(ARCHIVE) as archive:
-        for name in ('backend/app/main.py', 'backend/app/services/llm.py', 'backend/app/services/gpu.py'):
-            target = tmp_path / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.extractfile(name).read())
-    subprocess.run(['patch', '-p1', '-i', str(PATCH)], cwd=tmp_path, check=True, capture_output=True)
-    tree = ast.parse((tmp_path / 'backend/app/main.py').read_text())
+    tree = ast.parse((FIXTURES / 'endpoints.py').read_text())
     create = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'create_app')
     fn = next(n for n in create.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'switch_recovery')
     fn.decorator_list = []
@@ -55,7 +37,7 @@ def endpoint(tmp_path):
     gpu = SimpleNamespace(model_switch_coordination_enabled=lambda: True, llm=LLM(), switch_barrier=barrier, blocked=False, leased=False, shared_lock_held_by_root=lambda: True)
     db = SimpleNamespace(get_state=lambda key, default: default)
     namespace = {'settings': SimpleNamespace(coordination_key='secret'), 'app': SimpleNamespace(state=SimpleNamespace(gpu=gpu, db=db)), 'JSONResponse': Response, 'hmac': hmac, 'json': json, 'hashlib': hashlib}
-    exec(compile(module, '<studio candidate>', 'exec'), namespace)
+    exec(compile(module, '<studio contract fixture>', 'exec'), namespace)
     return namespace['switch_recovery'], gpu, db, barrier
 
 
@@ -72,7 +54,7 @@ def test_recovery_reports_bound_journal_without_acquiring_lock(endpoint):
     assert call(fn, None).status_code == 401
 
 
-def test_worker_recovery_preflight_consumes_patched_studio_and_gate(endpoint, tmp_path, monkeypatch):
+def test_worker_recovery_preflight_consumes_studio_contract_and_gate(endpoint, tmp_path, monkeypatch):
     """Check the actual response contracts together, with service identities stubbed."""
     import httpx
     from backend.app.model_control.preflight import RecoveryPreflight
@@ -111,17 +93,11 @@ def test_worker_recovery_preflight_consumes_patched_studio_and_gate(endpoint, tm
         pre()
 
 
-def test_normal_preflight_consumes_studio_coordination_candidate(tmp_path, monkeypatch):
+def test_normal_preflight_consumes_studio_coordination_contract(tmp_path, monkeypatch):
     import httpx
     from backend.app.model_control.preflight import CoordinationPreflight
 
-    with tarfile.open(ARCHIVE) as archive:
-        for name in ('backend/app/main.py', 'backend/app/services/llm.py', 'backend/app/services/gpu.py'):
-            target = tmp_path / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.extractfile(name).read())
-    subprocess.run(['patch', '-p1', '-i', str(PATCH)], cwd=tmp_path, check=True, capture_output=True)
-    tree = ast.parse((tmp_path / 'backend/app/main.py').read_text())
+    tree = ast.parse((FIXTURES / 'endpoints.py').read_text())
     create = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'create_app')
     fn = next(n for n in create.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'coordination')
     fn.decorator_list = []
@@ -133,7 +109,7 @@ def test_normal_preflight_consumes_studio_coordination_candidate(tmp_path, monke
     db = SimpleNamespace(get_state=lambda key, default: default)
     namespace = {'settings': SimpleNamespace(coordination_key='secret'),
                  'app': SimpleNamespace(state=SimpleNamespace(gpu=gpu, db=db)), 'hmac': hmac}
-    exec(compile(module, '<studio coordination candidate>', 'exec'), namespace)
+    exec(compile(module, '<studio coordination contract fixture>', 'exec'), namespace)
     def respond(request):
         if request.url.path == '/control/identity':
             return httpx.Response(200, json={'protocol': 3, 'role': 'switch'})
@@ -174,13 +150,7 @@ def test_recovery_fails_closed_for_unsafe_states(endpoint):
 
 
 def test_studio_identity_requires_exact_protocol_three(tmp_path):
-    with tarfile.open(ARCHIVE) as archive:
-        for name in ('backend/app/main.py', 'backend/app/services/llm.py', 'backend/app/services/gpu.py'):
-            target = tmp_path / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.extractfile(name).read())
-    subprocess.run(['patch', '-p1', '-i', str(PATCH)], cwd=tmp_path, check=True, capture_output=True)
-    tree = ast.parse((tmp_path / 'backend/app/services/llm.py').read_text())
+    tree = ast.parse((FIXTURES / 'llm.py').read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'SystemdLLM')
     fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'owned_control_identity')
     module = ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[]))
@@ -193,7 +163,7 @@ def test_studio_identity_requires_exact_protocol_three(tmp_path):
         def raise_for_status(self): pass
         def json(self): return self.value
     namespace = {'httpx': SimpleNamespace(AsyncClient=Client)}
-    exec(compile(module, '<studio identity candidate>', 'exec'), namespace)
+    exec(compile(module, '<studio identity contract fixture>', 'exec'), namespace)
     instance = SimpleNamespace(s=SimpleNamespace(admission_key='key', admission_url='http://127.0.0.1'))
     for value, expected in [({'role': 'studio', 'protocol': 3}, True), ({'role': 'studio', 'protocol': 2}, False), ({'role': 'studio', 'protocol': 3, 'extra': 1}, False), ({'role': 'studio', 'protocol': True}, False)]:
         Client.value = value
@@ -201,19 +171,13 @@ def test_studio_identity_requires_exact_protocol_three(tmp_path):
 
 
 def test_studio_admission_blocks_conflicting_holds_and_reservations(tmp_path):
-    with tarfile.open(ARCHIVE) as archive:
-        for name in ('backend/app/main.py', 'backend/app/services/llm.py', 'backend/app/services/gpu.py'):
-            target = tmp_path / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.extractfile(name).read())
-    subprocess.run(['patch', '-p1', '-i', str(PATCH)], cwd=tmp_path, check=True, capture_output=True)
-    tree = ast.parse((tmp_path / 'backend/app/services/llm.py').read_text())
+    tree = ast.parse((FIXTURES / 'llm.py').read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'SystemdLLM')
     fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'ensure_image_admission')
     module = ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[]))
     class LockBusyError(RuntimeError): pass
     namespace = {'LockBusyError': LockBusyError}
-    exec(compile(module, '<studio admission candidate>', 'exec'), namespace)
+    exec(compile(module, '<studio admission contract fixture>', 'exec'), namespace)
     state = {'protocol': 3, 'durable': True, 'holds': [], 'recovery_exclusive_hold': None}
     async def gate(_method): return state
     instance = SimpleNamespace(gate=gate)
@@ -233,13 +197,7 @@ def test_studio_admission_blocks_conflicting_holds_and_reservations(tmp_path):
 
 def test_kernel_lock_observation_is_read_only_and_fails_closed(tmp_path):
     import os
-    with tarfile.open(ARCHIVE) as archive:
-        for name in ('backend/app/main.py', 'backend/app/services/llm.py', 'backend/app/services/gpu.py'):
-            target = tmp_path / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.extractfile(name).read())
-    subprocess.run(['patch', '-p1', '-i', str(PATCH)], cwd=tmp_path, check=True, capture_output=True)
-    tree = ast.parse((tmp_path / 'backend/app/services/gpu.py').read_text())
+    tree = ast.parse((FIXTURES / 'gpu.py').read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'GPUManager')
     fn = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'shared_lock_held_by_root')
     module = ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[]))
@@ -254,7 +212,7 @@ def test_kernel_lock_observation_is_read_only_and_fails_closed(tmp_path):
             if self.path not in contents: raise OSError('unavailable')
             return contents[self.path]
     namespace = {'Path': ProcPath, 'os': os}
-    exec(compile(module, '<studio lock observation candidate>', 'exec'), namespace)
+    exec(compile(module, '<studio lock observation contract fixture>', 'exec'), namespace)
     file_lock = SimpleNamespace(_open_secure=lambda: lock.open('r'))
     instance = SimpleNamespace(file_lock=file_lock)
     observe = lambda: namespace['shared_lock_held_by_root'](instance)
